@@ -38,9 +38,8 @@ import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage
 import { MessageChannelNetworkAdapter } from "@automerge/automerge-repo-network-messagechannel";
 import { WebSocketWorkerClientAdapter } from "@automerge/automerge-repo-network-websocket";
 import {
-  initializeAutomergeRepoKeyhiveRustWithRepo,
-  initKeyhiveWasm,
-  type AutomergeRepoKeyhiveRust,
+  initializeAutomergeRepoKeyhive,
+  type AutomergeRepoKeyhive,
 } from "@automerge/automerge-repo-keyhive";
 
 import {
@@ -356,7 +355,7 @@ function log(...args: any[]) {
 
 let repoHivePromise: Promise<{
   repo: Repo;
-  hive?: AutomergeRepoKeyhiveRust;
+  hive?: AutomergeRepoKeyhive;
 }> | null = null;
 
 const useKeyhive = typeof __KEYHIVE__ !== "undefined" && __KEYHIVE__;
@@ -418,20 +417,14 @@ function getRepoHive() {
         return { repo };
       }
 
-      initKeyhiveWasm();
-
       // ARK variant for talking to the keyhive-enabled subduction sync server.
-      const { hive, repo } = await initializeAutomergeRepoKeyhiveRustWithRepo({
+      const { hive, repo } = await initializeAutomergeRepoKeyhive({
         createRepo: (config) => new Repo(config),
         storage: new IndexedDBWorkerStorageAdapter(`${siteName}-keyhive`),
-        peerIdSuffix:
-          `${siteName}-worker` + Math.random().toString(36).slice(2),
+        peerIdSuffix: `${siteName}-worker`,
         automaticArchiveIngestion: true,
         cachingMode: "periodic",
-        // ARK selects the relay via `syncServer` ("keyhive" | "subduction"),
-        // which pairs the contact card with the matching peer id. Omitting it
-        // defaults to "subduction".
-        ...(useKeyhiveSyncServer ? { syncServer: "keyhive" as const } : {}),
+        syncServer: useKeyhiveSyncServer ? "keyhive" : "subduction",
         repo: {
           storage: new IndexedDBWorkerStorageAdapter(),
           subductionWebsocketEndpoints: getSubductionEndpoints(),
@@ -453,7 +446,7 @@ function getRepoHive() {
       });
 
       hive.networkAdapter.whenReady().then(() => {
-        (hive.networkAdapter as any).syncKeyhive();
+        hive.networkAdapter.syncKeyhive();
       });
 
       return { hive, repo };
@@ -834,14 +827,7 @@ async function connectPort(port: MessagePort, connection: Connection) {
     return;
   }
 
-  const onlyShareWithHardcodedServerPeerId = false;
-  const periodicallyRequestKeyhiveSync = false;
-  const keyhiveNetworkAdapter = hive.createKeyhiveNetworkAdapter(
-    networkAdapter,
-    onlyShareWithHardcodedServerPeerId,
-    periodicallyRequestKeyhiveSync,
-    2000
-  );
+  const keyhiveNetworkAdapter = hive.createKeyhiveNetworkAdapter(networkAdapter);
 
   keyhiveNetworkAdapter.on("message", async (msg: any) => {
     if ((msg.type === "sync" || msg.type === "request") && msg.documentId) {
@@ -854,9 +840,9 @@ async function connectPort(port: MessagePort, connection: Connection) {
     }
   });
 
-  (keyhiveNetworkAdapter as any).on("ingest-remote", () => {
+  keyhiveNetworkAdapter.on("ingest-remote", () => {
     hive.notifySameAgentKeyhiveChange();
-    (hive.networkAdapter as any).syncKeyhive?.();
+    hive.networkAdapter.syncKeyhive();
     repo.shareConfigChanged();
   });
 

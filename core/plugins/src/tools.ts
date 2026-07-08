@@ -10,17 +10,14 @@ import {
 } from "@inkandswitch/patchwork-filesystem";
 import { getRegistry } from "./registry/index.js";
 
-import type { initializeAutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-type AutomergeRepoKeyhive = Awaited<
-  ReturnType<typeof initializeAutomergeRepoKeyhive>
->;
+import type { LegacyAutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 export type ToolImplementation<T = unknown> = ToolRender<T>;
 
 // todo(chee): repo and hive on here might be temporary, think about it
 export type ToolElement = HTMLElement & {
   repo: Repo;
-  hive?: AutomergeRepoKeyhive;
+  hive?: LegacyAutomergeRepoKeyhive;
 };
 
 export type ToolRender<T = unknown> = (

@@ -20,8 +20,8 @@ import {
 } from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
 import {
-  docIdFromAutomergeUrl,
-  type initializeAutomergeRepoKeyhive,
+  isUnprotectedDoc,
+  type LegacyAutomergeRepoKeyhive,
 } from "@automerge/automerge-repo-keyhive";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 
@@ -40,10 +40,6 @@ function isWildcardOnlyMatch(
   const list = datatypes === "*" ? ["*"] : datatypes;
   return list.includes("*") && (type === undefined || !list.includes(type));
 }
-
-type AutomergeRepoKeyhive = Awaited<
-  ReturnType<typeof initializeAutomergeRepoKeyhive>
->;
 
 const State = {
   none: "none",
@@ -72,14 +68,14 @@ export type LegacyImplParams = {
    * `repo:handle-descriptor`.
    */
   repo: Repo;
-  hive?: AutomergeRepoKeyhive;
+  hive?: LegacyAutomergeRepoKeyhive;
   /** Element name used in error messages */
   hostName?: string;
 };
 
 type HostElement = HTMLElement & {
   repo?: Repo;
-  hive?: AutomergeRepoKeyhive;
+  hive?: LegacyAutomergeRepoKeyhive;
 };
 
 const ERROR_STYLE_ID = "patchwork-view-error-style";
@@ -309,13 +305,7 @@ export class LegacyImpl {
     this.#state = State.initializing;
 
     if (this.#element.hive && this.#docUrl) {
-      let isKeyhiveDoc = false;
-      try {
-        docIdFromAutomergeUrl(this.#docUrl);
-        isKeyhiveDoc = true;
-      } catch {
-        // Legacy (padded-zero) doc: skip keyhive gate
-      }
+      const isKeyhiveDoc = !isUnprotectedDoc(this.#docUrl);
 
       if (isKeyhiveDoc) {
         const bestAccess = await this.#element.hive.bestAccessForDoc(
@@ -331,12 +321,12 @@ export class LegacyImpl {
           if (!this.#keyhiveRetrySetup) {
             this.#keyhiveRetrySetup = true;
             const onKeyhiveSync = () => this.#handleKeyhiveSync();
-            (this.#element.hive.networkAdapter as any).on(
+            this.#element.hive.networkAdapter.on(
               "ingest-remote",
               onKeyhiveSync
             );
             this.#teardowns.add(() => {
-              (this.#element.hive!.networkAdapter as any).off(
+              this.#element.hive!.networkAdapter.off(
                 "ingest-remote",
                 onKeyhiveSync
               );
@@ -349,12 +339,9 @@ export class LegacyImpl {
       if (!this.#keyhiveRetrySetup) {
         this.#keyhiveRetrySetup = true;
         const onKeyhiveSync = () => this.#handleKeyhiveSync();
-        (this.#element.hive.networkAdapter as any).on(
-          "ingest-remote",
-          onKeyhiveSync
-        );
+        this.#element.hive.networkAdapter.on("ingest-remote", onKeyhiveSync);
         this.#teardowns.add(() => {
-          (this.#element.hive!.networkAdapter as any).off(
+          this.#element.hive!.networkAdapter.off(
             "ingest-remote",
             onKeyhiveSync
           );
@@ -479,7 +466,12 @@ export class LegacyImpl {
     if (node) node.dispatchEvent(event);
   }
 
-  async #clearDocCache(): Promise<void> {
+  /**
+   * Give the document a moment to settle before we tear down and re-init.
+   * If another element is already retrying this document, return immediately
+   * and let it own the delay.
+   */
+  async #throttleRetry(): Promise<void> {
     if (!this.#docUrl || !this.#element.repo) return;
 
     const retryingDocs = ((globalThis as any).__patchwork_retrying_docs ??=
@@ -487,16 +479,6 @@ export class LegacyImpl {
     if (retryingDocs.has(this.#docUrl)) return;
 
     retryingDocs.add(this.#docUrl);
-    try {
-      const documentId = String(docIdFromAutomergeUrl(this.#docUrl));
-      const handle = (this.#element.repo.handles as any)[documentId];
-      if (handle && handle.state === "unavailable") {
-        this.#element.repo.delete(this.#docUrl);
-      }
-    } catch {
-      // Ignore delete errors
-    }
-
     await new Promise((resolve) => setTimeout(resolve, 300));
     retryingDocs.delete(this.#docUrl);
   }
@@ -515,7 +497,7 @@ export class LegacyImpl {
       let hasAccess = false;
       let accessCheckSucceeded = false;
       try {
-        docIdFromAutomergeUrl(this.#docUrl);
+        if (isUnprotectedDoc(this.#docUrl)) return;
         const bestAccess = await this.#element.hive.bestAccessForDoc(
           this.#element.hive.active.individual.id,
           this.#docUrl
@@ -531,11 +513,11 @@ export class LegacyImpl {
       const isUnable = this.#state === State.unable;
 
       if (hasAccess && isUnable && this.#unableNoAccess) {
-        await this.#clearDocCache();
+        await this.#throttleRetry();
         await this.#teardown();
         void this.#init();
       } else if (!hasAccess && isDisplayed && accessCheckSucceeded) {
-        await this.#clearDocCache();
+        await this.#throttleRetry();
         await this.#teardown();
         void this.#init();
       }

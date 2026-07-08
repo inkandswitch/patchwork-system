@@ -26,11 +26,12 @@ minimumReleaseAgeExclude:
   - "@automerge/*"
   - "@inkandswitch/*"
   - "@chee/*"
+  - "@keyhive/keyhive@0.1.0-alpha.6"
 
 catalog:
   "@automerge/automerge": 3.3.0-fragments.2
   "@automerge/automerge-repo": 2.6.0-subduction.44
-  "@automerge/automerge-repo-keyhive": 0.3.0-alpha.sub.8b
+  "@automerge/automerge-repo-keyhive": 0.4.0-alpha.sub.2
   "@automerge/automerge-repo-network-messagechannel": 2.6.0-subduction.44
   "@automerge/automerge-repo-network-websocket": 2.6.0-subduction.44
   "@automerge/automerge-repo-react-hooks": 2.6.0-subduction.44
@@ -40,7 +41,7 @@ catalog:
   "@automerge/automerge-subduction": 0.16.0
   "@automerge/react": 2.6.0-subduction.44
   "@automerge/vanillajs": 2.6.0-subduction.44
-  "@keyhive/keyhive": 0.1.0-alpha.5
+  "@keyhive/keyhive": 0.1.0-alpha.6
   "@types/react": 18.3.1
   "@types/react-dom": 18.3.1
   react: 18.3.1

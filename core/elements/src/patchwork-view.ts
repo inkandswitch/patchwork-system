@@ -1,5 +1,5 @@
 import type { AutomergeUrl, Repo } from "@automerge/automerge-repo";
-import type { initializeAutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { LegacyAutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import {
   getRegistry,
   isLoadablePlugin,
@@ -10,11 +10,7 @@ import {
 import { OverlayRepo } from "@inkandswitch/patchwork-providers";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 import { LegacyImpl } from "./legacy-impl.js";
-import { docIdFromAutomergeUrl } from "@automerge/automerge-repo-keyhive";
-
-type AutomergeRepoKeyhive = Awaited<
-  ReturnType<typeof initializeAutomergeRepoKeyhive>
->;
+import { isUnprotectedDoc } from "@automerge/automerge-repo-keyhive";
 
 /**
  * A component receives the element it is mounted on plus the realm-local base
@@ -74,7 +70,7 @@ export type RegisterPatchworkViewElementParams = {
    * Threaded into the `LegacyImpl` so legacy-mode tools get access to a
    * Keyhive instance via `element.hive`.
    */
-  hive?: AutomergeRepoKeyhive;
+  hive?: LegacyAutomergeRepoKeyhive;
 };
 
 // Shared shape for every `<patchwork-view>` instance, regardless of whether it
@@ -93,7 +89,7 @@ export type PatchworkViewElement = PatchworkViewElementBase & {
 };
 
 export type LegacyPatchworkViewElement = PatchworkViewElementBase & {
-  hive?: AutomergeRepoKeyhive;
+  hive?: LegacyAutomergeRepoKeyhive;
 };
 
 export function registerPatchworkViewElement(
@@ -184,7 +180,7 @@ export function registerPatchworkViewElement(
 
       connectedCallback() {
         this.#capturedParent = this.parentElement;
-        (this as { hive?: AutomergeRepoKeyhive }).hive = params.hive;
+        (this as { hive?: LegacyAutomergeRepoKeyhive }).hive = params.hive;
         this.#component = this.getAttribute(ATTRS.component);
         this.#url = this.getAttribute(ATTRS.url) as AutomergeUrl | null;
         this.#sync();
@@ -289,13 +285,7 @@ export function registerPatchworkViewElement(
         this.#state = State.initializing;
 
         if (params.hive && this.url) {
-          let isKeyhiveDoc = false;
-          try {
-            docIdFromAutomergeUrl(this.url);
-            isKeyhiveDoc = true;
-          } catch {
-            // Legacy (padded-zero) doc: skip keyhive gate
-          }
+          const isKeyhiveDoc = !isUnprotectedDoc(this.url);
 
           if (isKeyhiveDoc) {
             const bestAccess = await params.hive.bestAccessForDoc(
@@ -311,12 +301,9 @@ export function registerPatchworkViewElement(
               if (!this.#keyhiveRetrySetup) {
                 this.#keyhiveRetrySetup = true;
                 const onKeyhiveSync = () => this.#handleKeyhiveSync();
-                (params.hive.networkAdapter as any).on(
-                  "ingest-remote",
-                  onKeyhiveSync
-                );
+                params.hive.networkAdapter.on("ingest-remote", onKeyhiveSync);
                 this.#teardowns.add(() => {
-                  (params.hive!.networkAdapter as any).off(
+                  params.hive!.networkAdapter.off(
                     "ingest-remote",
                     onKeyhiveSync
                   );
@@ -329,15 +316,9 @@ export function registerPatchworkViewElement(
           if (!this.#keyhiveRetrySetup) {
             this.#keyhiveRetrySetup = true;
             const onKeyhiveSync = () => this.#handleKeyhiveSync();
-            (params.hive.networkAdapter as any).on(
-              "ingest-remote",
-              onKeyhiveSync
-            );
+            params.hive.networkAdapter.on("ingest-remote", onKeyhiveSync);
             this.#teardowns.add(() => {
-              (params.hive!.networkAdapter as any).off(
-                "ingest-remote",
-                onKeyhiveSync
-              );
+              params.hive!.networkAdapter.off("ingest-remote", onKeyhiveSync);
             });
           }
 
@@ -456,7 +437,7 @@ export function registerPatchworkViewElement(
           let hasAccess = false;
           let accessCheckSucceeded = false;
           try {
-            docIdFromAutomergeUrl(this.url);
+            if (isUnprotectedDoc(this.url)) return;
             const bestAccess = await params.hive.bestAccessForDoc(
               params.hive.active.individual.id,
               this.url

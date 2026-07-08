@@ -26,9 +26,8 @@ import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage
 import * as Automerge from "@automerge/automerge/slim";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import {
-  initKeyhiveWasm,
-  initializeAutomergeRepoKeyhiveWithRepo,
-  type AutomergeRepoKeyhive,
+  initializeLegacyAutomergeRepoKeyhive,
+  type LegacyAutomergeRepoKeyhive,
 } from "@automerge/automerge-repo-keyhive";
 // eslint-disable-next-line
 // @ts-ignore — initSync is a wasm-bindgen runtime helper not in the .d.ts
@@ -82,7 +81,7 @@ declare global {
     Automerge: typeof import("@automerge/automerge");
     AutomergeRepo: typeof import("@automerge/automerge-repo");
     repo: Repo;
-    hive?: AutomergeRepoKeyhive;
+    hive?: LegacyAutomergeRepoKeyhive;
     getRepoChannel: () => MessagePort;
     patchwork: {
       repo: Repo;
@@ -207,7 +206,7 @@ export async function bootPatchworkSite(
   if (!sw) throw new Error("Failed to set up service worker");
   log("workers ready");
 
-  let hive: AutomergeRepoKeyhive | undefined;
+  let hive: LegacyAutomergeRepoKeyhive | undefined;
   let repo: Repo;
   let tabSignerIdentity: { peerId: string; verifyingKey: string } | undefined;
 
@@ -233,19 +232,16 @@ export async function bootPatchworkSite(
 
     if (config.keyhive) {
       log("setting up keyhive");
-      initKeyhiveWasm();
 
-      ({ hive, repo } = await initializeAutomergeRepoKeyhiveWithRepo({
+      ({ hive, repo } = await initializeLegacyAutomergeRepoKeyhive({
         createRepo: (config) => new Repo(config),
         storage: new IndexedDBWorkerStorageAdapter(`${siteName}-keyhive`),
-        peerIdSuffix: siteName + Math.random().toString(36).slice(2),
+        peerIdSuffix: siteName,
         networkAdapter: new MessageChannelNetworkAdapter(workerPort),
         automaticArchiveIngestion: true,
         cachingMode: "periodic",
-        onlyShareWithHardcodedServerPeerId: false,
-        // ARK selects the relay via `syncServer` ("keyhive" | "subduction").
-        // Defaults to "subduction".
-        ...(useKeyhiveSyncServer ? { syncServer: "keyhive" as const } : {}),
+        onlyShareWithSyncServer: false,
+        syncServer: useKeyhiveSyncServer ? "keyhive" : "subduction",
         repo: {
           storage: new IndexedDBWorkerStorageAdapter(),
           enableRemoteHeadsGossiping: true,
@@ -430,7 +426,7 @@ function buildSystemSources(sources: string[]): Record<string, string> {
 
 function installDevConsoleGlobals(
   repo: Repo,
-  hive: AutomergeRepoKeyhive | undefined,
+  hive: LegacyAutomergeRepoKeyhive | undefined,
   getRepoChannel: () => MessagePort
 ): void {
   window.repo = repo;

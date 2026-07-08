@@ -8,7 +8,7 @@ import {
   isHttpUrl,
   type HasPatchworkMetadata,
 } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { LegacyAutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 // Datatype implementation interface
 export type DatatypeImplementation<D = unknown> = {
@@ -41,12 +41,18 @@ export const createDocOfDatatype2 = async <D>(
   datatype: LoadedDatatype<D>,
   repo: Repo,
   change?: (doc: D) => void,
-  hive?: AutomergeRepoKeyhive
+  hive?: LegacyAutomergeRepoKeyhive
 ): Promise<DocHandle<D & HasPatchworkMetadata>> => {
   const handle = await repo.create2<D & HasPatchworkMetadata>();
-  // Add sync server with relay access
   if (hive) {
-    await hive.addSyncServerRelayToDoc(handle.url);
+    try {
+      await hive.addSyncServerRelayToDoc(handle.url);
+    } catch (error) {
+      console.warn(
+        `createDocOfDatatype2: could not grant sync-server relay access for ${handle.url}`,
+        error
+      );
+    }
   }
   handle.change((doc: D & HasPatchworkMetadata) => {
     datatype.module.init(doc, repo);
