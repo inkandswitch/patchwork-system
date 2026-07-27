@@ -12,6 +12,7 @@ import {
   type AccountDoc,
   type DatatypeDescription,
   type DatatypeImplementation,
+  type ToolDescription,
   getRegistry,
 } from "@inkandswitch/patchwork-plugins";
 
@@ -71,6 +72,12 @@ export interface Router {
   route(): Promise<void>;
 }
 
+function registeredFrameToolId(): string | undefined {
+  return getRegistry<ToolDescription>("patchwork:tool")
+    .filter((tool) => !!tool.tags?.includes("frame-tool") && !tool.unlisted)
+    .at(0)?.id;
+}
+
 export function createRouter({
   rootElement,
   repo,
@@ -83,10 +90,13 @@ export function createRouter({
     if (!rootElement.hasAttribute("tool-id")) {
       const params = new URLSearchParams(location.hash.slice(1));
       const frame = params.get("frame");
-      rootElement.setAttribute(
-        "tool-id",
-        frame ?? accountDocHandle.doc().frameToolId
-      );
+      const toolId =
+        frame ?? accountDocHandle.doc().frameToolId ?? registeredFrameToolId();
+      if (!toolId) {
+        console.error("patchwork: no frame tool registered, nothing to mount");
+        return;
+      }
+      rootElement.setAttribute("tool-id", toolId);
       rootElement.setAttribute(
         "doc-url",
         (frame && docParamToUrl(params.get("doc"))) || accountDocHandle.url

@@ -6,17 +6,14 @@ import {
 } from "@automerge/automerge-repo/slim";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { getRegistry } from "./registry/index.js";
-import type { DatatypeDescription } from "./datatypes.js";
-import { createDocOfDatatype2 } from "./datatypes.js";
 
 /**
- * Site-facing view of the account document. Scalar tool-id fields are
- * populated by AccountDatatype.init on creation. Setup's account creator
+ * Site-facing view of the account document. Scalar tool-id fields are written
+ * by whatever frame the account is opened with. Setup's account creator
  * populates subdoc URLs for fresh accounts; legacy accounts may lack them.
  */
 export type AccountDoc = {
-  frameToolId: string;
+  frameToolId?: string;
   accountSidebarToolId: string;
   contextSidebarToolId: string;
   contextToolIds: string[];
@@ -36,8 +33,8 @@ export type AccountCreator<D = AccountDoc> = (
  * Find-or-create the account document for a site.
  *
  * The site is responsible for remembering which account doc to use. On a fresh
- * install the document is created via the registered `account` datatype, then
- * passed to `createAccount` before it is stored or returned.
+ * install the document is created here, then passed to `createAccount` before
+ * it is stored or returned.
  */
 export async function resolveAccountHandle<D = AccountDoc>(
   repo: Repo,
@@ -94,14 +91,13 @@ async function createAccountDocument<D>(
   hive: AutomergeRepoKeyhive | undefined,
   createAccount: AccountCreator<D> | undefined
 ): Promise<DocHandle<D & HasPatchworkMetadata>> {
-  const datatypes = getRegistry<DatatypeDescription>("patchwork:datatype");
-  const accountDatatype = await datatypes.loadWhenReady("account");
-  const handle = await createDocOfDatatype2<D>(
-    accountDatatype,
-    repo,
-    undefined,
-    hive
-  );
+  const handle = await repo.create2<D & HasPatchworkMetadata>();
+  if (hive) {
+    await hive.addSyncServerRelayToDoc(handle.url);
+  }
+  handle.change((doc: D & HasPatchworkMetadata) => {
+    doc["@patchwork"] = { type: "account" };
+  });
   await createAccount?.(handle, repo);
 
   return handle;

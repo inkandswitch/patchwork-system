@@ -1,31 +1,48 @@
-import {
-  type AccountCreator,
-  type AccountDoc,
-  type DatatypeDescription,
-  createDocOfDatatype2,
-  getRegistry,
+import type { Repo } from "@automerge/automerge-repo/slim";
+import type {
+  AccountCreator,
+  AccountDoc,
 } from "@inkandswitch/patchwork-plugins";
+import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
+
+async function createSubdoc<D>(
+  repo: Repo,
+  type: string,
+  init: (doc: D) => void
+) {
+  const handle = await repo.create2<D & HasPatchworkMetadata>();
+  handle.change((doc: D & HasPatchworkMetadata) => {
+    doc["@patchwork"] = { type };
+    init(doc);
+  });
+  return handle;
+}
 
 export const createDefaultAccount: AccountCreator<AccountDoc> = async (
   accountHandle,
   repo
 ) => {
-  const fields = [
-    ["rootFolderUrl", "folder"],
-    ["moduleSettingsUrl", "patchwork:module-settings"],
-    ["contactUrl", "contact"],
-  ] as const;
-  const registry = getRegistry<DatatypeDescription>("patchwork:datatype");
-
-  const subdocs = await Promise.all(
-    fields.map(async ([field, datatypeId]) => {
-      const datatype = await registry.loadWhenReady(datatypeId);
-      const handle = await createDocOfDatatype2(datatype, repo);
-      return [field, handle.url] as const;
-    })
-  );
+  const [rootFolder, moduleSettings, contact] = await Promise.all([
+    createSubdoc<{ title: string; docs: unknown[] }>(repo, "folder", (doc) => {
+      doc.title = "New Folder";
+      doc.docs = [];
+    }),
+    createSubdoc<{ modules: string[] }>(
+      repo,
+      "patchwork:module-settings",
+      (doc) => {
+        doc.modules = [];
+      }
+    ),
+    createSubdoc<{ type: string }>(repo, "contact", (doc) => {
+      doc.type = "anonymous";
+    }),
+  ]);
 
   accountHandle.change((doc) => {
-    for (const [field, url] of subdocs) doc[field] = url;
+    doc.frameToolId = "threepane";
+    doc.rootFolderUrl = rootFolder.url;
+    doc.moduleSettingsUrl = moduleSettings.url;
+    doc.contactUrl = contact.url;
   });
 };
