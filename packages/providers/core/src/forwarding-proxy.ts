@@ -3,10 +3,9 @@
  * `overrides` itself and transparently forwards every other access to
  * `backing`.
  *
- * `backing` may be the object itself or a getter that returns it. Passing a
- * getter lets the owner swap the backing out from under a stable proxy
- * identity (see `OverlayHandle.swapBacking`): the getter is re-evaluated on
- * every access, so forwarded members always land on the *current* backing.
+ * `backing` may also be a getter, re-evaluated on every access, so the owner
+ * can swap the backing under a stable proxy identity (see
+ * `OverlayHandle.swapBacking`).
  *
  * Both sides are read with the matching receiver and functions are bound to
  * their owner: owned members run against `overrides` (so its private `#fields`

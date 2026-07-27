@@ -31,10 +31,9 @@ import type { RepoLike } from "./types.js";
  * identity. Remappers are responsible for upholding this.
  *
  * The subscription is streaming: a remapper may emit a new descriptor at any
- * time (e.g. the draft overlay re-pointing at a different clone) and the
- * overlay repo swaps the live handle's backing in place — consumers keep the
- * same wrapper and observe a `change` event with `scopeReplaced: true`.
- * One-shot providers that answer exactly once remain fully supported.
+ * time and the overlay repo swaps the live handle's backing in place —
+ * consumers keep the same wrapper and see a `change` with
+ * `scopeReplaced: true`. One-shot providers remain fully supported.
  *
  * The descriptor crosses the `patchwork:subscribe` channel structured-cloned,
  * which is why it carries plain `AutomergeUrl` strings and never a live
@@ -63,17 +62,17 @@ const OVERLAY_REPO_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
  * remappable across provider scopes (including iframes) without sending a live
  * `Repo`/`DocHandle` over the wire.
  *
- * `find`/`findWithProgress` open a *persistent* `repo:handle-descriptor`
+ * `find`/`findWithProgress` open a persistent `repo:handle-descriptor`
  * subscription for the requested url and resolve the returned
  * `cloneUrl ?? url` against the realm-local `baseRepo`, then hand back an
  * {@link OverlayHandle} that keeps reporting the *original* url. Follow-up
- * descriptor emissions re-point the live wrapper at the new backing via
- * `swapBacking` — no remount required. Every other method (`create`,
- * `create2`, `clone`, `delete`, the EventEmitter surface, ...) forwards to
- * `baseRepo` unchanged — created docs need no remapping.
+ * descriptor emissions re-point the live wrapper via `swapBacking`. Every
+ * other method (`create`, `create2`, `clone`, `delete`, the EventEmitter
+ * surface, ...) forwards to `baseRepo` unchanged — created docs need no
+ * remapping.
  *
- * The element that owns this repo must call {@link dispose} when it goes away
- * so the descriptor subscriptions release their provider-side resources.
+ * The owning element must call {@link dispose} on disconnect to release the
+ * descriptor subscriptions.
  */
 export class OverlayRepo implements RepoLike {
   readonly baseRepo: Repo;
@@ -89,11 +88,10 @@ export class OverlayRepo implements RepoLike {
   >();
   // Live descriptor subscriptions, one per presented url.
   readonly #subscriptions = new Map<AutomergeUrl, () => void>();
-  // The backing url currently applied per presented url, to skip no-op
-  // descriptor re-emissions.
+  // Applied backing url per presented url; skips no-op re-emissions.
   readonly #backingUrls = new Map<AutomergeUrl, AutomergeUrl>();
   // Progress subscribers per presented url, mapped to their unsubscribe from
-  // the *current* inner progress — re-wired when a swap replaces the inner.
+  // the current inner; re-wired on swap.
   readonly #progressDispatchers = new Map<
     AutomergeUrl,
     Map<() => void, () => void>
@@ -179,9 +177,8 @@ export class OverlayRepo implements RepoLike {
           last = sig;
           callback(state);
         };
-        // Registered through the per-url dispatcher registry (rather than
-        // subscribing to the inner directly) so a backing swap can re-wire
-        // this subscriber onto the replacement inner progress.
+        // Registered via the dispatcher registry (not on the inner directly)
+        // so a backing swap can re-wire this subscriber onto the new inner.
         wrappedPromise.then(() => {
           if (closed) return;
           self.#registerProgressDispatcher(presented, dispatch);
@@ -240,10 +237,7 @@ export class OverlayRepo implements RepoLike {
     return this.baseRepo.create2<T>(initialValue);
   }
 
-  /**
-   * Tear down every live descriptor subscription, progress re-wiring, and
-   * wrapped handle. Called by the owning element when it disconnects.
-   */
+  /** Called by the owning element on disconnect; releases live resources. */
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
@@ -260,15 +254,13 @@ export class OverlayRepo implements RepoLike {
     this.#backingUrls.clear();
   }
 
-  // De-dupes concurrent resolutions of the same presented url: the first
-  // caller opens the (persistent) descriptor subscription, everyone else
-  // awaits the same promise. Later descriptor emissions swap the backing of
-  // the already-resolved wrapper in place.
+  // De-dupes concurrent resolutions: the first caller opens the persistent
+  // descriptor subscription, everyone else awaits the same promise. Later
+  // emissions swap the resolved wrapper's backing in place.
   #resolve<T>(presented: AutomergeUrl): Promise<OverlayHandle<T>> {
     const existing = this.#resolving.get(presented);
     if (existing) return existing as Promise<OverlayHandle<T>>;
-    // A disposed repo must not open subscriptions nobody will tear down; the
-    // owning element is gone, so consumers of this find are going away too.
+    // Don't open subscriptions nobody will tear down; the element is gone.
     if (this.#disposed) {
       return Promise.reject(
         new Error("OverlayRepo is disposed; cannot resolve " + presented)
@@ -282,17 +274,14 @@ export class OverlayRepo implements RepoLike {
     const rootUrl = stringifyAutomergeUrl({ documentId });
 
     const promise = new Promise<OverlayHandle<T>>((resolve, reject) => {
-      // Guards against out-of-order async application: only the latest
-      // received descriptor may commit its backing.
+      // Only the latest received descriptor may commit its backing.
       let seq = 0;
 
       const apply = async (descriptor: DocHandleDescriptor) => {
         const mySeq = ++seq;
         const backingRoot = descriptor.cloneUrl ?? descriptor.url;
-        // A remapper may pin the backing to specific heads (e.g. the draft
-        // overlay freezing a doc at a checkpoint) by stamping them onto the
-        // returned url. Honor those as a fallback; heads on the presented url
-        // still win.
+        // A remapper may pin the backing to specific heads by stamping them
+        // onto the returned url; honor them, but presented-url heads win.
         const parsedBacking = parseAutomergeUrl(backingRoot);
         const backingUrl = stringifyAutomergeUrl({
           documentId: parsedBacking.documentId,
@@ -361,9 +350,8 @@ export class OverlayRepo implements RepoLike {
     return promise;
   }
 
-  // Attach a progress subscriber for `presented`, subscribing it to the
-  // current inner progress (if any). The unsubscribe is kept so `#setInner`
-  // can re-wire the subscriber when a swap replaces the inner.
+  // Attach a progress subscriber to the current inner (if any), keeping its
+  // unsubscribe so `#setInner` can re-wire it on a swap.
   #registerProgressDispatcher(
     presented: AutomergeUrl,
     dispatch: () => void
@@ -388,8 +376,7 @@ export class OverlayRepo implements RepoLike {
     if (dispatchers.size === 0) this.#progressDispatchers.delete(presented);
   }
 
-  // Replace the inner progress for `presented` and move every registered
-  // progress subscriber from the old inner to the new one.
+  // Replace the inner progress and move every registered subscriber onto it.
   #setInner(presented: AutomergeUrl, inner: DocumentProgress<unknown>): void {
     this.#inner.set(presented, inner);
     const dispatchers = this.#progressDispatchers.get(presented);
