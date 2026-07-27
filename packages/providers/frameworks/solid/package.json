@@ -33,5 +33,10 @@
     "@automerge/automerge-repo-solid-primitives": "catalog:",
     "solid-js": "^1.9.13",
     "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
+    "directory": "packages/frameworks/solid"
   }
 }
