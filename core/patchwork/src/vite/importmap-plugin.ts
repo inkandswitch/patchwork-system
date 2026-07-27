@@ -65,11 +65,31 @@ function createImportMap(options?: PatchworkVitePluginOptions) {
   return { importmap, builtins };
 }
 
+function devDependencyId(id: string): string {
+  if (id === "@inkandswitch/patchwork") return id;
+  if (id === "@inkandswitch/patchwork-bootloader") {
+    return `@inkandswitch/patchwork > ${id}`;
+  }
+  return `@inkandswitch/patchwork > @inkandswitch/patchwork-bootloader > ${id}`;
+}
+
 export function importmap(options?: PatchworkVitePluginOptions): Plugin {
   const { importmap, builtins } = createImportMap(options);
+  let serve = false;
   return {
     name: "@patchwork/vite",
+    config() {
+      return {
+        optimizeDeps: {
+          include: Object.keys(builtins).map(devDependencyId),
+        },
+      };
+    },
+    configResolved(config) {
+      serve = config.command === "serve";
+    },
     async buildStart() {
+      if (serve) return;
       for (const [id, fileName] of Object.entries(builtins)) {
         this.emitFile({
           type: "chunk",
@@ -95,14 +115,20 @@ export function importmap(options?: PatchworkVitePluginOptions): Plugin {
     },
     transformIndexHtml: {
       order: "pre",
-      handler(html) {
+      handler(html, context) {
+        const activeImportmap = structuredClone(importmap);
+        if (context.server) {
+          for (const id of Object.keys(builtins)) {
+            activeImportmap.imports[id] = `/@id/${devDependencyId(id)}`;
+          }
+        }
         return {
           html,
           tags: [
             {
               tag: "script",
               attrs: { type: "importmap" },
-              children: JSON.stringify(importmap, null, 2),
+              children: JSON.stringify(activeImportmap, null, 2),
             },
           ],
         };

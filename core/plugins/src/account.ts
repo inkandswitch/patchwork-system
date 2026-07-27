@@ -11,10 +11,9 @@ import type { DatatypeDescription } from "./datatypes.js";
 import { createDocOfDatatype2 } from "./datatypes.js";
 
 /**
- * Site-facing view of the frame's account document. Scalar tool-id fields are
- * populated by AccountDatatype.init on creation. Subdoc URLs are populated
- * lazily by the frame on first mount; code that reads them must tolerate
- * `undefined`.
+ * Site-facing view of the account document. Scalar tool-id fields are
+ * populated by AccountDatatype.init on creation. Setup's account creator
+ * populates subdoc URLs for fresh accounts; legacy accounts may lack them.
  */
 export type AccountDoc = {
   frameToolId: string;
@@ -28,17 +27,17 @@ export type AccountDoc = {
   contactUrl?: AutomergeUrl;
 };
 
+export type AccountCreator<D = AccountDoc> = (
+  accountHandle: DocHandle<D & HasPatchworkMetadata>,
+  repo: Repo
+) => Promise<void>;
+
 /**
  * Find-or-create the account document for a site.
  *
- * The site is responsible for remembering *which* account doc to use (stashed
- * in localStorage under `storageKey`) but knows nothing about its shape. On a
- * fresh install the document is created via the `account` datatype, which
- * must be registered by the time this runs; typically that happens when the
- * `patchwork-frame` plugin bundle loads.
- *
- * Missing subdoc fields (rootFolderUrl, moduleSettingsUrl, contactUrl) are
- * intentionally left for the frame to lazily populate on mount.
+ * The site is responsible for remembering which account doc to use. On a fresh
+ * install the document is created via the registered `account` datatype, then
+ * passed to `createAccount` before it is stored or returned.
  */
 export async function resolveAccountHandle<D = AccountDoc>(
   repo: Repo,
@@ -46,6 +45,7 @@ export async function resolveAccountHandle<D = AccountDoc>(
     storageKey: string;
     hive?: AutomergeRepoKeyhive;
     storage?: Pick<Storage, "getItem" | "setItem">;
+    createAccount?: AccountCreator<D>;
   }
 ): Promise<DocHandle<D & HasPatchworkMetadata>> {
   const storage = options.storage ?? globalThis.localStorage;
@@ -80,23 +80,29 @@ export async function resolveAccountHandle<D = AccountDoc>(
     );
   }
 
-  const handle = await createAccount<D>(repo, options.hive);
+  const handle = await createAccountDocument<D>(
+    repo,
+    options.hive,
+    options.createAccount
+  );
   storage.setItem(options.storageKey, handle.url);
   return handle;
 }
 
-async function createAccount<D>(
+async function createAccountDocument<D>(
   repo: Repo,
   hive: AutomergeRepoKeyhive | undefined,
+  createAccount: AccountCreator<D> | undefined
 ): Promise<DocHandle<D & HasPatchworkMetadata>> {
   const datatypes = getRegistry<DatatypeDescription>("patchwork:datatype");
   const accountDatatype = await datatypes.loadWhenReady("account");
-  const handle = await createDocOfDatatype2<D>(accountDatatype, repo, undefined, hive);
-
-  if (hive) {
-    await hive.addSyncServerRelayToDoc(handle.url);
-  }
+  const handle = await createDocOfDatatype2<D>(
+    accountDatatype,
+    repo,
+    undefined,
+    hive
+  );
+  await createAccount?.(handle, repo);
 
   return handle;
 }
-

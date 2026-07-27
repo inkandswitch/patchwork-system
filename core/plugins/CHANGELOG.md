@@ -1,5 +1,27 @@
 # @inkandswitch/patchwork-plugins
 
+## 1.1.0
+
+### Minor Changes
+
+- 9e6e0e0: Add a `createAccount` setup option, create required account subdocuments before exposing a fresh account, and stop exposing the account handle as `window.accountDocHandle`.
+
+## 1.0.3
+
+### Patch Changes
+
+- f00dcb8: Add `repository` metadata pointing at inkandswitch/patchwork-system, so npm links each package to its source directory and can attest provenance when published from CI.
+- Updated dependencies [f00dcb8]
+  - @inkandswitch/patchwork-filesystem@0.2.5
+
+## 1.0.2
+
+### Patch Changes
+
+- 5f70c14: Add `repository` metadata pointing at inkandswitch/patchwork-next, so npm links each package to its source directory and can attest provenance when published from CI.
+- Updated dependencies [5f70c14]
+  - @inkandswitch/patchwork-filesystem@0.2.4
+
 ## 1.0.1
 
 ### Patch Changes

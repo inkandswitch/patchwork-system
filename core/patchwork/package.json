@@ -2,10 +2,10 @@
   "name": "@inkandswitch/patchwork",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/inkandswitch/patchwork-next.git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
     "directory": "core/patchwork"
   },
-  "version": "0.1.0",
+  "version": "0.3.2",
   "author": "Ink & Switch",
   "type": "module",
   "license": "MIT",

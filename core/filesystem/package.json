@@ -2,11 +2,11 @@
   "name": "@inkandswitch/patchwork-filesystem",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/inkandswitch/patchwork-next.git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
     "directory": "core/filesystem"
   },
   "type": "module",
-  "version": "0.2.3",
+  "version": "0.2.5",
   "author": "Ink & Switch",
   "description": "",
   "main": "dist/index.js",

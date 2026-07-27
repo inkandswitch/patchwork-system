@@ -1,14 +1,13 @@
-import type {
-  AutomergeUrl,
-  DocHandle,
-  Repo,
-} from "@automerge/vanillajs/slim";
+import type { AutomergeUrl, DocHandle, Repo } from "@automerge/vanillajs/slim";
 import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import type {
   ModuleWatcher,
   HasPatchworkMetadata,
 } from "@inkandswitch/patchwork-filesystem";
-import type { AccountDoc } from "@inkandswitch/patchwork-plugins";
+import type {
+  AccountCreator,
+  AccountDoc,
+} from "@inkandswitch/patchwork-plugins";
 import type {
   ServiceWorkerRepoChannelListener,
   SyncStateDocMessage,
@@ -63,6 +62,7 @@ export interface PatchworkOptions {
    * other's accounts.
    */
   accountKey?: string;
+  createAccount?: AccountCreator;
 
   /**
    * Brand word for this site: appended to the document title as

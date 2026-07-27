@@ -2,10 +2,10 @@
   "name": "@inkandswitch/edge-handles",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/inkandswitch/patchwork-next.git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
     "directory": "packages/edge-handles"
   },
-  "version": "0.1.0",
+  "version": "0.1.2",
   "type": "module",
   "description": "Doc-backed reactive cells with named upstream/downstream connections.",
   "files": [

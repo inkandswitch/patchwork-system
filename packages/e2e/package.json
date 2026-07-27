@@ -2,10 +2,10 @@
   "name": "@inkandswitch/patchwork-e2e",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/inkandswitch/patchwork-next.git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
     "directory": "packages/e2e"
   },
-  "version": "0.1.2",
+  "version": "0.2.0",
   "type": "module",
   "description": "Browser + Service-Worker end-to-end sync tests (Playwright) for a Patchwork site.",
   "bin": {

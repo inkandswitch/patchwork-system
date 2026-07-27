@@ -2,10 +2,10 @@
   "name": "@inkandswitch/patchwork-bootloader",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/inkandswitch/patchwork-next.git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
     "directory": "core/bootloader"
   },
-  "version": "0.5.0",
+  "version": "0.5.3",
   "author": "chee",
   "type": "module",
   "license": "MIT",

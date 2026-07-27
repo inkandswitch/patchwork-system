@@ -1,5 +1,30 @@
 # @inkandswitch/patchwork-elements
 
+## 5.0.0
+
+### Patch Changes
+
+- Updated dependencies [9e6e0e0]
+  - @inkandswitch/patchwork-plugins@1.1.0
+
+## 4.0.4
+
+### Patch Changes
+
+- f00dcb8: Add `repository` metadata pointing at inkandswitch/patchwork-system, so npm links each package to its source directory and can attest provenance when published from CI.
+- Updated dependencies [f00dcb8]
+  - @inkandswitch/patchwork-filesystem@0.2.5
+  - @inkandswitch/patchwork-plugins@1.0.3
+
+## 4.0.3
+
+### Patch Changes
+
+- 5f70c14: Add `repository` metadata pointing at inkandswitch/patchwork-next, so npm links each package to its source directory and can attest provenance when published from CI.
+- Updated dependencies [5f70c14]
+  - @inkandswitch/patchwork-filesystem@0.2.4
+  - @inkandswitch/patchwork-plugins@1.0.2
+
 ## 4.0.2
 
 ### Patch Changes

@@ -52,21 +52,9 @@ importers:
 
   .:
     devDependencies:
-      '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.46
-        version: 2.6.0-subduction.46
-      '@automerge/automerge-subduction':
-        specifier: 0.16.0
-        version: 0.16.0
       '@changesets/cli':
         specifier: ^2.31.0
         version: 2.31.1(@types/node@24.13.3)
-      '@vitest/ui':
-        specifier: ^3.2.6
-        version: 3.2.7(vitest@3.2.7)
-      concurrently:
-        specifier: ^9.2.1
-        version: 9.2.4
       cross-env:
         specifier: ^10.1.0
         version: 10.1.0
@@ -414,6 +402,9 @@ importers:
       '@inkandswitch/patchwork':
         specifier: workspace:^
         version: link:../../core/patchwork
+      concurrently:
+        specifier: ^9.2.1
+        version: 9.2.4
       vite:
         specifier: ^7.3.5
         version: 7.3.6(@types/node@24.13.3)
@@ -2703,7 +2694,8 @@ snapshots:
     dependencies:
       playwright: 1.59.1
 
-  '@polka/url@1.0.0-next.29': {}
+  '@polka/url@1.0.0-next.29':
+    optional: true
 
   '@rollup/rollup-android-arm-eabi@4.62.2':
     optional: true
@@ -2866,6 +2858,7 @@ snapshots:
       tinyglobby: 0.2.17
       tinyrainbow: 2.0.0
       vitest: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(@vitest/ui@3.2.7)(happy-dom@20.11.0)
+    optional: true
 
   '@vitest/utils@3.2.7':
     dependencies:
@@ -3098,7 +3091,8 @@ snapshots:
     optionalDependencies:
       picomatch: 4.0.5
 
-  fflate@0.8.3: {}
+  fflate@0.8.3:
+    optional: true
 
   fill-range@7.1.1:
     dependencies:
@@ -3109,7 +3103,8 @@ snapshots:
       locate-path: 5.0.0
       path-exists: 4.0.0
 
-  flatted@3.4.2: {}
+  flatted@3.4.2:
+    optional: true
 
   fs-extra@7.0.1:
     dependencies:
@@ -3233,7 +3228,8 @@ snapshots:
 
   mri@1.2.0: {}
 
-  mrmime@2.0.1: {}
+  mrmime@2.0.1:
+    optional: true
 
   ms@2.1.3: {}
 
@@ -3434,6 +3430,7 @@ snapshots:
       '@polka/url': 1.0.0-next.29
       mrmime: 2.0.1
       totalist: 3.0.1
+    optional: true
 
   slash@3.0.0: {}
 
@@ -3505,7 +3502,8 @@ snapshots:
     dependencies:
       is-number: 7.0.0
 
-  totalist@3.0.1: {}
+  totalist@3.0.1:
+    optional: true
 
   tree-kill@1.2.2: {}
 

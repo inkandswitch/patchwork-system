@@ -5,8 +5,8 @@ This repository holds the Patchwork System, and the famous Patchwork frame.
 ## Getting started
 
 ```shell
-git clone https://github.com/inkandswitch/patchwork
-cd patchwork
+git clone https://github.com/inkandswitch/patchwork-system
+cd patchwork-system
 pnpm install
 pnpm build
 pnpm dev

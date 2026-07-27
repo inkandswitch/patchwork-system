@@ -40,7 +40,7 @@ jobs:
 
       - name: update preview.patchwork.inkandswitch.com
         env:
-          GH_TOKEN: ${{ secrets.PATCHWORK_PREVIEW_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ secrets.PATCHWORK_CROW_TOKEN }}
         run: |
           gh api --method POST \
             repos/inkandswitch/patchwork.inkandswitch.com/dispatches \

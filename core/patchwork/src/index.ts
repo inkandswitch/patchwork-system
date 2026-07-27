@@ -60,6 +60,7 @@ import {
   removeAdapterFor,
 } from "./repo.js";
 import { createRouter, type Router } from "./router.js";
+import { createDefaultAccount } from "./createAccount.js";
 
 const log = debug("patchwork:setup");
 
@@ -221,20 +222,10 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   const accountDocHandle = (await resolveAccountHandle(repo, {
     storageKey: options.accountKey ?? "patchworkAccountURL",
     hive,
+    createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
 
   wireModuleSettings(accountDocHandle, moduleWatcher);
-
-  let router: Router | undefined;
-  if (routing !== false) {
-    rootElement.style.visibility = "hidden";
-    router = createRouter({
-      rootElement,
-      repo,
-      accountDocHandle,
-      siteName,
-    });
-  }
 
   const toolsLoaded = moduleWatcher.doneLoading.then(
     () =>
@@ -246,6 +237,18 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
       ),
     (err: unknown) => console.error("doneLoading rejected:", err)
   );
+
+  let router: Router | undefined;
+  if (routing !== false) {
+    rootElement.style.visibility = "hidden";
+    await toolsLoaded;
+    router = createRouter({
+      rootElement,
+      repo,
+      accountDocHandle,
+      siteName,
+    });
+  }
 
   installReveal(rootElement, router, toolsLoaded);
 
@@ -371,8 +374,7 @@ function onModuleLoaded(name: string, mod: any): void {
 }
 
 /**
- * The frame lazy-creates `moduleSettingsUrl` on first mount, so watch for it to
- * appear and feed it to the ModuleWatcher.
+ * Feed the account's module settings document to the ModuleWatcher.
  */
 function wireModuleSettings(
   accountDocHandle: DocHandle<AccountDoc>,

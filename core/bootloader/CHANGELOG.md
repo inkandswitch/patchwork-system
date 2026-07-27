@@ -1,5 +1,33 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.5.3
+
+### Patch Changes
+
+- Updated dependencies [9e6e0e0]
+  - @inkandswitch/patchwork-plugins@1.1.0
+  - @inkandswitch/patchwork-elements@5.0.0
+
+## 0.5.2
+
+### Patch Changes
+
+- f00dcb8: Add `repository` metadata pointing at inkandswitch/patchwork-system, so npm links each package to its source directory and can attest provenance when published from CI.
+- Updated dependencies [f00dcb8]
+  - @inkandswitch/patchwork-filesystem@0.2.5
+  - @inkandswitch/patchwork-elements@4.0.4
+  - @inkandswitch/patchwork-plugins@1.0.3
+
+## 0.5.1
+
+### Patch Changes
+
+- 5f70c14: Add `repository` metadata pointing at inkandswitch/patchwork-next, so npm links each package to its source directory and can attest provenance when published from CI.
+- Updated dependencies [5f70c14]
+  - @inkandswitch/patchwork-filesystem@0.2.4
+  - @inkandswitch/patchwork-elements@4.0.3
+  - @inkandswitch/patchwork-plugins@1.0.2
+
 ## 0.5.0
 
 ### Minor Changes

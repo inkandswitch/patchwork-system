@@ -4,6 +4,7 @@
   "private": true,
   "devDependencies": {
     "@inkandswitch/patchwork": "workspace:^",
+    "concurrently": "^9.2.1",
     "vite": "^7.3.5"
   },
   "scripts": {
