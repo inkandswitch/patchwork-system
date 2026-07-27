@@ -11,8 +11,9 @@ import { forwardingProxy } from "./forwarding-proxy.js";
 type Listener = (...args: unknown[]) => void;
 
 // The only members whose behavior an overlay handle changes: the presented
-// identity, the identity-preserving `sub` (so sub-handle urls stay in the
-// presented space), the argument-unwrapping handle comparisons
+// identity, the backing accessors (`backingHandle`/`swapBackingDocHandle`),
+// the identity-preserving `sub` (sub-handle urls stay in the presented space),
+// the argument-unwrapping handle comparisons
 // (`merge`/`overlaps`/`contains`/`isChildOf`/`equals`), and the re-stamping
 // EventEmitter surface. Everything else (doc/change/heads/ref/view/diff/...)
 // forwards to the backing handle.
@@ -20,6 +21,7 @@ const OVERLAY_HANDLE_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
   "url",
   "documentId",
   "backingHandle",
+  "swapBackingDocHandle",
   "sub",
   "merge",
   "overlaps",
@@ -41,25 +43,35 @@ export type OverlayHandleOpts<T> = {
   backing: DocHandle<T>;
 };
 
+type SubCacheEntry = {
+  wrapped: OverlayHandle<unknown>;
+  /** Original `sub(...)` args, replayed on a backing swap. */
+  segments: unknown[];
+};
+
 /**
- * A url-hiding proxy around a fixed backing `DocHandle`. `url`/`documentId`
+ * A url-hiding proxy around a swappable backing `DocHandle`. `url`/`documentId`
  * always report the *presented* url; every other operation forwards to the
- * backing handle. Event subscriptions are tracked locally and the backing
- * handle's events are lazily forwarded with `payload.handle` re-stamped to this
- * wrapper, so consumers never observe the backing (clone) handle or its url.
+ * current backing handle. Event subscriptions are tracked locally and the
+ * backing handle's events are lazily forwarded with `payload.handle`
+ * re-stamped to this wrapper, so consumers never observe the backing (clone)
+ * handle or its url.
  *
- * Unlike the copy-on-write handle it is modelled on, the backing never swaps:
- * remappers clone eagerly and hand back the clone up front, so there is no
- * COW, no re-wiring, and no synthetic change nudge.
+ * Remappers may re-point a live handle at a different backing via
+ * {@link swapBackingDocHandle}: listeners are re-wired, cached sub-handles
+ * re-based, and a synthetic `change` with `scopeReplaced: true` tells
+ * consumers to re-read `doc()` — the backings may be divergent forks with no
+ * patch stream connecting them.
  */
 export class OverlayHandle<T> {
   readonly #originalUrl: AutomergeUrl;
-  readonly #handle: DocHandle<T>;
+  #handle: DocHandle<T>;
   readonly #listeners = new Map<string, Set<Listener>>();
-  readonly #forwarded = new Map<string, Listener>();
-  // Sub-handle wrappers keyed by their backing (canonicalised) url, so repeated
-  // `sub(...)` of the same path return the same wrapper instance.
-  readonly #subCache = new Map<AutomergeUrl, OverlayHandle<unknown>>();
+  // Forwarders attached to the current backing; moved over on a swap.
+  readonly #forwarders = new Map<string, Listener>();
+  // Sub-handle wrappers keyed by *presented* url (stable across swaps), so
+  // repeated `sub(...)` of the same path return the same wrapper.
+  readonly #subCache = new Map<AutomergeUrl, SubCacheEntry>();
   // The Proxy returned from the constructor — the object consumers actually
   // hold. Re-stamped onto forwarded events so identity stays consistent.
   #self: OverlayHandle<T>;
@@ -69,7 +81,7 @@ export class OverlayHandle<T> {
     this.#handle = opts.backing;
     this.#self = forwardingProxy<OverlayHandle<T>>(
       this,
-      opts.backing,
+      () => this.#handle,
       OVERLAY_HANDLE_OWNED
     );
     return this.#self;
@@ -83,9 +95,53 @@ export class OverlayHandle<T> {
     return parseAutomergeUrl(this.#originalUrl).documentId;
   }
 
-  /** @internal The live handle this wrapper forwards to. */
+  /** @internal The live handle this wrapper currently forwards to. */
   get backingHandle(): DocHandle<T> {
     return this.#handle;
+  }
+
+  /**
+   * @internal Re-point this wrapper and its cached sub-handles at a new
+   * backing, keeping presented and proxy identity intact. Emits a synthetic
+   * `change` with `scopeReplaced: true` so consumers reconcile from `doc()`
+   * instead of applying patches.
+   */
+  swapBackingDocHandle(next: DocHandle<T>): void {
+    const previous = this.#handle;
+    if (next === previous) return;
+    const before = previous.doc();
+    this.#handle = next;
+
+    // Move the forwarders onto the new backing so listeners keep firing.
+    const emitter = (handle: DocHandle<T>) =>
+      handle as unknown as {
+        on(ev: string, fn: Listener): void;
+        off(ev: string, fn: Listener): void;
+      };
+    for (const [ev, forwarder] of this.#forwarders) {
+      emitter(previous).off(ev, forwarder);
+      emitter(next).on(ev, forwarder);
+    }
+
+    // Re-base cached sub-handles against the new backing; each child emits
+    // its own scopeReplaced change.
+    for (const entry of this.#subCache.values()) {
+      const nextSub = (
+        next as unknown as { sub: (...s: unknown[]) => DocHandle<unknown> }
+      ).sub(...entry.segments);
+      entry.wrapped.swapBackingDocHandle(nextSub);
+    }
+
+    // No patch stream connects the two backings, so signal a wholesale scope
+    // replacement; consumers reconcile from `doc` instead of patches.
+    const after = next.doc();
+    this.emit("change", {
+      handle: this.#self,
+      doc: after,
+      patches: [],
+      scopeReplaced: true,
+      patchInfo: { before, after, source: "change" },
+    });
   }
 
   // Handle comparisons read the *other* handle's internals (Automerge rejects
@@ -116,22 +172,23 @@ export class OverlayHandle<T> {
   // would leak the backing (clone) documentId and break identity for consumers
   // that resolve it back through the overlay. We scope `sub` to the backing
   // handle (reads/writes still hit the clone) but wrap the result in another
-  // OverlayHandle whose presented url swaps the documentId back to ours. The
-  // backing sub-handle is canonicalised by the repo, so caching by its url
-  // keeps our wrappers referentially stable too.
+  // OverlayHandle whose presented url swaps the documentId back to ours.
+  // Cached by presented url (stable across swaps); the segments are kept so
+  // a swap can replay them against the new backing.
   sub(...segments: unknown[]): DocHandle<unknown> {
     const backingSub = (
       this.#handle as unknown as {
         sub: (...s: unknown[]) => DocHandle<unknown>;
       }
     ).sub(...segments);
-    const cached = this.#subCache.get(backingSub.url);
-    if (cached) return cached as unknown as DocHandle<unknown>;
+    const presentedSubUrl = restampUrl(this.#originalUrl, backingSub.url);
+    const cached = this.#subCache.get(presentedSubUrl);
+    if (cached) return cached.wrapped as unknown as DocHandle<unknown>;
     const wrapped = new OverlayHandle<unknown>({
-      presentedUrl: restampUrl(this.#originalUrl, backingSub.url),
+      presentedUrl: presentedSubUrl,
       backing: backingSub,
     });
-    this.#subCache.set(backingSub.url, wrapped);
+    this.#subCache.set(presentedSubUrl, { wrapped, segments });
     return wrapped as unknown as DocHandle<unknown>;
   }
 
@@ -173,10 +230,26 @@ export class OverlayHandle<T> {
     return this.#self;
   }
 
+  // Two deliberate departures from Node's EventEmitter: listener errors are
+  // logged rather than rethrown, so one failing consumer doesn't starve the
+  // rest; and listeners unsubscribed *during* the emit are skipped — a
+  // scopeReplaced consumer may tear down a later listener mid-emit (e.g.
+  // codemirror replacing its sync plugin), and invoking it anyway would
+  // re-apply state it already handed off.
   emit(ev: string, ...args: unknown[]): boolean {
     const set = this.#listeners.get(ev);
     if (!set || set.size === 0) return false;
-    for (const fn of [...set]) fn(...args);
+    for (const fn of [...set]) {
+      if (!set.has(fn)) continue;
+      try {
+        fn(...args);
+      } catch (err) {
+        console.error(
+          `[patchwork-providers] "${ev}" listener on ${this.#originalUrl} threw:`,
+          err
+        );
+      }
+    }
     return true;
   }
 
@@ -184,7 +257,7 @@ export class OverlayHandle<T> {
   // re-stamping `payload.handle = this wrapper` so consumers see the wrapper
   // rather than the backing handle as the event source.
   #forward(ev: string): void {
-    if (this.#forwarded.has(ev)) return;
+    if (this.#forwarders.has(ev)) return;
     const forwarder: Listener = (payload: unknown) => {
       if (
         payload &&
@@ -196,7 +269,7 @@ export class OverlayHandle<T> {
         this.emit(ev, payload);
       }
     };
-    this.#forwarded.set(ev, forwarder);
+    this.#forwarders.set(ev, forwarder);
     (this.#handle as unknown as { on(ev: string, fn: Listener): void }).on(
       ev,
       forwarder
@@ -207,10 +280,10 @@ export class OverlayHandle<T> {
     const backing = this.#handle as unknown as {
       off(ev: string, fn: Listener): void;
     };
-    for (const [ev, forwarder] of this.#forwarded) backing.off(ev, forwarder);
-    this.#forwarded.clear();
+    for (const [ev, forwarder] of this.#forwarders) backing.off(ev, forwarder);
+    this.#forwarders.clear();
     this.#listeners.clear();
-    for (const sub of this.#subCache.values()) sub.dispose();
+    for (const entry of this.#subCache.values()) entry.wrapped.dispose();
     this.#subCache.clear();
   }
 }
