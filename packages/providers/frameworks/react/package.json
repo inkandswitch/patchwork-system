@@ -1,7 +1,7 @@
 {
   "name": "@inkandswitch/patchwork-providers-react",
   "type": "module",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "React bindings for the Patchwork providers request/respond protocol.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

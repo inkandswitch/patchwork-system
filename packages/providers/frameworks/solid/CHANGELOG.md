@@ -1,5 +1,12 @@
 # @inkandswitch/patchwork-providers-solid
 
+## 0.2.6
+
+### Patch Changes
+
+- Updated dependencies [eed5a2c]
+  - @inkandswitch/patchwork-providers@0.5.0
+
 ## 0.2.5
 
 ### Patch Changes

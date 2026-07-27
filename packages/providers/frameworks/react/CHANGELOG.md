@@ -1,5 +1,12 @@
 # @inkandswitch/patchwork-providers-react
 
+## 0.2.5
+
+### Patch Changes
+
+- Updated dependencies [eed5a2c]
+  - @inkandswitch/patchwork-providers@0.5.0
+
 ## 0.2.4
 
 ### Patch Changes
