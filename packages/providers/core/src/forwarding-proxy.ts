@@ -5,7 +5,7 @@
  *
  * `backing` may also be a getter, re-evaluated on every access, so the owner
  * can swap the backing under a stable proxy identity (see
- * `OverlayHandle.swapBacking`).
+ * `OverlayHandle.swapBackingDocHandle`).
  *
  * Both sides are read with the matching receiver and functions are bound to
  * their owner: owned members run against `overrides` (so its private `#fields`

@@ -66,10 +66,10 @@ const OVERLAY_REPO_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
  * subscription for the requested url and resolve the returned
  * `cloneUrl ?? url` against the realm-local `baseRepo`, then hand back an
  * {@link OverlayHandle} that keeps reporting the *original* url. Follow-up
- * descriptor emissions re-point the live wrapper via `swapBacking`. Every
- * other method (`create`, `create2`, `clone`, `delete`, the EventEmitter
- * surface, ...) forwards to `baseRepo` unchanged — created docs need no
- * remapping.
+ * descriptor emissions re-point the live wrapper via `swapBackingDocHandle`.
+ * Every other method (`create`, `create2`, `clone`, `delete`, the
+ * EventEmitter surface, ...) forwards to `baseRepo` unchanged — created docs
+ * need no remapping.
  *
  * The owning element must call {@link dispose} on disconnect to release the
  * descriptor subscriptions.
@@ -301,7 +301,7 @@ export class OverlayRepo implements RepoLike {
           | OverlayHandle<T>
           | undefined;
         if (wrapped) {
-          wrapped.swapBacking(backing);
+          wrapped.swapBackingDocHandle(backing);
           return;
         }
         const created = new OverlayHandle<T>({

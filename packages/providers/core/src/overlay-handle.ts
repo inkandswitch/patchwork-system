@@ -11,8 +11,8 @@ import { forwardingProxy } from "./forwarding-proxy.js";
 type Listener = (...args: unknown[]) => void;
 
 // The only members whose behavior an overlay handle changes: the presented
-// identity, the backing accessors (`backingHandle`/`swapBacking`), the
-// identity-preserving `sub` (so sub-handle urls stay in the presented space),
+// identity, the backing accessors (`backingHandle`/`swapBackingDocHandle`),
+// the identity-preserving `sub` (sub-handle urls stay in the presented space),
 // the argument-unwrapping handle comparisons
 // (`merge`/`overlaps`/`contains`/`isChildOf`/`equals`), and the re-stamping
 // EventEmitter surface. Everything else (doc/change/heads/ref/view/diff/...)
@@ -21,7 +21,7 @@ const OVERLAY_HANDLE_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
   "url",
   "documentId",
   "backingHandle",
-  "swapBacking",
+  "swapBackingDocHandle",
   "sub",
   "merge",
   "overlaps",
@@ -58,10 +58,10 @@ type SubCacheEntry = {
  * handle or its url.
  *
  * Remappers may re-point a live handle at a different backing via
- * {@link swapBacking}: listeners are re-wired, cached sub-handles re-based,
- * and a synthetic `change` with `scopeReplaced: true` tells consumers to
- * re-read `doc()` — the backings may be divergent forks with no patch stream
- * connecting them.
+ * {@link swapBackingDocHandle}: listeners are re-wired, cached sub-handles
+ * re-based, and a synthetic `change` with `scopeReplaced: true` tells
+ * consumers to re-read `doc()` — the backings may be divergent forks with no
+ * patch stream connecting them.
  */
 export class OverlayHandle<T> {
   readonly #originalUrl: AutomergeUrl;
@@ -106,7 +106,7 @@ export class OverlayHandle<T> {
    * `change` with `scopeReplaced: true` so consumers reconcile from `doc()`
    * instead of applying patches.
    */
-  swapBacking(next: DocHandle<T>): void {
+  swapBackingDocHandle(next: DocHandle<T>): void {
     const previous = this.#handle;
     if (next === previous) return;
     const before = previous.doc();
@@ -129,7 +129,7 @@ export class OverlayHandle<T> {
       const nextSub = (
         next as unknown as { sub: (...s: unknown[]) => DocHandle<unknown> }
       ).sub(...entry.segments);
-      entry.wrapped.swapBacking(nextSub);
+      entry.wrapped.swapBackingDocHandle(nextSub);
     }
 
     // No patch stream connects the two backings, so signal a wholesale scope
