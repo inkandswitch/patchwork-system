@@ -5,7 +5,7 @@
     "url": "git+https://github.com/inkandswitch/patchwork-system.git",
     "directory": "core/bootloader"
   },
-  "version": "0.5.3",
+  "version": "0.5.4",
   "author": "chee",
   "type": "module",
   "license": "MIT",
