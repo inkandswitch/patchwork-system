@@ -34,5 +34,10 @@
     "@types/react": "catalog:",
     "react": "catalog:",
     "typescript": "^5.9.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
+    "directory": "packages/frameworks/react"
   }
 }
