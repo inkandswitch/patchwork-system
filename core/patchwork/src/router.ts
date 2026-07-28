@@ -1,6 +1,7 @@
 import {
   isValidAutomergeUrl,
   isValidDocumentId,
+  parseAutomergeUrl,
   stringifyAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
@@ -23,12 +24,12 @@ import {
 const BIG_PATCHWORK_HASH_REGEX =
   /^(?<title>[^=&?/#]*)--(?<docId>[1-9A-HJ-NP-Za-km-z]+)/;
 
-// The `doc=` value is an automerge URL, kept literal rather than
+// The `doc=` and `draft=` values are automerge URLs, kept literal rather than
 // percent-encoded so links stay readable.
-const RAW_HASH_KEYS = new Set(["doc"]);
+const RAW_HASH_KEYS = new Set(["doc", "draft"]);
 // A stable order means re-serializing the same logical params is
 // byte-identical, avoiding spurious `hashchange` round-trips.
-const HASH_KEY_ORDER = ["doc", "tool", "type", "title", "frame"];
+const HASH_KEY_ORDER = ["doc", "tool", "type", "title", "frame", "draft"];
 
 function serializeHashParams(params: URLSearchParams): string {
   const keys = [...HASH_KEY_ORDER, ...params.keys()];
@@ -166,6 +167,16 @@ export function createRouter({
     // `doc` is the full automerge URL, so heads live inside it and the separate
     // `heads=` param is gone.
     params.delete("heads");
+    // `draft` is doc-scoped (owned by the drafts plugin, opaque here):
+    // navigating to a different document invalidates the selection, while
+    // same-doc navigation (tool switches, heads changes) keeps it.
+    const prevDoc = docParamToUrl(params.get("doc"));
+    if (
+      prevDoc &&
+      parseAutomergeUrl(prevDoc).documentId !== parseAutomergeUrl(url).documentId
+    ) {
+      params.delete("draft");
+    }
     params.set("doc", url);
     for (const [key, value] of [
       ["tool", toolId],
