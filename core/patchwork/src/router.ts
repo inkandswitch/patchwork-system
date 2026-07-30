@@ -65,7 +65,7 @@ export interface RouterParams {
   rootElement: HTMLElement;
   repo: Repo;
   accountDocHandle: DocHandle<AccountDoc>;
-  siteName: string;
+  siteTitle: string;
 }
 
 export interface Router {
@@ -83,7 +83,7 @@ export function createRouter({
   rootElement,
   repo,
   accountDocHandle,
-  siteName,
+  siteTitle,
 }: RouterParams): Router {
   const route = async () => {
     // The first call seeds the root view's tool/doc so it can mount; later
@@ -203,7 +203,7 @@ export function createRouter({
       const docTitle = (datatype.module as DatatypeImplementation).getTitle(
         doc
       );
-      if (docTitle) document.title = `${docTitle} | ${siteName}`;
+      if (docTitle) document.title = `${docTitle} | ${siteTitle}`;
     } catch (e) {
       console.error("Failed to update document title", e);
     }

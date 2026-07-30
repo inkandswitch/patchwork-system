@@ -38,6 +38,7 @@ import {
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
+import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import {
   HANDOFF_CHANNEL,
   SYNCSTATE_CHANNEL,
@@ -52,16 +53,11 @@ import {
   type SyncStateRequestMessage,
 } from "./types.js";
 
-declare const __SITE_NAME__: string;
 declare const __SYNC_SERVER__: {
   url: string;
   keyhive?: SyncServerSelection;
 };
 
-const siteName =
-  typeof __SITE_NAME__ !== "undefined"
-    ? __SITE_NAME__
-    : "patchwork.inkandswitch.com";
 const syncServer =
   typeof __SYNC_SERVER__ !== "undefined"
     ? __SYNC_SERVER__
@@ -288,8 +284,9 @@ async function buildKeyhiveRepo(
   initKeyhiveWasm();
   const { hive, repo } = await initializeAutomergeRepoKeyhiveRustWithRepo({
     createRepo: (config) => new Repo(config),
-    storage: new IndexedDBWorkerStorageAdapter(`${siteName}-keyhive`),
-    peerIdSuffix: `${siteName}-worker` + Math.random().toString(36).slice(2),
+    storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
+    peerIdSuffix:
+      `${storagePrefix}-worker` + Math.random().toString(36).slice(2),
     automaticArchiveIngestion: true,
     cachingMode: "periodic",
     // ARK selects the relay via `syncServer`, which pairs the contact card with

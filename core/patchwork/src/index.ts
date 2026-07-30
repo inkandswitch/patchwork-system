@@ -64,7 +64,7 @@ import { createDefaultAccount } from "./createAccount.js";
 
 const log = debug("patchwork:setup");
 
-declare const __SITE_NAME__: string;
+declare const __SITE_TITLE__: string;
 
 declare global {
   interface Window {
@@ -114,9 +114,9 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
 export default setup;
 
 async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
-  const siteName =
-    options.name ??
-    (typeof __SITE_NAME__ !== "undefined" ? __SITE_NAME__ : "patchwork");
+  const siteTitle =
+    options.title ??
+    (typeof __SITE_TITLE__ !== "undefined" ? __SITE_TITLE__ : "Patchwork");
   const moduleSources = resolveDefaultModules(options);
   const routing = options.routing ?? "hash";
 
@@ -151,10 +151,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     });
 
     let workerAdapter = new MessageChannelNetworkAdapter(workerPort);
-    ({ repo, hive, signerIdentity } = await createRepo(
-      siteName,
-      workerAdapter
-    ));
+    ({ repo, hive, signerIdentity } = await createRepo(workerAdapter));
 
     // The worker was recreated with cold state: wire the repo onto the fresh
     // port and drop the adapter stranded on the dead one.
@@ -246,7 +243,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
       rootElement,
       repo,
       accountDocHandle,
-      siteName,
+      siteTitle,
     });
   }
 

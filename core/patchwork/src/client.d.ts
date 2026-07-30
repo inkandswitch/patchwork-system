@@ -12,7 +12,8 @@ import "@inkandswitch/patchwork-elements";
 import "@inkandswitch/patchwork-providers";
 
 declare global {
-  const __SITE_NAME__: string;
+  const __SITE_TITLE__: string;
+  const __STORAGE_PREFIX__: string;
 
   interface ImportMetaEnv {
     /**

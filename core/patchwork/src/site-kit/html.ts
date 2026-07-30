@@ -1,4 +1,4 @@
-import type { PatchworkSiteOptions } from "./options.js";
+import { DEFAULT_TITLE, type PatchworkSiteOptions } from "./options.js";
 import { resolveSyncServers, PRELOAD_WASM_ASSETS } from "./sync-servers.js";
 import { ICON_SPECS } from "./icons.js";
 
@@ -16,7 +16,7 @@ export function escapeHtml(value: string): string {
 
 /** Builds the generated index.html as a plain string — no bundler involved. */
 export function buildHtml(options: PatchworkSiteOptions): string {
-  const title = options.title ?? options.siteName ?? "Patchwork";
+  const title = options.title ?? DEFAULT_TITLE;
   const lang = (options.html && options.html.lang) || "en";
   const entry = options.entry ?? "/src/main.ts";
   const syncServers = resolveSyncServers(options);

@@ -1,11 +1,11 @@
-import type { PatchworkSiteOptions } from "./options.js";
+import { DEFAULT_TITLE, type PatchworkSiteOptions } from "./options.js";
 import { ICON_SPECS } from "./icons.js";
 
 /** Builds the generated manifest.webmanifest object — no bundler involved. */
 export function buildManifest(
   options: PatchworkSiteOptions
 ): Record<string, unknown> {
-  const title = options.title ?? options.siteName ?? "Patchwork";
+  const title = options.title ?? DEFAULT_TITLE;
   const icons = !options.icons
     ? []
     : ICON_SPECS.filter(

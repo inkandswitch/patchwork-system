@@ -42,10 +42,24 @@ export type PatchworkSyncServersOptions = {
   classic?: string | false;
 } & PatchworkPrimarySyncServerOptions;
 
+export const DEFAULT_TITLE = "Patchwork";
+
 export interface PatchworkSiteOptions {
-  /** -> __SITE_NAME__ define */
-  siteName?: string;
-  /** <title>, apple-mobile-web-app-title, manifest name */
+  /**
+   * Namespace for this site's IndexedDB databases and peer ids
+   * (-> __STORAGE_PREFIX__ define). Defaults to `"patchwork"`. Sites sharing
+   * an origin MUST use distinct prefixes.
+   *
+   * The tab and the shared automerge worker are separate bundles that have to
+   * open the same databases, so this is settable only here, where both of them
+   * receive it. Changing it on an existing site points it at empty storage.
+   */
+  storagePrefix?: string;
+  /**
+   * This site's name: `<title>`, apple-mobile-web-app-title, manifest name,
+   * and — via the __SITE_TITLE__ define — the brand word the router appends to
+   * the document title as `"<doc> | <title>"`. Defaults to `"Patchwork"`.
+   */
   title?: string;
   /** manifest short_name (defaults to title) */
   shortName?: string;

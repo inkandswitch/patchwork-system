@@ -65,13 +65,14 @@ export interface PatchworkOptions {
   createAccount?: AccountCreator;
 
   /**
-   * Brand word for this site: appended to the document title as
-   * `"<doc> | <name>"` when a document is open (the separator is provided
-   * for you), and used to namespace this site's storage and peer ids.
+   * This site's name, appended to the document title as `"<doc> | <title>"`
+   * when a document is open (the separator is provided for you).
    *
-   * Defaults to the build-time `__SITE_NAME__` define, then `"patchwork"`.
+   * Defaults to the build-time `__SITE_TITLE__` define — the vite plugin's
+   * `title` option, which also names the html `<title>` and the manifest —
+   * then `"Patchwork"`.
    */
-  name?: string;
+  title?: string;
 
   /** DOM id of the `<patchwork-view>` hosting the root tool. Defaults to "root". */
   rootElementId?: string;
