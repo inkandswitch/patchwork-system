@@ -1,5 +1,33 @@
 # @inkandswitch/patchwork
 
+## 0.5.0
+
+### Minor Changes
+
+- 98be594: Collapse `siteName`, `title`, and `setup({name})` into a single `title`.
+
+  A site's name was three options across two files: `siteName` and `title` in the vite config, `name` at `setup`. They fed the same handful of strings and could disagree with each other.
+
+  `title` is now the only one. It names the html `<title>`, `apple-mobile-web-app-title`, and the manifest's `name`/`short_name` as before, and is also emitted as the `__SITE_TITLE__` define, which supplies the brand word the router appends to the document title as `"<doc> | <title>"`. It defaults to `"Patchwork"`.
+
+  - `siteName` and the `__SITE_NAME__` define are removed. If you used `siteName` only for display, rename it to `title`; if you relied on it to namespace storage, see `storagePrefix`.
+  - `setup({name})` is now `setup({title})`, and is only needed to override the build-time value.
+
+- 98be594: Namespace IndexedDB and peer ids with a new build-time `storagePrefix` option.
+
+  The tab and the shared automerge worker are separate bundles that must open the same databases. Both now read the name from one place, `@inkandswitch/patchwork-bootloader/storage`, resolved from the `__STORAGE_PREFIX__` define the vite plugin emits unconditionally.
+
+  Previously each side resolved `__SITE_NAME__` itself with a different fallback — `"patchwork.inkandswitch.com"` in the worker, `"patchwork"` in the tab — so a site that never set `siteName` had its tab and worker on two different keyhive databases, and one that passed `setup({name})` split them the same way, since a runtime option never reaches the worker.
+
+  - `storagePrefix` defaults to `"patchwork"` and is settable only in the build config. Sites sharing an origin must use distinct prefixes. It is deliberately not derived from any display name: changing it points a site at empty storage, so a rebrand must not be able to change it by accident.
+  - Sites that relied on `siteName` to namespace their storage must now set `storagePrefix` explicitly to that same value to keep their existing databases.
+  - `createRepo` in `@inkandswitch/patchwork` no longer takes a site name argument.
+
+### Patch Changes
+
+- Updated dependencies [98be594]
+  - @inkandswitch/patchwork-bootloader@0.6.0
+
 ## 0.4.0
 
 ### Minor Changes
