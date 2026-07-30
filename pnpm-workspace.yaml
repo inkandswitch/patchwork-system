@@ -31,7 +31,7 @@ minimumReleaseAgeExclude:
 catalog:
   "@automerge/automerge": 3.3.0-fragments.2
   "@automerge/automerge-repo": 2.6.0-subduction.44
-  "@automerge/automerge-repo-keyhive": 0.4.0-alpha.sub.2
+  "@automerge/automerge-repo-keyhive": 0.4.0-alpha.sub.4
   "@automerge/automerge-repo-network-messagechannel": 2.6.0-subduction.44
   "@automerge/automerge-repo-network-websocket": 2.6.0-subduction.44
   "@automerge/automerge-repo-react-hooks": 2.6.0-subduction.44
