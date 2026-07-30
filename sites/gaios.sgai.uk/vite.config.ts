@@ -4,7 +4,7 @@ import patchwork from "@inkandswitch/patchwork/vite";
 export default defineConfig({
   plugins: [
     patchwork({
-      siteName: "gaios",
+      storagePrefix: "gaios",
       title: "GAIOS",
       description:
         "local-first collaborative & malleable software environment",

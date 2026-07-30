@@ -1,5 +1,7 @@
 import type { Plugin } from "vite";
 import wasm from "vite-plugin-wasm";
+import { DEFAULT_STORAGE_PREFIX } from "@inkandswitch/patchwork-bootloader/storage";
+import { DEFAULT_TITLE } from "../site-kit/options.js";
 import type { PatchworkVitePluginOptions } from "./patchwork-plugin.js";
 import {
   DEFAULT_SYNC_SERVERS,
@@ -9,7 +11,8 @@ import {
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*" };
 
 /**
- * Owns envPrefix, define (__SITE_NAME__/sync-server configuration),
+ * Owns envPrefix, define (__SITE_TITLE__/__STORAGE_PREFIX__/sync-server
+ * configuration),
  * server/preview CORS defaults, worker format + the wasm plugin, and build
  * defaults (firefox150 target, unminified, sourcemapped) — everything a site
  * used to hand-write in its own vite.config.ts. Each is switched off
@@ -26,13 +29,16 @@ export function configPlugin(
         options.syncServers && typeof options.syncServers.classic === "string"
           ? options.syncServers.classic
           : DEFAULT_SYNC_SERVERS.classic;
+      // __STORAGE_PREFIX__ is defined unconditionally: the tab and the shared
+      // automerge worker resolve it separately, and only a define reaches both.
       const define: Record<string, string> = {
         __SYNC_SERVER__: JSON.stringify(primarySyncServer),
         __CLASSIC_SYNC_SERVER__: JSON.stringify(classicSyncServer),
+        __SITE_TITLE__: JSON.stringify(options.title ?? DEFAULT_TITLE),
+        __STORAGE_PREFIX__: JSON.stringify(
+          options.storagePrefix ?? DEFAULT_STORAGE_PREFIX
+        ),
       };
-      if (options.siteName) {
-        define.__SITE_NAME__ = JSON.stringify(options.siteName);
-      }
 
       return {
         envPrefix: ["VITE_", "PATCHWORK_"],

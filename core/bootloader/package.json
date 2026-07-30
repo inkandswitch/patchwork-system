@@ -26,6 +26,10 @@
       "import": "./dist/externals-list.js",
       "types": "./dist/externals-list.d.ts"
     },
+    "./storage": {
+      "import": "./dist/storage.js",
+      "types": "./dist/storage.d.ts"
+    },
     "./service-worker": {
       "import": "./dist/service-worker.js",
       "types": "./dist/service-worker.d.ts"

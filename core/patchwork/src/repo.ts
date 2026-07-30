@@ -17,6 +17,10 @@ import {
 import { initSync as initSubductionSync } from "@automerge/automerge-subduction/slim";
 import { MemorySigner } from "@automerge/automerge-subduction/slim";
 import setupServiceWorker from "@inkandswitch/patchwork-bootloader";
+import {
+  keyhiveStorageName,
+  storagePrefix,
+} from "@inkandswitch/patchwork-bootloader/storage";
 import type { SignerIdentity } from "./types.js";
 import debug from "debug";
 
@@ -50,7 +54,6 @@ export function initWasm(): Promise<void> {
 }
 
 export async function createRepo(
-  siteName: string,
   workerAdapter: MessageChannelNetworkAdapter
 ): Promise<{
   repo: Repo;
@@ -62,8 +65,8 @@ export async function createRepo(
     initKeyhiveWasm();
     const { hive, repo } = await initializeAutomergeRepoKeyhiveWithRepo({
       createRepo: (repoConfig) => new Repo(repoConfig),
-      storage: new IndexedDBWorkerStorageAdapter(`${siteName}-keyhive`),
-      peerIdSuffix: siteName + Math.random().toString(36).slice(2),
+      storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
+      peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       networkAdapter: workerAdapter,
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
@@ -91,7 +94,8 @@ export async function createRepo(
       return peerId.includes("automerge-worker");
     },
     enableRemoteHeadsGossiping: true,
-    peerId: `${siteName}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
+    peerId:
+      `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
   });
   const signerIdentity = {
     peerId: signer.peerId().toString(),
