@@ -23,6 +23,10 @@ const stylesheets: Record<string, string> = {
   ),
 };
 
+const builtinPaths = new Map(
+  Object.entries(builtins).map(([id, fileName]) => [fileName, id])
+);
+
 /**
  * Workers are `type: "module"` scripts the browser fetches directly, so import
  * maps don't apply to them and their heavy imports have to resolve to real
@@ -114,6 +118,21 @@ export function devPlugin(options: PatchworkVitePluginOptions = {}): Plugin {
           } catch {
             next();
           }
+          return;
+        }
+
+        // A worker script is fetched by URL, and import maps don't apply to
+        // those, so code that starts one reaches for the /packages/… path the
+        // build emits. In dev those are the optimized deps the page's import
+        // map points at — same module, one URL over.
+        const builtin = builtinPaths.get(pathname);
+        if (builtin) {
+          response.statusCode = 302;
+          response.setHeader(
+            "Location",
+            `/@id/${encodeURI(devDependencyId(builtin))}`
+          );
+          response.end();
           return;
         }
 
