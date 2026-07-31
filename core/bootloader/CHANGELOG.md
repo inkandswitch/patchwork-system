@@ -1,5 +1,11 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.6.2
+
+### Patch Changes
+
+- f37bb8e: Bump `@automerge/automerge-subduction` to 0.16.1.
+
 ## 0.6.1
 
 ### Patch Changes
