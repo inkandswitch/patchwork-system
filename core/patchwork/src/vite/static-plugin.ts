@@ -22,7 +22,8 @@ import type { PatchworkVitePluginOptions } from "./patchwork-plugin.js";
  * `from` is either a package specifier or a path relative to the site root. A
  * package says where its static tree lives with a `"patchwork": {"static":
  * "static-dist"}` field in its own package.json; without one, the whole
- * package directory is mounted.
+ * package directory is mounted — which is what a package that publishes its
+ * static tree as the root of its own tarball wants.
  */
 export interface PatchworkStaticSource {
   from: string;
@@ -87,6 +88,22 @@ function packageDirectory(name: string, root: string) {
   }
 }
 
+/** A package's static tree: the directory it declares, or its root. */
+function staticDirectory(name: string, directory: string) {
+  const declared = JSON.parse(
+    readFileSync(join(directory, "package.json"), "utf8")
+  ).patchwork?.static;
+  if (!declared) return directory;
+  const path = join(directory, declared);
+  if (!existsSync(path)) {
+    throw new Error(
+      `[patchwork] ${name} declares "patchwork": {"static": ${JSON.stringify(declared)}}, but ${path} doesn't exist. ` +
+        `The field is a path inside the installed package — a package that publishes its static tree as the tarball's own root shouldn't set it at all.`
+    );
+  }
+  return path;
+}
+
 export function resolveStatic(
   options: PatchworkVitePluginOptions,
   root: string
@@ -96,14 +113,12 @@ export function resolveStatic(
     const isPath = entry.from.startsWith(".") || isAbsolute(entry.from);
     const directory = isPath ? undefined : packageDirectory(entry.from, root);
     const path = directory
-      ? join(
-          directory,
-          JSON.parse(readFileSync(join(directory, "package.json"), "utf8"))
-            .patchwork?.static ?? "."
-        )
+      ? staticDirectory(entry.from, directory)
       : resolve(root, entry.from);
     if (!existsSync(path)) {
-      throw new Error(`[patchwork] static source not found: ${entry.from}`);
+      throw new Error(
+        `[patchwork] static source not found: ${entry.from} (${path})`
+      );
     }
     const file = statSync(path).isFile();
     const to = entry.to ?? "/";
