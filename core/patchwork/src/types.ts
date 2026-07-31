@@ -74,6 +74,17 @@ export interface PatchworkOptions {
    */
   title?: string;
 
+  /**
+   * Id of the tool that frames this site — what mounts in the root view when
+   * the user hasn't chosen one on their account and the URL doesn't name one
+   * via `#frame=`. Must be a tool one of the {@link
+   * PatchworkOptions.packageListURL} sources registers.
+   *
+   * Falls back to the first registered tool tagged `frame-tool`, which with
+   * more than one of them depends on module load order.
+   */
+  frameToolId?: string;
+
   /** DOM id of the `<patchwork-view>` hosting the root tool. Defaults to "root". */
   rootElementId?: string;
 

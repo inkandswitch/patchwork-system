@@ -244,6 +244,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
       repo,
       accountDocHandle,
       siteTitle,
+      frameToolId: options.frameToolId,
     });
   }
 

@@ -65,7 +65,7 @@ function createImportMap(options?: PatchworkVitePluginOptions) {
   return { importmap, builtins };
 }
 
-function devDependencyId(id: string): string {
+export function devDependencyId(id: string): string {
   if (id === "@inkandswitch/patchwork") return id;
   if (id === "@inkandswitch/patchwork-bootloader") {
     return `@inkandswitch/patchwork > ${id}`;

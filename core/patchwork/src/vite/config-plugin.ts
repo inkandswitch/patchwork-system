@@ -11,6 +11,28 @@ import {
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*" };
 
 /**
+ * The build-time constants both the page bundle and the workers are compiled
+ * against. Values are already JSON — the shape vite's `define` and esbuild's
+ * `define` both take.
+ */
+export function buildDefines(
+  options: PatchworkVitePluginOptions = {}
+): Record<string, string> {
+  const classicSyncServer =
+    options.syncServers && typeof options.syncServers.classic === "string"
+      ? options.syncServers.classic
+      : DEFAULT_SYNC_SERVERS.classic;
+  return {
+    __SYNC_SERVER__: JSON.stringify(resolvePrimarySyncServer(options)),
+    __CLASSIC_SYNC_SERVER__: JSON.stringify(classicSyncServer),
+    __SITE_TITLE__: JSON.stringify(options.title ?? DEFAULT_TITLE),
+    __STORAGE_PREFIX__: JSON.stringify(
+      options.storagePrefix ?? DEFAULT_STORAGE_PREFIX
+    ),
+  };
+}
+
+/**
  * Owns envPrefix, define (__SITE_TITLE__/__STORAGE_PREFIX__/sync-server
  * configuration),
  * server/preview CORS defaults, worker format + the wasm plugin, and build
@@ -24,25 +46,17 @@ export function configPlugin(
   return {
     name: "@patchwork/config",
     config() {
-      const primarySyncServer = resolvePrimarySyncServer(options);
-      const classicSyncServer =
-        options.syncServers && typeof options.syncServers.classic === "string"
-          ? options.syncServers.classic
-          : DEFAULT_SYNC_SERVERS.classic;
-      // __STORAGE_PREFIX__ is defined unconditionally: the tab and the shared
-      // automerge worker resolve it separately, and only a define reaches both.
-      const define: Record<string, string> = {
-        __SYNC_SERVER__: JSON.stringify(primarySyncServer),
-        __CLASSIC_SYNC_SERVER__: JSON.stringify(classicSyncServer),
-        __SITE_TITLE__: JSON.stringify(options.title ?? DEFAULT_TITLE),
-        __STORAGE_PREFIX__: JSON.stringify(
-          options.storagePrefix ?? DEFAULT_STORAGE_PREFIX
-        ),
-      };
-
       return {
         envPrefix: ["VITE_", "PATCHWORK_"],
-        define,
+        define: buildDefines(options),
+        optimizeDeps: {
+          exclude: ["@automerge/automerge-repo-storage-indexeddb"],
+          // Dep pre-bundling runs esbuild directly, outside the plugin
+          // pipeline that applies `define`. Without this the page would fall
+          // back to the built-in storage prefix while the workers used the
+          // configured one, and they have to open the same databases.
+          esbuildOptions: { define: buildDefines(options) },
+        },
         server:
           options.server === false
             ? undefined

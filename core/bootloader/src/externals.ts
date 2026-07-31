@@ -39,30 +39,35 @@ export async function resolveExternal(
   return resolved.id;
 }
 
+/**
+ * automerge/keyhive/subduction's wasm binaries, by the file name the service
+ * worker fetches them under. Resolved from this package's node_modules for the
+ * same reason as {@link resolveExternal}.
+ */
+export function wasmAssets(): { fileName: string; path: string }[] {
+  return [
+    {
+      fileName: "automerge.wasm",
+      path: require.resolve("@automerge/automerge/automerge.wasm"),
+    },
+    {
+      fileName: "keyhive_wasm.wasm",
+      path: require.resolve("@keyhive/keyhive/keyhive_wasm.wasm"),
+    },
+    {
+      fileName: "subduction.wasm",
+      path: require.resolve("@automerge/automerge-subduction/wasm"),
+    },
+  ];
+}
+
 /** Emits automerge/keyhive/subduction's wasm binaries as build assets, so the service worker can fetch them. */
 export function emitWasmAssets(this: import("rollup").PluginContext): void {
-  const automergeWasmPath = require.resolve(
-    "@automerge/automerge/automerge.wasm"
-  );
-  this.emitFile({
-    type: "asset",
-    fileName: "automerge.wasm",
-    source: readFileSync(automergeWasmPath),
-  });
-
-  const keyhiveWasmPath = require.resolve(
-    "@keyhive/keyhive/keyhive_wasm.wasm"
-  );
-  this.emitFile({
-    type: "asset",
-    fileName: "keyhive_wasm.wasm",
-    source: readFileSync(keyhiveWasmPath),
-  });
-
-  const subdWasmPath = require.resolve("@automerge/automerge-subduction/wasm");
-  this.emitFile({
-    type: "asset",
-    fileName: "subduction.wasm",
-    source: readFileSync(subdWasmPath),
-  });
+  for (const { fileName, path } of wasmAssets()) {
+    this.emitFile({
+      type: "asset",
+      fileName,
+      source: readFileSync(path),
+    });
+  }
 }
