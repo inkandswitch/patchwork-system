@@ -9,13 +9,17 @@ git clone https://github.com/inkandswitch/patchwork-system
 cd patchwork-system
 pnpm install
 pnpm build
-pnpm dev
+SITE=gaios.sgai.uk pnpm dev
 ```
 
-For a specific site run
+To run a specific site, set `SITE` to a directory name under `sites/`:
 
 ```shell
-SITE=patchwork.inkandswitch.com pnpm dev
+SITE=gaios.sgai.uk pnpm dev
 ```
+
+> [!NOTE]
+> The Patchwork site itself now lives in its own repository:
+> [patchwork.inkandswitch.com](https://github.com/inkandswitch/patchwork.inkandswitch.com).
 
 The development server will be running at [localhost:5173](http://localhost:5173/).
