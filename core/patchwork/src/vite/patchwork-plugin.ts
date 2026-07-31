@@ -3,6 +3,7 @@ import type { Plugin, ServerOptions, PreviewOptions, BuildOptions } from "vite";
 import { importmap } from "./importmap-plugin.js";
 import { serviceworker } from "./service-worker-plugin.js";
 import { configPlugin, wasm } from "./config-plugin.js";
+import { devPlugin } from "./dev-plugin.js";
 import { iconsPlugin } from "./icons.js";
 import { htmlPlugin } from "./html-plugin.js";
 import { manifestPlugin } from "./manifest-plugin.js";
@@ -40,6 +41,7 @@ export default function patchwork(options?: PatchworkVitePluginOptions) {
     netlifyPlugin(options),
     importmap(options),
     serviceworker(),
+    devPlugin(options),
   ].filter((plugin): plugin is Plugin => plugin != null);
 }
 

@@ -40,7 +40,6 @@ export const createDefaultAccount: AccountCreator<AccountDoc> = async (
   ]);
 
   accountHandle.change((doc) => {
-    doc.frameToolId = "threepane";
     doc.rootFolderUrl = rootFolder.url;
     doc.moduleSettingsUrl = moduleSettings.url;
     doc.contactUrl = contact.url;

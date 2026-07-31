@@ -13,7 +13,7 @@ const self = fileURLToPath(import.meta.url);
 // own chunks. Their heavy imports are marked external and resolved to
 // /packages/... URLs (both workers are created with type:"module", so the
 // browser fetches those as regular network requests).
-const workers = [
+export const workers = [
   {
     specifier: "@inkandswitch/patchwork-bootloader/service-worker",
     fileName: "service-worker.js",
@@ -30,11 +30,17 @@ const workers = [
 
 export function serviceworker(): Plugin {
   const entryIds = new Set<string>();
+  let serve = false;
 
   return {
     name: "@patchwork/service-worker",
     enforce: "pre",
+    configResolved(config) {
+      serve = config.command === "serve";
+    },
     async buildStart() {
+      // emitFile throws in serve mode.
+      if (serve) return;
       for (const { specifier, fileName } of workers) {
         const resolved = await this.resolve(specifier, self);
         entryIds.add(resolved!.id);

@@ -45,11 +45,11 @@
     "@inkandswitch/patchwork-providers": "workspace:^",
     "@types/debug": "^4.1.13",
     "debug": "^4.4.3",
+    "esbuild": "^0.23.1",
     "sharp": "^0.35.3",
     "vite-plugin-wasm": "^3.6.0"
   },
   "devDependencies": {
-    "esbuild": "^0.23.1",
     "rollup": "^4.61.1",
     "vite": "^7.3.5"
   },

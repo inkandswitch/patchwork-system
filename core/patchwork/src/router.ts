@@ -66,6 +66,7 @@ export interface RouterParams {
   repo: Repo;
   accountDocHandle: DocHandle<AccountDoc>;
   siteTitle: string;
+  frameToolId?: string;
 }
 
 export interface Router {
@@ -84,6 +85,7 @@ export function createRouter({
   repo,
   accountDocHandle,
   siteTitle,
+  frameToolId,
 }: RouterParams): Router {
   const route = async () => {
     // The first call seeds the root view's tool/doc so it can mount; later
@@ -92,7 +94,10 @@ export function createRouter({
       const params = new URLSearchParams(location.hash.slice(1));
       const frame = params.get("frame");
       const toolId =
-        frame ?? accountDocHandle.doc().frameToolId ?? registeredFrameToolId();
+        frame ??
+        accountDocHandle.doc().frameToolId ??
+        frameToolId ??
+        registeredFrameToolId();
       if (!toolId) {
         console.error("patchwork: no frame tool registered, nothing to mount");
         return;

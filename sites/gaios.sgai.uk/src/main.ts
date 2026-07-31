@@ -22,6 +22,7 @@ showLoadingAnimation();
 window.patchwork = await setup({
   packageListURL,
   accountKey: "gaiosAccountUrl",
+  frameToolId: "threepane",
 }).catch((error) => {
   showErrorScreen(error, { contact: "chee@inkandswitch.com" });
   throw error;
