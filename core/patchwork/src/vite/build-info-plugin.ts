@@ -49,13 +49,16 @@ export function buildInfoPlugin(
   if (!options.buildInfo) return null;
   let root: string;
   let outDir: string;
+  let serve = false;
   return {
     name: "@patchwork/build-info",
     configResolved(config) {
       root = config.root;
       outDir = join(config.root, config.build.outDir);
+      serve = config.command === "serve";
     },
     async closeBundle() {
+      if (serve) return;
       const sources = resolveStatic(options, root).map((source) =>
         source.packageDirectory
           ? { from: source.from, ...describe(source.packageDirectory) }

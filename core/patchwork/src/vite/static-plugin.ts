@@ -170,6 +170,7 @@ export function staticPlugin(
   let root: string;
   let outDir: string;
   let base = "/";
+  let serve = false;
   let logger: Logger;
   return {
     name: "@patchwork/static",
@@ -178,9 +179,12 @@ export function staticPlugin(
       root = config.root;
       outDir = resolve(config.root, config.build.outDir);
       base = config.base;
+      serve = config.command === "serve";
       logger = config.logger;
     },
     async closeBundle() {
+      // also called when a dev server shuts down, which has nothing to copy
+      if (serve) return;
       for (const source of sources) {
         const paths = source.file ? [""] : await files(source.path);
         const kept: string[] = [];
