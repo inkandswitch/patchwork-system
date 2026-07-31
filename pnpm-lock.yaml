@@ -43,7 +43,7 @@ overrides:
   '@automerge/automerge-repo-react-hooks': 2.6.0-subduction.47
   '@automerge/automerge-repo-solid-primitives': 2.6.0-subduction.47
   '@automerge/automerge-repo-storage-indexeddb': 2.6.0-subduction.47
-  '@automerge/automerge-subduction': 0.16.0
+  '@automerge/automerge-subduction': 0.16.1
   '@automerge/react': 2.6.0-subduction.47
   '@automerge/vanillajs': 2.6.0-subduction.47
   '@keyhive/keyhive': 0.1.0-alpha.5
@@ -92,8 +92,8 @@ importers:
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
       '@automerge/automerge-subduction':
-        specifier: 0.16.0
-        version: 0.16.0
+        specifier: 0.16.1
+        version: 0.16.1
       '@automerge/vanillajs':
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
@@ -212,8 +212,8 @@ importers:
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
       '@automerge/automerge-subduction':
-        specifier: 0.16.0
-        version: 0.16.0
+        specifier: 0.16.1
+        version: 0.16.1
       '@types/debug':
         specifier: ^4.1.13
         version: 4.1.13
@@ -239,8 +239,8 @@ importers:
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
       '@automerge/automerge-subduction':
-        specifier: 0.16.0
-        version: 0.16.0
+        specifier: 0.16.1
+        version: 0.16.1
       '@automerge/vanillajs':
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
@@ -338,8 +338,8 @@ importers:
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
       '@automerge/automerge-subduction':
-        specifier: 0.16.0
-        version: 0.16.0
+        specifier: 0.16.1
+        version: 0.16.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -448,8 +448,8 @@ packages:
     resolution: {integrity: sha512-NGBQUjGH67Kyrc8a6zoafvDKT1+pnFi2/yiMgULS7l+apWQT2QkgQZ3vQGms/ngdrmM6ye1fhcwHwBn/DGJ6tA==}
     engines: {node: '>=22.13'}
 
-  '@automerge/automerge-subduction@0.16.0':
-    resolution: {integrity: sha512-BOOn/4p8cF4LhjDUQdgM3qyZFya+M7ZuZywuC99x/kbhk4UK7dw/QcsifcHG5E1TAW4R/K17ZGFUC5nCVUSSWg==}
+  '@automerge/automerge-subduction@0.16.1':
+    resolution: {integrity: sha512-alH7U4eYn0O7sT6hNLv7CJhNODJi+QD6qfRQTNfZCxL3Q5JZdJ8lFpdvXUkBf+I3bu0GLvVlTaYPWGrBihjpIw==}
 
   '@automerge/automerge@3.3.2':
     resolution: {integrity: sha512-9vCdCL7pdQwUra66SBxPVHr+/t9epXKni9KDeak2rNBFMzABVh2u6gSpcwxi3jkR5qr047jVqZv9DlrOfVxLFw==}
@@ -2082,7 +2082,7 @@ snapshots:
     dependencies:
       '@automerge/automerge-repo': 2.6.0-subduction.47
       '@automerge/automerge-repo-network-websocket': 2.6.0-subduction.47
-      '@automerge/automerge-subduction': 0.16.0
+      '@automerge/automerge-subduction': 0.16.1
       '@keyhive/keyhive': 0.1.0-alpha.5
       '@noble/hashes': 2.2.0
       cbor-x: 1.6.4
@@ -2151,7 +2151,7 @@ snapshots:
   '@automerge/automerge-repo@2.6.0-subduction.47':
     dependencies:
       '@automerge/automerge': 3.3.2
-      '@automerge/automerge-subduction': 0.16.0
+      '@automerge/automerge-subduction': 0.16.1
       bs58check: 4.0.0
       cbor-x: 1.6.4
       debug: 4.4.3
@@ -2166,7 +2166,7 @@ snapshots:
       - supports-color
       - utf-8-validate
 
-  '@automerge/automerge-subduction@0.16.0': {}
+  '@automerge/automerge-subduction@0.16.1': {}
 
   '@automerge/automerge@3.3.2': {}
 

@@ -34,7 +34,7 @@ catalog:
   "@automerge/automerge-repo-solid-primitives": 2.6.0-subduction.47
   "@automerge/automerge-repo-storage-indexeddb": 2.6.0-subduction.47
   "@automerge/automerge-repo-storage-nodefs": 2.6.0-subduction.47
-  "@automerge/automerge-subduction": 0.16.0
+  "@automerge/automerge-subduction": 0.16.1
   "@automerge/react": 2.6.0-subduction.47
   "@automerge/vanillajs": 2.6.0-subduction.47
   "@codemirror/commands": ^6.10.4
