@@ -1,5 +1,22 @@
 # @inkandswitch/patchwork
 
+## 0.7.2
+
+### Patch Changes
+
+- e1374ad: Serve the `/packages/…` builtin URLs in dev. Import maps don't apply to worker
+  scripts, so code that starts one — `@automerge/automerge-repo`'s shared
+  subduction websocket worker, for instance — asks for the `/packages/…` path the
+  build emits. Nothing served those in dev, and the worker failed to fetch; the
+  dev server now redirects them to the same optimized dep the page's import map
+  points at.
+- e1374ad: Say what's actually wrong when a `static` package declares a directory that
+  isn't there. The package resolved fine — its `"patchwork": {"static": …}` field
+  is what's wrong — and "static source not found" named neither the field nor the
+  path it pointed at. The error now quotes the declaration, gives the full path
+  that's missing, and says that a package publishing its static tree as the root
+  of its own tarball shouldn't set the field at all.
+
 ## 0.7.1
 
 ### Patch Changes
