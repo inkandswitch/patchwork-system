@@ -2,7 +2,7 @@
   description = "Patchwork Next: A malleable software environment for collaborative work";
 
   inputs = {
-    command-utils.url = "git+https://codeberg.org/expede/nix-command-utils";
+    command-utils.url = "git+https://tangled.sh/@expede.wtf/nix-command-utils";
     flake-utils.url = "github:numtide/flake-utils";
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
   };

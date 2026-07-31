@@ -12,11 +12,11 @@
         "rev": "eba91ae4f4a48eedab31777ed817d3c593cee7a8",
         "revCount": 6,
         "type": "git",
-        "url": "https://codeberg.org/expede/nix-command-utils"
+        "url": "https://tangled.sh/@expede.wtf/nix-command-utils"
       },
       "original": {
         "type": "git",
-        "url": "https://codeberg.org/expede/nix-command-utils"
+        "url": "https://tangled.sh/@expede.wtf/nix-command-utils"
       }
     },
     "flake-utils": {
