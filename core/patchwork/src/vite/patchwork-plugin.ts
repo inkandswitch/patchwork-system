@@ -8,6 +8,8 @@ import { iconsPlugin } from "./icons.js";
 import { htmlPlugin } from "./html-plugin.js";
 import { manifestPlugin } from "./manifest-plugin.js";
 import { netlifyPlugin } from "./netlify-plugin.js";
+import { staticPlugin, type PatchworkStaticSource } from "./static-plugin.js";
+import { buildInfoPlugin } from "./build-info-plugin.js";
 import type { PatchworkSiteOptions } from "../site-kit/options.js";
 
 /**
@@ -42,6 +44,8 @@ export default function patchwork(options?: PatchworkVitePluginOptions) {
     importmap(options),
     serviceworker(),
     devPlugin(options),
+    staticPlugin(options),
+    buildInfoPlugin(options),
   ].filter((plugin): plugin is Plugin => plugin != null);
 }
 
@@ -50,6 +54,8 @@ export type ImportMap = {
   imports: Imports;
   scopes?: { [scope: string]: Imports };
 };
+
+export type { PatchworkStaticSource } from "./static-plugin.js";
 
 export type {
   PatchworkSiteOptions,
@@ -62,6 +68,20 @@ export type {
 
 export interface PatchworkVitePluginOptions extends PatchworkSiteOptions {
   importmap?: ImportMap;
+
+  /**
+   * File trees to mount into the site, in order of precedence — a package of
+   * Patchwork modules, a sibling repo's build output, a hand-written
+   * modules.json. Served in dev, copied into the site at build, and never
+   * overwriting the site's own files. A bare string is `{from: string}`.
+   */
+  static?: (string | PatchworkStaticSource)[];
+  /**
+   * Write build-info.json: this site's revision, the patchwork version that
+   * built it, and every `static` source. An object is merged into it, for
+   * whatever else the site wants recorded.
+   */
+  buildInfo?: boolean | Record<string, unknown>;
 
   server?: false | ServerOptions;
   preview?: false | PreviewOptions;
