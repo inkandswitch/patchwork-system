@@ -22,3 +22,11 @@ Describe what changed and why, in the present tense, for someone reading the cha
 - If a package's public API changed, say what moved and what to import instead.
 
 Skip the changeset when nothing published changed — `sites/`, `e2e/`, `scripts/`, config, docs, tests.
+
+### Catalog bumps
+
+Bumping a version in the `catalog:` block of `pnpm-workspace.yaml` needs a changeset too. `catalog:` is resolved to a concrete version at publish time, so it rewrites the published manifest.
+
+Which packages to list: every published package that has the bumped entry in its `dependencies` or `peerDependencies`. Packages that only have it in `devDependencies` don't need a bump — their tarball is unchanged, and their `.d.ts` resolve the types against whatever the consumer installed.
+
+The `@automerge/*` and `@keyhive/*` entries are exact pins, not ranges. Two of our packages published against different pins means two copies of automerge-repo in the consumer's tree, which breaks document handle identity. Bump them together in one changeset and say which version they moved to.
