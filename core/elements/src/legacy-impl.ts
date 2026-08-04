@@ -125,6 +125,48 @@ function ensureErrorStyles() {
     }
     .pw-error__face[aria-expanded="true"] { transform: rotate(90deg); }
 
+    .pw-error--offer {
+      flex-direction: column;
+      gap: 0.9rem;
+      justify-content: center;
+    }
+    .pw-error__message {
+      margin: 0;
+      max-width: 34em;
+      text-align: center;
+      overflow-wrap: anywhere;
+      font-family: var(--studio-family, system-ui, sans-serif);
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: var(--studio-text, #1a1a1a);
+    }
+    .pw-error__actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    /* Offer to run the package the document names. Deliberately quiet — it
+       executes third-party JavaScript, so it shouldn't read as the happy path. */
+    .pw-error__load {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35em;
+      font-family: var(--studio-family, system-ui, sans-serif);
+      font-size: 0.8rem;
+      line-height: 1;
+      color: var(--studio-text, #1a1a1a);
+      background: var(--studio-fill, white);
+      border: 1px solid var(--studio-fill-offset-30, rgba(0, 0, 0, 0.12));
+      border-radius: var(--studio-radius-md, 8px);
+      padding: 0.5em 0.7em;
+      cursor: pointer;
+      transition: background 0.12s ease, border-color 0.12s ease;
+    }
+    .pw-error__load:hover {
+      background: var(--studio-fill-offset-10, rgba(0, 0, 0, 0.04));
+      border-color: var(--studio-fill-offset-30, rgba(0, 0, 0, 0.24));
+    }
+
     /* Flyout: a Popover-API callout (top layer, so it escapes any overflow
        clipping) positioned under the button in JS, with a caret + shadow. */
     .pw-error-flyout {
@@ -203,8 +245,6 @@ export class LegacyImpl {
   #tool: LoadedTool | null = null;
   #state: State = State.none;
   #requestedToolImports = new Set<string>();
-  #declinedToolImports = new Set<string>();
-  #promptingImportUrl: string | null = null;
   #initEpoch = 0;
   #capturedParent: Element | null = null;
   #fallbackId: string | undefined;
@@ -473,8 +513,6 @@ export class LegacyImpl {
     this.#handle = null;
     this.#tool = null;
     this.#requestedToolImports.clear();
-    this.#declinedToolImports.clear();
-    this.#promptingImportUrl = null;
     this.#content.textContent = "";
     this.#state = State.none;
 
@@ -598,21 +636,30 @@ export class LegacyImpl {
       // For a wildcard stopgap, also offer the doc's suggested import so a
       // datatype-specific tool can load, at which point the registry listeners
       // above swap it in (it sorts ahead of the wildcard as the new fallback).
-      // We still render the wildcard tool in the meantime; `#notool` dedupes so
-      // re-renders don't re-offer.
+      // We still render the wildcard tool in the meantime, so the offer goes in
+      // a toast rather than replacing what's mounted.
       if (mountingWildcardStopgap) {
-        this.#notool();
+        const suggestion = this.#suggestedImport();
+        if (suggestion && !suggestion.loading) {
+          this.#showToast(
+            "This document suggests a package",
+            suggestion.url,
+            () => this.#loadSuggestedImport(suggestion.url)
+          );
+        }
       }
     }
 
     if (!toolId) {
       this.#state = "unable";
       // The doc's datatype has no registered tool and no explicit tool was
-      // requested. If the doc points at a module to import, offer it and wait —
-      // the registry listeners re-render once an accepted import registers a
+      // requested. If the doc points at a module to import, offer it — the
+      // registry listeners re-render once an accepted import registers a
       // supporting tool. Otherwise there's genuinely nothing to open.
-      if (this.#notool()) {
-        this.#displayLoading("");
+      const suggestion = this.#suggestedImport();
+      if (suggestion) {
+        if (suggestion.loading) this.#displayLoading("");
+        else this.#displaySuggestion(suggestion.url);
         return;
       }
       const hasPatchworkMetadata = doc && "@patchwork" in doc;
@@ -634,10 +681,13 @@ export class LegacyImpl {
       this.#state = "unable";
       // The requested tool isn't loaded. If the doc suggests a module to import
       // it from, offer that; otherwise there's nothing more to try.
-      if (this.#notool()) {
+      const suggestion = this.#suggestedImport();
+      if (!suggestion) {
+        this.#displayError(`I couldn't find the tool with id ${toolId}.`);
+      } else if (suggestion.loading) {
         this.#displayLoading(toolId);
       } else {
-        this.#displayError(`I couldn't find the tool with id ${toolId}.`);
+        this.#displaySuggestion(suggestion.url);
       }
       return;
     }
@@ -718,7 +768,12 @@ export class LegacyImpl {
   // rotates it 90° and pops the full error (message + stack) as a caret flyout
   // under the button; `original` is what gets re-logged when it opens so it's
   // easy to grab from the console again.
-  #displayError = (summary: string, detail?: string, original?: unknown) => {
+  #displayError = (
+    summary: string,
+    detail?: string,
+    original?: unknown,
+    action?: { label: string; run: () => void }
+  ) => {
     ensureErrorStyles();
 
     // Stacks usually begin with the message already; only prepend the summary
@@ -814,7 +869,28 @@ export class LegacyImpl {
     window.addEventListener("resize", reposition);
     this.#errorReposition = reposition;
 
-    wrap.append(face, flyout);
+    const actions = document.createElement("div");
+    actions.className = "pw-error__actions";
+    actions.append(face, flyout);
+
+    if (action) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "pw-error__load";
+      button.textContent = `⚡ ${action.label}`;
+      button.addEventListener("click", action.run);
+      actions.append(button);
+
+      // An unexplained button is worse than no button, so the summary reads out
+      // in the open here rather than hiding behind the `:(`.
+      const message = document.createElement("p");
+      message.className = "pw-error__message";
+      message.textContent = summary;
+      wrap.classList.add("pw-error--offer");
+      wrap.append(message);
+    }
+
+    wrap.append(actions);
     this.#content.append(wrap);
     requestAnimationFrame(() => {
       wrap.style.opacity = "1";
@@ -830,54 +906,54 @@ export class LegacyImpl {
   }
 
   /**
-   * When no tool is available for the current doc, ask whether to import the
-   * module the doc suggests (its `suggestedImportUrl`). We never import it on
-   * our own: the module is arbitrary JavaScript named by the document, so it
-   * takes a confirm naming the URL before anything is fetched. Once accepted
-   * and registered, the tool registry gains a supporting tool and this view's
-   * registry listeners re-render.
-   *
-   * Returns whether we're waiting on the suggested import (prompt up, or an
-   * accepted import in flight), so the caller shows a loading state rather than
-   * an error. A refusal re-renders into the error.
-   *
-   * The prompt is deferred to a task so the caller finishes painting behind it,
-   * and the import runs in this element's own realm rather than being delegated
-   * to a single top-level handler, so a `<patchwork-view>` nested in an embedded
-   * context (e.g. an iframe an event couldn't bubble out of) still resolves its
-   * own tool.
+   * The module the current doc suggests importing (its `suggestedImportUrl`),
+   * if there is one we haven't already been refused. `loading` means it's been
+   * accepted and the import is in flight, so callers show a spinner instead of
+   * offering it again.
    */
-  #notool(): boolean {
-    if (!this.#docUrl || !this.#handle) return false;
+  #suggestedImport(): { url: string; loading: boolean } | null {
+    if (!this.#docUrl || !this.#handle) return null;
     const url = getSuggestedImportUrl(this.#handle.doc());
-    if (!url || this.#declinedToolImports.has(url)) return false;
-    if (this.#requestedToolImports.has(url) || this.#promptingImportUrl) {
-      return true;
-    }
+    if (!url) return null;
+    return { url, loading: this.#requestedToolImports.has(url) };
+  }
 
-    this.#promptingImportUrl = url;
-    const epoch = this.#initEpoch;
-    setTimeout(() => {
-      if (epoch !== this.#initEpoch) return;
-      this.#promptingImportUrl = null;
-      const ok = window.confirm(
-        `No tool was found for this document, but it suggests one at ${url}.\n\n` +
-          `This will execute JavaScript stored at ${url}. Only do this if you trust the source of this tool.\n\n` +
-          `Load it?`
-      );
-      if (!ok) {
-        this.#declinedToolImports.add(url);
-        // Nothing mounted means we're sitting on the loading state waiting for
-        // this import; re-render to land on the error instead. A wildcard
-        // stopgap is already showing something, so leave it mounted.
-        if (this.#state === State.unable) this.#queueRender();
-        return;
+  /**
+   * Say that the doc names a package and offer to run it. We never import on
+   * our own: the module is arbitrary JavaScript named by the document, so it
+   * takes a click and then a confirm naming the URL before anything is fetched.
+   */
+  #displaySuggestion(url: string): void {
+    this.#displayError(
+      `No tool was found for this document, but it suggests a package at ${url}.`,
+      undefined,
+      undefined,
+      {
+        label: "Load suggested package",
+        run: () => this.#loadSuggestedImport(url),
       }
-      this.#requestedToolImports.add(url);
-      this.#showToast("Loading tool", url);
-      void this.#importSuggestedModule(url);
-    });
-    return true;
+    );
+  }
+
+  /**
+   * Confirm, then import. The import runs in this element's own realm rather
+   * than being delegated to a single top-level handler, so a `<patchwork-view>`
+   * nested in an embedded context (e.g. an iframe an event couldn't bubble out
+   * of) still resolves its own tool. Once registered, the tool registry gains a
+   * supporting tool and this view's registry listeners re-render.
+   */
+  #loadSuggestedImport(url: string): void {
+    const ok = window.confirm(
+      `This will execute JavaScript stored at ${url}.\n\n` +
+        `Only do this if you trust the source of this tool.\n\n` +
+        `Load it?`
+    );
+    if (!ok) return;
+    this.#requestedToolImports.add(url);
+    this.#dismissToast(true);
+    this.#showToast("Loading tool", url);
+    if (this.#state === State.unable) this.#queueRender();
+    void this.#importSuggestedModule(url);
   }
 
   /**
@@ -887,7 +963,7 @@ export class LegacyImpl {
    * wipes) and retired by `#dismissToast` once a real tool mounts or on
    * teardown; a timer clears it if the import never resolves.
    */
-  #showToast(title: string, body: string): void {
+  #showToast(title: string, body: string, action?: () => void): void {
     this.#dismissToast(true);
 
     // Give the absolutely-positioned toast a containing block without
@@ -918,7 +994,7 @@ export class LegacyImpl {
       font: "13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       opacity: "0",
       transition: "opacity 0.25s ease",
-      pointerEvents: "none",
+      pointerEvents: action ? "auto" : "none",
     } as Partial<CSSStyleDeclaration>);
 
     const dot = document.createElement("div");
@@ -930,14 +1006,16 @@ export class LegacyImpl {
       borderRadius: "50%",
       background: "#1e5fbf",
     });
-    dot.animate(
-      [
-        { opacity: "0.3", transform: "scale(0.6)" },
-        { opacity: "1", transform: "scale(1)" },
-        { opacity: "0.3", transform: "scale(0.6)" },
-      ],
-      { duration: 1400, iterations: Infinity, easing: "ease-in-out" }
-    );
+    if (!action) {
+      dot.animate(
+        [
+          { opacity: "0.3", transform: "scale(0.6)" },
+          { opacity: "1", transform: "scale(1)" },
+          { opacity: "0.3", transform: "scale(0.6)" },
+        ],
+        { duration: 1400, iterations: Infinity, easing: "ease-in-out" }
+      );
+    }
 
     const inner = document.createElement("div");
     inner.style.minWidth = "0";
@@ -955,6 +1033,18 @@ export class LegacyImpl {
     } as Partial<CSSStyleDeclaration>);
 
     inner.append(titleEl, bodyEl);
+
+    if (action) {
+      ensureErrorStyles();
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "pw-error__load";
+      button.textContent = "⚡ Load suggested package";
+      button.style.marginTop = "8px";
+      button.addEventListener("click", action);
+      inner.append(button);
+    }
+
     toast.append(dot, inner);
     this.#element.append(toast);
     this.#toast = toast;
@@ -963,7 +1053,10 @@ export class LegacyImpl {
       toast.style.opacity = "1";
     });
 
-    this.#toastTimer = setTimeout(() => this.#dismissToast(), 8000);
+    // An offer waits for the user; only the progress toast times itself out.
+    if (!action) {
+      this.#toastTimer = setTimeout(() => this.#dismissToast(), 8000);
+    }
   }
 
   #dismissToast(immediate = false): void {
