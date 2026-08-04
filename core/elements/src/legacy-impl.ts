@@ -203,6 +203,8 @@ export class LegacyImpl {
   #tool: LoadedTool | null = null;
   #state: State = State.none;
   #requestedToolImports = new Set<string>();
+  #declinedToolImports = new Set<string>();
+  #offeredImportUrl: string | null = null;
   #initEpoch = 0;
   #capturedParent: Element | null = null;
   #fallbackId: string | undefined;
@@ -471,6 +473,8 @@ export class LegacyImpl {
     this.#handle = null;
     this.#tool = null;
     this.#requestedToolImports.clear();
+    this.#declinedToolImports.clear();
+    this.#offeredImportUrl = null;
     this.#content.textContent = "";
     this.#state = State.none;
 
@@ -591,11 +595,11 @@ export class LegacyImpl {
 
     if (fallingBack) {
       console.warn(`falling back to default tool for ${this.#docUrl}`);
-      // For a wildcard stopgap, also kick off the doc's suggested import so a
+      // For a wildcard stopgap, also offer the doc's suggested import so a
       // datatype-specific tool can load, at which point the registry listeners
       // above swap it in (it sorts ahead of the wildcard as the new fallback).
       // We still render the wildcard tool in the meantime; `#notool` dedupes so
-      // re-renders don't re-import.
+      // re-renders don't re-offer.
       if (mountingWildcardStopgap) {
         this.#notool();
       }
@@ -604,11 +608,11 @@ export class LegacyImpl {
     if (!toolId) {
       this.#state = "unable";
       // The doc's datatype has no registered tool and no explicit tool was
-      // requested. If the doc points at a module to import, kick that off and
-      // wait — the registry listeners re-render once it registers a supporting
-      // tool. Otherwise there's genuinely nothing to open.
+      // requested. If the doc points at a module to import, offer it and wait —
+      // the registry listeners re-render once an accepted import registers a
+      // supporting tool. Otherwise there's genuinely nothing to open.
       if (this.#notool()) {
-        this.#displayLoading("");
+        if (!this.#offeredImportUrl) this.#displayLoading("");
         return;
       }
       const hasPatchworkMetadata = doc && "@patchwork" in doc;
@@ -629,9 +633,9 @@ export class LegacyImpl {
     if (!this.#tool) {
       this.#state = "unable";
       // The requested tool isn't loaded. If the doc suggests a module to import
-      // it from, wait for that; otherwise there's nothing more to try.
+      // it from, offer that; otherwise there's nothing more to try.
       if (this.#notool()) {
-        this.#displayLoading(toolId);
+        if (!this.#offeredImportUrl) this.#displayLoading(toolId);
       } else {
         this.#displayError(`I couldn't find the tool with id ${toolId}.`);
       }
@@ -826,11 +830,15 @@ export class LegacyImpl {
   }
 
   /**
-   * When no tool is available for the current doc, import the module the doc
-   * suggests (its `suggestedImportUrl`) and register its plugins, so the tool
-   * registry gains a supporting tool and this view's registry listeners
-   * re-render. Returns whether an import was kicked off, so the caller can show
-   * a loading state instead of an error while the module loads.
+   * When no tool is available for the current doc, offer to import the module
+   * the doc suggests (its `suggestedImportUrl`). We never import it on our own:
+   * the module is arbitrary JavaScript named by the document, so it takes an
+   * explicit click plus a confirm before anything is fetched. Once accepted and
+   * registered, the tool registry gains a supporting tool and this view's
+   * registry listeners re-render.
+   *
+   * Returns whether an offer is outstanding (or an accepted import is in
+   * flight), so the caller can hold off on the error display.
    *
    * The import runs in this element's own realm rather than being delegated to
    * a single top-level handler, so a `<patchwork-view>` nested in an embedded
@@ -839,27 +847,55 @@ export class LegacyImpl {
    */
   #notool(): boolean {
     if (!this.#docUrl || !this.#handle) return false;
-    const suggestedImportUrl = getSuggestedImportUrl(this.#handle.doc());
-    if (
-      !suggestedImportUrl ||
-      this.#requestedToolImports.has(suggestedImportUrl)
-    ) {
-      return false;
-    }
-    this.#requestedToolImports.add(suggestedImportUrl);
-    this.#showToast("No editor found", `Loading ${suggestedImportUrl}`);
-    void this.#importSuggestedModule(suggestedImportUrl);
+    const url = getSuggestedImportUrl(this.#handle.doc());
+    if (!url || this.#declinedToolImports.has(url)) return false;
+    if (this.#requestedToolImports.has(url)) return true;
+    if (this.#offeredImportUrl === url && this.#toast) return true;
+
+    this.#showToast(
+      "No tool found",
+      `This document suggests a tool at ${url}.`,
+      {
+        label: "Load it",
+        onClick: () => {
+          const ok = window.confirm(
+            `This will execute JavaScript stored at ${url}.\n\nOnly do this if you trust the source of this tool.`
+          );
+          if (!ok) {
+            this.#declinedToolImports.add(url);
+            this.#dismissToast();
+            // Nothing is mounted, so the view is blank behind the toast we just
+            // took away — re-render to land on the "no tool" error. A wildcard
+            // stopgap is already showing something; leave it alone.
+            if (this.#state === State.unable) this.#queueRender();
+            return;
+          }
+          this.#requestedToolImports.add(url);
+          this.#offeredImportUrl = null;
+          this.#showToast("Loading tool", url);
+          void this.#importSuggestedModule(url);
+        },
+      }
+    );
+    this.#offeredImportUrl = url;
     return true;
   }
 
   /**
-   * A small o-message-style toast, floated over the view, announcing that we're
-   * fetching the doc's suggested import because no built-in editor matched. It's
-   * appended to the host element (never `#content`, which a tool's re-render
-   * wipes) and retired by `#dismissToast` once a real tool mounts or on
-   * teardown; a timer clears it if the import never resolves.
+   * A small o-message-style toast, floated over the view, saying something about
+   * the doc's suggested import because no built-in editor matched. It's appended
+   * to the host element (never `#content`, which a tool's re-render wipes) and
+   * retired by `#dismissToast` once a real tool mounts or on teardown; a timer
+   * clears it if the import never resolves.
+   *
+   * With an `action` it becomes interactive — a button, no auto-dismiss —
+   * because it's asking a question rather than reporting progress.
    */
-  #showToast(title: string, body: string): void {
+  #showToast(
+    title: string,
+    body: string,
+    action?: { label: string; onClick: () => void }
+  ): void {
     this.#dismissToast(true);
 
     // Give the absolutely-positioned toast a containing block without
@@ -890,7 +926,7 @@ export class LegacyImpl {
       font: "13px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       opacity: "0",
       transition: "opacity 0.25s ease",
-      pointerEvents: "none",
+      pointerEvents: action ? "auto" : "none",
     } as Partial<CSSStyleDeclaration>);
 
     const dot = document.createElement("div");
@@ -902,14 +938,16 @@ export class LegacyImpl {
       borderRadius: "50%",
       background: "#1e5fbf",
     });
-    dot.animate(
-      [
-        { opacity: "0.3", transform: "scale(0.6)" },
-        { opacity: "1", transform: "scale(1)" },
-        { opacity: "0.3", transform: "scale(0.6)" },
-      ],
-      { duration: 1400, iterations: Infinity, easing: "ease-in-out" }
-    );
+    if (!action) {
+      dot.animate(
+        [
+          { opacity: "0.3", transform: "scale(0.6)" },
+          { opacity: "1", transform: "scale(1)" },
+          { opacity: "0.3", transform: "scale(0.6)" },
+        ],
+        { duration: 1400, iterations: Infinity, easing: "ease-in-out" }
+      );
+    }
 
     const inner = document.createElement("div");
     inner.style.minWidth = "0";
@@ -927,6 +965,26 @@ export class LegacyImpl {
     } as Partial<CSSStyleDeclaration>);
 
     inner.append(titleEl, bodyEl);
+
+    if (action) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = action.label;
+      Object.assign(button.style, {
+        marginTop: "8px",
+        padding: "5px 10px",
+        borderRadius: "4px",
+        border: "1px solid #1e5fbf",
+        background: "#1e5fbf",
+        color: "#fff",
+        font: "inherit",
+        fontWeight: "600",
+        cursor: "pointer",
+      } as Partial<CSSStyleDeclaration>);
+      button.addEventListener("click", action.onClick);
+      inner.append(button);
+    }
+
     toast.append(dot, inner);
     this.#element.append(toast);
     this.#toast = toast;
@@ -935,7 +993,7 @@ export class LegacyImpl {
       toast.style.opacity = "1";
     });
 
-    this.#toastTimer = setTimeout(() => this.#dismissToast(), 8000);
+    if (!action) this.#toastTimer = setTimeout(() => this.#dismissToast(), 8000);
   }
 
   #dismissToast(immediate = false): void {
@@ -946,6 +1004,7 @@ export class LegacyImpl {
     const toast = this.#toast;
     if (!toast) return;
     this.#toast = null;
+    this.#offeredImportUrl = null;
     if (immediate) {
       toast.remove();
       this.#restoreToastPosition();
