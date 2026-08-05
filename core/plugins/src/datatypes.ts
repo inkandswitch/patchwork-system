@@ -68,8 +68,8 @@ export const createDocOfDatatype2 = async <D>(
     const { url: importUrl, frozen } = splitImportUrl(datatype.importUrl);
     (doc as any)["@patchwork"] = {
       type: datatype.id,
-      suggestedImportUrl: importUrl,
-      frozenImportUrl: frozen,
+      ...(importUrl ? { suggestedImportUrl: importUrl } : {}),
+      ...(frozen ? { frozenImportUrl: frozen } : {}),
     };
     if (change) {
       change(doc);
