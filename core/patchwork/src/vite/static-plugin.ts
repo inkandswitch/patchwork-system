@@ -177,7 +177,7 @@ async function files(source: string, directory = source): Promise<string[]> {
  * order, and a site keeps its own `modules.json` by listing it before the
  * package it borrows the rest of the packages from.
  */
-export function staticPlugin(
+export function statics(
   options: PatchworkVitePluginOptions = {}
 ): Plugin | null {
   if (!options.static?.length) return null;

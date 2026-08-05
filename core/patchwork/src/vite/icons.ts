@@ -4,7 +4,7 @@ import type { PatchworkVitePluginOptions } from "./patchwork-plugin.js";
 import { getIcons } from "../site-kit/icons.js";
 
 /** Emits the rendered icon PNGs for build, and serves the same buffers for dev. */
-export function iconsPlugin(
+export function icons(
   options: PatchworkVitePluginOptions = {}
 ): Plugin | null {
   if (!options.icons) return null;

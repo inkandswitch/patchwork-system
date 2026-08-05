@@ -2,14 +2,14 @@ import type { Plugin, ServerOptions, PreviewOptions, BuildOptions } from "vite";
 
 import { importmap } from "./importmap-plugin.js";
 import { serviceworker } from "./service-worker-plugin.js";
-import { configPlugin, wasm } from "./config-plugin.js";
-import { devPlugin } from "./dev-plugin.js";
-import { iconsPlugin } from "./icons.js";
-import { htmlPlugin } from "./html-plugin.js";
-import { manifestPlugin } from "./manifest-plugin.js";
-import { netlifyPlugin } from "./netlify-plugin.js";
-import { staticPlugin, type PatchworkStaticSource } from "./static-plugin.js";
-import { buildInfoPlugin } from "./build-info-plugin.js";
+import { config, wasm } from "./config-plugin.js";
+import { dev } from "./dev-plugin.js";
+import { icons } from "./icons.js";
+import { html } from "./html-plugin.js";
+import { manifest } from "./manifest-plugin.js";
+import { netlify } from "./netlify-plugin.js";
+import { statics, type PatchworkStaticSource } from "./static-plugin.js";
+import { buildInfo } from "./build-info-plugin.js";
 import type { PatchworkSiteOptions } from "../site-kit/options.js";
 
 /**
@@ -36,18 +36,29 @@ import type { PatchworkSiteOptions } from "../site-kit/options.js";
 export default function patchwork(options?: PatchworkVitePluginOptions) {
   return [
     wasm(),
-    configPlugin(options),
-    iconsPlugin(options),
-    htmlPlugin(options),
-    manifestPlugin(options),
-    netlifyPlugin(options),
+    config(options),
+    icons(options),
+    html(options),
+    manifest(options),
+    netlify(options),
     importmap(options),
     serviceworker(),
-    devPlugin(options),
-    staticPlugin(options),
-    buildInfoPlugin(options),
+    dev(options),
+    statics(options),
+    buildInfo(options),
   ].filter((plugin): plugin is Plugin => plugin != null);
 }
+
+export { importmap, builtins, devDependencyId } from "./importmap-plugin.js";
+export { serviceworker, workers } from "./service-worker-plugin.js";
+export { config, buildDefines, wasm } from "./config-plugin.js";
+export { dev } from "./dev-plugin.js";
+export { icons } from "./icons.js";
+export { html } from "./html-plugin.js";
+export { manifest } from "./manifest-plugin.js";
+export { netlify } from "./netlify-plugin.js";
+export { statics, resolveStatic } from "./static-plugin.js";
+export { buildInfo } from "./build-info-plugin.js";
 
 type Imports = { [name: string]: string };
 export type ImportMap = {

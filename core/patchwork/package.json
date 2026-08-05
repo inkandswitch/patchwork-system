@@ -19,6 +19,46 @@
       "import": "./dist/vite/patchwork-plugin.js",
       "types": "./dist/vite/patchwork-plugin.d.ts"
     },
+    "./vite/build-info": {
+      "import": "./dist/vite/build-info-plugin.js",
+      "types": "./dist/vite/build-info-plugin.d.ts"
+    },
+    "./vite/config": {
+      "import": "./dist/vite/config-plugin.js",
+      "types": "./dist/vite/config-plugin.d.ts"
+    },
+    "./vite/dev": {
+      "import": "./dist/vite/dev-plugin.js",
+      "types": "./dist/vite/dev-plugin.d.ts"
+    },
+    "./vite/html": {
+      "import": "./dist/vite/html-plugin.js",
+      "types": "./dist/vite/html-plugin.d.ts"
+    },
+    "./vite/icons": {
+      "import": "./dist/vite/icons.js",
+      "types": "./dist/vite/icons.d.ts"
+    },
+    "./vite/importmap": {
+      "import": "./dist/vite/importmap-plugin.js",
+      "types": "./dist/vite/importmap-plugin.d.ts"
+    },
+    "./vite/manifest": {
+      "import": "./dist/vite/manifest-plugin.js",
+      "types": "./dist/vite/manifest-plugin.d.ts"
+    },
+    "./vite/netlify": {
+      "import": "./dist/vite/netlify-plugin.js",
+      "types": "./dist/vite/netlify-plugin.d.ts"
+    },
+    "./vite/service-worker": {
+      "import": "./dist/vite/service-worker-plugin.js",
+      "types": "./dist/vite/service-worker-plugin.d.ts"
+    },
+    "./vite/static": {
+      "import": "./dist/vite/static-plugin.js",
+      "types": "./dist/vite/static-plugin.d.ts"
+    },
     "./head": {
       "import": "./dist/head.js"
     },

@@ -43,7 +43,7 @@ function describe(directory: string) {
  * revision, the version of patchwork that built it, and every `static` source,
  * plus whatever extra fields the site passes as the option value.
  */
-export function buildInfoPlugin(
+export function buildInfo(
   options: PatchworkVitePluginOptions = {}
 ): Plugin | null {
   if (!options.buildInfo) return null;

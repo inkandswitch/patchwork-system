@@ -18,6 +18,12 @@ export function escapeHtml(value: string): string {
 export function buildHtml(options: PatchworkSiteOptions): string {
   const title = options.title ?? DEFAULT_TITLE;
   const lang = (options.html && options.html.lang) || "en";
+  const attributes = Object.entries(
+    (options.html && options.html.attributes) || {}
+  )
+    .filter(([name]) => name !== "lang" && /^[a-z][a-z0-9-]*$/i.test(name))
+    .map(([name, value]) => ` ${name}="${escapeHtml(value)}"`)
+    .join("");
   const entry = options.entry ?? "/src/main.ts";
   const syncServers = resolveSyncServers(options);
 
@@ -90,11 +96,19 @@ export function buildHtml(options: PatchworkSiteOptions): string {
     head.push(options.html.extraHead);
   }
 
+  const body = [
+    `<repo-provider><patchwork-view id="root"></patchwork-view></repo-provider>`,
+    `<script type="module" src="${entry}"></script>`,
+  ];
+
+  if (options.html && options.html.extraBody) {
+    body.push(options.html.extraBody);
+  }
+
   return `<!doctype html>
-<html lang="${lang}">
+<html lang="${lang}"${attributes}>
 ${head.join("\n")}
-<repo-provider><patchwork-view id="root"></patchwork-view></repo-provider>
-<script type="module" src="${entry}"></script>
+${body.join("\n")}
 </html>
 `;
 }

@@ -40,7 +40,7 @@ export function buildDefines(
  * used to hand-write in its own vite.config.ts. Each is switched off
  * individually via the matching `false` option.
  */
-export function configPlugin(
+export function config(
   options: PatchworkVitePluginOptions = {}
 ): Plugin {
   return {
