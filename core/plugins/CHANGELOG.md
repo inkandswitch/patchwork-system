@@ -1,5 +1,11 @@
 # @inkandswitch/patchwork-plugins
 
+## 1.2.1
+
+### Patch Changes
+
+- a96f250: Store the datatype's import URL without heads in `@patchwork.suggestedImportUrl`, and record the heads separately in `@patchwork.suggestedImportUrlHeads`. A doc created from a package pinned to specific heads now suggests the package itself, with the pin kept alongside it.
+
 ## 1.2.0
 
 ### Minor Changes
