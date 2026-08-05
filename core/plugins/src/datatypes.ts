@@ -1,4 +1,10 @@
-import { type DocHandle, type Repo } from "@automerge/automerge-repo";
+import {
+  isValidAutomergeUrl,
+  parseAutomergeUrl,
+  stringifyAutomergeUrl,
+  type DocHandle,
+  type Repo,
+} from "@automerge/automerge-repo";
 import type {
   LoadablePlugin,
   LoadedPlugin,
@@ -33,6 +39,15 @@ export type LoadedDatatype<D = unknown> = LoadedPlugin<
   DatatypeImplementation<D>
 >;
 
+const splitImportUrl = (
+  importUrl: string | undefined
+): { url: string | undefined; frozen: string | undefined } => {
+  if (!isValidAutomergeUrl(importUrl)) return { url: importUrl, frozen: undefined };
+  const { documentId, heads } = parseAutomergeUrl(importUrl);
+  if (!heads) return { url: importUrl, frozen: undefined };
+  return { url: stringifyAutomergeUrl({ documentId }), frozen: importUrl };
+};
+
 /** Creates a new document initialized with the given datatype using create2 */
 export const createDocOfDatatype2 = async <D>(
   datatype: LoadedDatatype<D>,
@@ -50,10 +65,11 @@ export const createDocOfDatatype2 = async <D>(
     // Record the datatype's import URL so a viewer with no built-in tool can
     // load one. It may be an `http:`/`https:` module bundle or an `automerge:`
     // folder-doc URL; both are honored on read via `getSuggestedImportUrl`.
-    const importUrl = datatype.importUrl;
+    const { url: importUrl, frozen } = splitImportUrl(datatype.importUrl);
     (doc as any)["@patchwork"] = {
       type: datatype.id,
-      suggestedImportUrl: importUrl
+      suggestedImportUrl: importUrl,
+      frozenImportUrl: frozen,
     };
     if (change) {
       change(doc);
