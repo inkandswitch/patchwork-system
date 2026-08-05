@@ -1,5 +1,12 @@
 # @inkandswitch/patchwork-plugins
 
+## 1.2.2
+
+### Patch Changes
+
+- 3e67841: Omit `suggestedImportUrl` and `frozenImportUrl` from a new doc's `@patchwork` metadata when there is no value for them, instead of writing `undefined`.
+- 3e67841: Split the datatype's import URL when creating a doc: `@patchwork.suggestedImportUrl` now holds the URL with the heads stripped, and `@patchwork.frozenImportUrl` holds the full URL including heads. `getFrozenImportUrl` reads the latter. URLs without heads are unchanged and set no `frozenImportUrl`.
+
 ## 1.2.1
 
 ### Patch Changes

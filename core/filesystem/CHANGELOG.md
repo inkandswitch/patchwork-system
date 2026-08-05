@@ -1,5 +1,11 @@
 # @inkandswitch/patchwork-filesystem
 
+## 0.2.7
+
+### Patch Changes
+
+- 3e67841: Split the datatype's import URL when creating a doc: `@patchwork.suggestedImportUrl` now holds the URL with the heads stripped, and `@patchwork.frozenImportUrl` holds the full URL including heads. `getFrozenImportUrl` reads the latter. URLs without heads are unchanged and set no `frozenImportUrl`.
+
 ## 0.2.6
 
 ### Patch Changes
