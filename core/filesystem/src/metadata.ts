@@ -7,6 +7,7 @@ export type HasPatchworkMetadata<Type extends string = string> = {
   "@patchwork": {
     type: Type;
     suggestedImportUrl?: string;
+    frozenImportUrl?: string;
     copies?: AutomergeUrl[];
     copyOf?: AutomergeUrl;
     history?: AutomergeUrl;
@@ -42,6 +43,11 @@ export function isImportableSuggestedUrl(
 
 export function getSuggestedImportUrl(doc: Partial<HasPatchworkMetadata>) {
   const url = doc["@patchwork"]?.suggestedImportUrl;
+  return isImportableSuggestedUrl(url) ? url : undefined;
+}
+
+export function getFrozenImportUrl(doc: Partial<HasPatchworkMetadata>) {
+  const url = doc["@patchwork"]?.frozenImportUrl;
   return isImportableSuggestedUrl(url) ? url : undefined;
 }
 
