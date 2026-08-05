@@ -257,6 +257,7 @@ export class LegacyImpl {
   #toast: HTMLElement | null = null;
   #toastTimer: ReturnType<typeof setTimeout> | null = null;
   #toastPositioned = false;
+  #toastEscape: ((event: KeyboardEvent) => void) | null = null;
   #errorReposition: (() => void) | null = null;
 
   constructor(element: HTMLElement, params: LegacyImplParams) {
@@ -1046,6 +1047,35 @@ export class LegacyImpl {
     }
 
     toast.append(dot, inner);
+
+    // Only the offer is dismissable — the progress toast retires itself, and a
+    // × on it would suggest it cancels the import, which it doesn't.
+    if (action) {
+      const close = document.createElement("button");
+      close.type = "button";
+      close.textContent = "×";
+      close.setAttribute("aria-label", "dismiss");
+      Object.assign(close.style, {
+        flex: "0 0 auto",
+        marginLeft: "auto",
+        alignSelf: "flex-start",
+        padding: "0 2px",
+        border: "none",
+        background: "none",
+        color: "inherit",
+        opacity: "0.5",
+        font: "16px/1 inherit",
+        cursor: "pointer",
+      } as Partial<CSSStyleDeclaration>);
+      close.addEventListener("click", () => this.#dismissToast());
+      toast.append(close);
+
+      const escape = (event: KeyboardEvent) => {
+        if (event.key === "Escape") this.#dismissToast();
+      };
+      window.addEventListener("keydown", escape);
+      this.#toastEscape = escape;
+    }
     this.#element.append(toast);
     this.#toast = toast;
 
@@ -1063,6 +1093,10 @@ export class LegacyImpl {
     if (this.#toastTimer) {
       clearTimeout(this.#toastTimer);
       this.#toastTimer = null;
+    }
+    if (this.#toastEscape) {
+      window.removeEventListener("keydown", this.#toastEscape);
+      this.#toastEscape = null;
     }
     const toast = this.#toast;
     if (!toast) return;
