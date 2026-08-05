@@ -3,7 +3,7 @@ import type { PatchworkVitePluginOptions } from "./patchwork-plugin.js";
 import { buildManifest } from "../site-kit/manifest.js";
 
 /** Emits manifest.webmanifest for build and serves it for dev, from the same generated object. */
-export function manifestPlugin(
+export function manifest(
   options: PatchworkVitePluginOptions = {}
 ): Plugin | null {
   if (options.manifest === false) return null;

@@ -8,7 +8,7 @@ import { buildHeaders, REDIRECTS } from "../site-kit/netlify.js";
  * The Link header shares its sync-server/wasm-asset lists with html-plugin
  * so the two never drift out of sync with each other.
  */
-export function netlifyPlugin(
+export function netlify(
   options: PatchworkVitePluginOptions = {}
 ): Plugin | null {
   if (options.netlify === false) return null;

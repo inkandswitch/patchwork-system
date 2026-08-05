@@ -13,7 +13,7 @@ const GENERATED_PATH = "index.html";
  * virtual module: `resolveId` claims the one id we care about, `load`
  * returns the generated string — nothing ever touches disk.
  */
-export function htmlPlugin(
+export function html(
   options: PatchworkVitePluginOptions = {}
 ): Plugin | null {
   if (options.html === false) return null;

@@ -19,8 +19,16 @@ export interface PatchworkIconsOptions {
 
 export interface PatchworkHtmlOptions {
   lang?: string;
-  /** Raw HTML appended just before </html> — e.g. extra <link>/<meta> tags. */
+  /** Raw HTML appended after the generated head — e.g. extra <link>/<meta> tags. */
   extraHead?: string;
+  /** Raw HTML appended after the app root and entry script. */
+  extraBody?: string;
+  /**
+   * Attributes set on the root `<html>` element. How a site states its own
+   * configuration to the packages it loads: a package reads the attribute
+   * instead of guessing from load order. `lang` stays its own option.
+   */
+  attributes?: Record<string, string>;
 }
 
 export interface PatchworkNetlifyOptions {

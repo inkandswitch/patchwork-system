@@ -71,7 +71,7 @@ function workerContexts(
   return contexts;
 }
 
-export function devPlugin(options: PatchworkVitePluginOptions = {}): Plugin {
+export function dev(options: PatchworkVitePluginOptions = {}): Plugin {
   let serve = false;
   let contexts: Map<string, Promise<esbuild.BuildContext>> | undefined;
   const wasm = new Map(
