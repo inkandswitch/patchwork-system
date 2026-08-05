@@ -1,5 +1,16 @@
 # @inkandswitch/patchwork
 
+## 0.7.3
+
+### Patch Changes
+
+- 8742cd2: Expose the individual vite plugins that `patchwork()` composes. Each one now has its own subpath — `@inkandswitch/patchwork/vite/importmap`, `/vite/service-worker`, `/vite/config`, `/vite/dev`, `/vite/icons`, `/vite/html`, `/vite/manifest`, `/vite/netlify`, `/vite/static`, `/vite/build-info` — and they are also re-exported from `@inkandswitch/patchwork/vite` as `importmap`, `serviceworker`, `config`, `dev`, `icons`, `html`, `manifest`, `netlify`, `statics` and `buildInfo`, so a site that wants its own composition can pick the pieces it needs instead of the whole default plugin array.
+- Updated dependencies [94f6299]
+- Updated dependencies [a96f250]
+  - @inkandswitch/patchwork-elements@6.0.1
+  - @inkandswitch/patchwork-plugins@1.2.1
+  - @inkandswitch/patchwork-filesystem@0.2.6
+
 ## 0.7.2
 
 ### Patch Changes
