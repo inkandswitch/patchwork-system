@@ -67,7 +67,7 @@ const syncServer =
     : { url: "wss://subduction.sync.inkandswitch.com" };
 const ES_MODULE_SHIMS_URL =
   "https://ga.jspm.io/npm:es-module-shims@2.8.1/dist/es-module-shims.wasm.js";
-let importMapReady: Promise<void> | undefined;
+let importShimReady: Promise<void> | undefined;
 let wasmReady: Promise<void> | undefined;
 
 // Keep only the structured-cloneable description fields. `load` is a closure
@@ -142,16 +142,15 @@ function resolveImportMap(
 }
 
 async function ensureImportMap(importMap?: ImportMap, baseURI?: string) {
-  if (importMapReady) return importMapReady;
-  importMapReady = (async () => {
-    await import(ES_MODULE_SHIMS_URL);
-    if (importMap && baseURI) {
-      (self as any).importShim.addImportMap(
-        resolveImportMap(importMap, baseURI)
-      );
-    }
-  })();
-  return importMapReady;
+  if (!importShimReady) {
+    importShimReady = (async () => {
+      await import(ES_MODULE_SHIMS_URL);
+    })();
+  }
+  await importShimReady;
+  if (importMap && baseURI) {
+    (self as any).importShim.addImportMap(resolveImportMap(importMap, baseURI));
+  }
 }
 
 async function ensureWasm() {
@@ -260,7 +259,7 @@ async function initDatatype(
   (self as unknown as Worker).postMessage({
     type: "datatype",
     id,
-    document: initialized,
+    bytes: Automerge.save(initialized),
   });
 }
 

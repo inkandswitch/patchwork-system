@@ -303,17 +303,17 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
         );
       }
 
-      const handle = await repo.create2<D & { "@patchwork"?: any }>();
-      if (hive) {
-        await hive.addSyncServerRelayToDoc(handle.url);
-      }
-      const initialized = await initializeDatatypeViaWorker<D>(
+      const initialized = await initializeDatatypeViaWorker<Uint8Array>(
         datatype.importUrl,
         datatype.id,
         sw.getRepoChannel()
       );
+      const seeded = Automerge.load<D & { "@patchwork"?: any }>(initialized);
+      const handle = await repo.create2<D & { "@patchwork"?: any }>(seeded);
+      if (hive) {
+        await hive.addSyncServerRelayToDoc(handle.url);
+      }
       handle.change((doc: D & { "@patchwork"?: any }) => {
-        Object.assign(doc as object, initialized);
         const { url: importUrl, frozen } = splitImportUrl(datatype.importUrl);
         doc["@patchwork"] = {
           type: datatype.id,

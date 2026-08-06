@@ -18,7 +18,7 @@ type ImportMap = {
 
 type WorkerReply =
   | { type: "descriptors"; id: number; descriptors: Descriptor[] }
-  | { type: "datatype"; id: number; document: unknown }
+  | { type: "datatype"; id: number; bytes: Uint8Array }
   | { type: "error"; id: number; error: string };
 
 const WORKER_PATH = "/module-loader-worker.js";
@@ -98,7 +98,7 @@ function getWorker(): Worker {
     if (!entry) return;
     pending.delete(data.id);
     if (data.type === "descriptors") entry.resolve(data.descriptors);
-    else if (data.type === "datatype") entry.resolve(data.document);
+    else if (data.type === "datatype") entry.resolve(data.bytes);
     else entry.reject(new Error(data.error));
   });
   worker.addEventListener("error", (event) => {
@@ -163,7 +163,7 @@ export function initializeDatatypeViaWorker<D>(
       }
       const entry = pending.get(id);
       if (!entry) return;
-      if (data.type === "datatype") entry.resolve(data.document);
+      if (data.type === "datatype") entry.resolve(data.bytes);
       else entry.reject(new Error(data.error));
     });
     worker.addEventListener("error", (event) => {
