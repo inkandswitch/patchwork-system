@@ -12,7 +12,7 @@ import type {
  * path stays honest.
  *
  * Tracks the methods that hook libraries reach for:
- * - `find` (used by `automerge-repo-solid-primitives`)
+ * - `find` (used by `solid-automerge`)
  * - `findWithProgress` (used by `automerge-repo-react-hooks`'
  *   `useDocHandle` for the synchronous fast-path peek)
  * - `create` / `create2` (the latter awaits the deterministic id factory,
