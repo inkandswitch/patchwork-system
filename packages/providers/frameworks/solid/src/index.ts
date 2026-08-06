@@ -107,7 +107,7 @@ export function subscribeReconciled<T extends JSONArray | JSONObject>(
  * `AutomergeUrl`. The handle is recovered locally from the global repo
  * (`window.repo`), so it stays fully live — reads project reactively and writes go
  * straight back to the same repo. Returns `[doc, handle]` matching the shape
- * of solid-primitives' `useDocument`; both read `undefined` until the first
+ * of `solid-automerge`'s `useDocument`; both read `undefined` until the first
  * url arrives. `T` is the doc shape inside the handle.
  */
 export function subscribeDoc<T extends object>(
@@ -140,7 +140,7 @@ export function subscribeDoc<T extends object>(
 
   // Mirror the doc into a store by `reconcile`-ing against the *materialized*
   // snapshot (`handle.doc()`) on every change, rather than replaying the
-  // change's incremental patches (as solid-primitives' `createDocumentProjection`
+  // change's incremental patches (as `solid-automerge`'s `createDocumentProjection`
   // / `autoproduce` does).
   //
   // A whole-value write such as `doc.list = [...]` is lowered by Automerge to

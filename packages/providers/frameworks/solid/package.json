@@ -25,12 +25,12 @@
   },
   "peerDependencies": {
     "@automerge/automerge-repo": "*",
-    "@automerge/automerge-repo-solid-primitives": "*",
+    "solid-automerge": "*",
     "solid-js": "^1.9.0"
   },
   "devDependencies": {
     "@automerge/automerge-repo": "catalog:",
-    "@automerge/automerge-repo-solid-primitives": "catalog:",
+    "solid-automerge": "catalog:",
     "solid-js": "^1.9.13",
     "typescript": "^5.9.3"
   },
