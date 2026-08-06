@@ -101,7 +101,10 @@ function isInitDatatypeRequest(data: unknown): data is InitDatatypeRequest {
   );
 }
 
-function resolveImportMap(importMap: ImportMap = {}, baseURI: string): ImportMap {
+function resolveImportMap(
+  importMap: ImportMap = {},
+  baseURI: string
+): ImportMap {
   const resolved: ImportMap = {};
 
   if (importMap.imports) {
@@ -143,7 +146,9 @@ async function ensureImportMap(importMap?: ImportMap, baseURI?: string) {
   importMapReady = (async () => {
     await import(ES_MODULE_SHIMS_URL);
     if (importMap && baseURI) {
-      (self as any).importShim.addImportMap(resolveImportMap(importMap, baseURI));
+      (self as any).importShim.addImportMap(
+        resolveImportMap(importMap, baseURI)
+      );
     }
   })();
   return importMapReady;
@@ -234,19 +239,24 @@ async function initDatatype(
       `No plugin "patchwork:datatype:${datatypeId}" exported by ${importUrl}`
     );
   }
-  const datatype = (typeof plugin.load === "function"
-    ? await plugin.load()
-    : typeof plugin.import === "string"
-      ? await importPackage(plugin.import)
-      : undefined) as { init(doc: any, repo: Repo): void } | undefined;
+  const datatype = (
+    typeof plugin.load === "function"
+      ? await plugin.load()
+      : typeof plugin.import === "string"
+        ? await importPackage(plugin.import)
+        : undefined
+  ) as { init(doc: any, repo: Repo): void } | undefined;
   if (!datatype) {
     throw new Error(
       `Plugin "patchwork:datatype:${datatypeId}" at ${importUrl} has no load() function or import URL`
     );
   }
-  const initialized = Automerge.change(Automerge.from({} as any), (doc: any) => {
-    datatype.init(doc, repo);
-  });
+  const initialized = Automerge.change(
+    Automerge.from({} as any),
+    (doc: any) => {
+      datatype.init(doc, repo);
+    }
+  );
   (self as unknown as Worker).postMessage({
     type: "datatype",
     id,

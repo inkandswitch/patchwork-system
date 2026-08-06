@@ -91,7 +91,8 @@ let setupCalled = false;
 const splitImportUrl = (
   importUrl: string | undefined
 ): { url: string | undefined; frozen: string | undefined } => {
-  if (!isValidAutomergeUrl(importUrl)) return { url: importUrl, frozen: undefined };
+  if (!isValidAutomergeUrl(importUrl))
+    return { url: importUrl, frozen: undefined };
   const { documentId, heads } = parseAutomergeUrl(importUrl);
   if (!heads) return { url: importUrl, frozen: undefined };
   return { url: stringifyAutomergeUrl({ documentId }), frozen: importUrl };
@@ -114,9 +115,7 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
     timer = setTimeout(
       () =>
         reject(
-          new Error(
-            `patchwork.setup: boot did not finish within ${timeout}ms`
-          )
+          new Error(`patchwork.setup: boot did not finish within ${timeout}ms`)
         ),
       timeout
     );
@@ -281,9 +280,8 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     },
 
     async create<D>(type: string, init?: (doc: D) => void) {
-      const datatypeRegistry = getRegistry<DatatypeDescription>(
-        "patchwork:datatype"
-      );
+      const datatypeRegistry =
+        getRegistry<DatatypeDescription>("patchwork:datatype");
       const datatype = datatypeRegistry.get(type);
       if (!datatype) {
         throw new Error(

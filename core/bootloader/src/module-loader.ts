@@ -28,7 +28,7 @@ let nextRequestId = 1;
 const pending = new Map<
   number,
   {
-    resolve: (value: unknown) => void;
+    resolve: (value: any) => void;
     reject: (e: Error) => void;
   }
 >();
