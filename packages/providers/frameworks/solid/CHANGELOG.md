@@ -1,5 +1,13 @@
 # @inkandswitch/patchwork-providers-solid
 
+## 0.2.7
+
+### Patch Changes
+
+- 6f4f62f: Depend on `solid-automerge` instead of `@automerge/automerge-repo-solid-primitives`. The Solid bindings are published under the new name; the peer dependency of `@inkandswitch/patchwork-providers-solid` moves to `solid-automerge` (`^2.0.1`). Install `solid-automerge` in place of `@automerge/automerge-repo-solid-primitives` — the exported API (`useDocument`, `createDocumentProjection`, `autoproduce`, …) is unchanged.
+- Updated dependencies [6f4f62f]
+  - @inkandswitch/patchwork-providers@0.5.1
+
 ## 0.2.6
 
 ### Patch Changes
