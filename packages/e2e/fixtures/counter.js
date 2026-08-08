@@ -1,3 +1,5 @@
+import { isValidAutomergeUrl } from "@automerge/automerge-repo";
+
 export const plugins = [
   {
     type: "patchwork:datatype",
@@ -6,6 +8,12 @@ export const plugins = [
     async load() {
       return {
         init(doc) {
+          if (typeof window !== "undefined") {
+            throw new Error("counter datatype init should run in a worker");
+          }
+          if (typeof isValidAutomergeUrl !== "function") {
+            throw new Error("counter datatype worker import map is missing");
+          }
           doc.count = 0;
         },
         getTitle: () => "Counter",

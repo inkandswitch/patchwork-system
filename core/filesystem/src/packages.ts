@@ -17,14 +17,18 @@ export const defaultImportConditions = ["patchwork", "browser", "import"];
 // gets a fresh entry; the heads-pinned URLs make it safe, since the content at
 // a given set of heads can't change.
 async function importModule(entryPointUrl: string) {
+  const importer: (url: string) => Promise<any> =
+    typeof (globalThis as any).importShim === "function"
+      ? (globalThis as any).importShim.bind(globalThis)
+      : (url) => import(/* @vite-ignore */ url);
   try {
-    return await import(/* @vite-ignore */ entryPointUrl);
+    return await importer(entryPointUrl);
   } catch (cause) {
     const retry = new URL(entryPointUrl);
     retry.searchParams.set("retry", "1");
     log(`retrying ${entryPointUrl.slice(-60)}`);
     try {
-      return await import(/* @vite-ignore */ retry.href);
+      return await importer(retry.href);
     } catch {
       throw cause;
     }

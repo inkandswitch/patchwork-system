@@ -25,10 +25,18 @@ import {
 } from "@automerge/vanillajs/slim";
 import * as Automerge from "@automerge/automerge/slim";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
+import {
+  isValidAutomergeUrl,
+  parseAutomergeUrl,
+  stringifyAutomergeUrl,
+} from "@automerge/automerge-repo";
 import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 import { ModuleWatcher } from "@inkandswitch/patchwork-filesystem";
-import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
+import {
+  importAutomergePackageViaWorker,
+  initializeDatatypeViaWorker,
+} from "@inkandswitch/patchwork-bootloader/module-loader";
 import { registerPatchworkViewElement } from "@inkandswitch/patchwork-elements";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import {
@@ -80,6 +88,16 @@ declare global {
 
 let setupCalled = false;
 
+const splitImportUrl = (
+  importUrl: string | undefined
+): { url: string | undefined; frozen: string | undefined } => {
+  if (!isValidAutomergeUrl(importUrl))
+    return { url: importUrl, frozen: undefined };
+  const { documentId, heads } = parseAutomergeUrl(importUrl);
+  if (!heads) return { url: importUrl, frozen: undefined };
+  return { url: stringifyAutomergeUrl({ documentId }), frozen: importUrl };
+};
+
 export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
   if (setupCalled) {
     throw new Error(
@@ -97,9 +115,7 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
     timer = setTimeout(
       () =>
         reject(
-          new Error(
-            `patchwork.setup: boot did not finish within ${timeout}ms`
-          )
+          new Error(`patchwork.setup: boot did not finish within ${timeout}ms`)
         ),
       timeout
     );
@@ -264,20 +280,49 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     },
 
     async create<D>(type: string, init?: (doc: D) => void) {
-      const datatype = await getRegistry<DatatypeDescription>(
-        "patchwork:datatype"
-      ).load(type);
+      const datatypeRegistry =
+        getRegistry<DatatypeDescription>("patchwork:datatype");
+      const datatype = datatypeRegistry.get(type);
       if (!datatype) {
         throw new Error(
           `patchwork.create: no datatype registered for "${type}"`
         );
       }
-      return createDocOfDatatype2(
-        datatype as unknown as LoadedDatatype<D>,
-        repo,
-        init,
-        hive
+      if (options.repo || !datatype.importUrl) {
+        const loaded = await datatypeRegistry.load(type);
+        if (!loaded) {
+          throw new Error(
+            `patchwork.create: failed to load datatype "${type}"`
+          );
+        }
+        return createDocOfDatatype2(
+          loaded as unknown as LoadedDatatype<D>,
+          repo,
+          init,
+          hive
+        );
+      }
+
+      const initialized = await initializeDatatypeViaWorker<Uint8Array>(
+        datatype.importUrl,
+        datatype.id,
+        sw.getRepoChannel()
       );
+      const seeded = Automerge.load<D & { "@patchwork"?: any }>(initialized);
+      const handle = await repo.create2<D & { "@patchwork"?: any }>(seeded);
+      if (hive) {
+        await hive.addSyncServerRelayToDoc(handle.url);
+      }
+      handle.change((doc: D & { "@patchwork"?: any }) => {
+        const { url: importUrl, frozen } = splitImportUrl(datatype.importUrl);
+        doc["@patchwork"] = {
+          type: datatype.id,
+          ...(importUrl ? { suggestedImportUrl: importUrl } : {}),
+          ...(frozen ? { frozenImportUrl: frozen } : {}),
+        };
+        init?.(doc as D);
+      });
+      return handle as DocHandle<any>;
     },
     open(url: AutomergeUrl, openOptions: OpenOptions = {}) {
       rootElement.dispatchEvent(
