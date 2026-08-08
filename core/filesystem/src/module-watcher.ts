@@ -7,6 +7,7 @@ import {
 import {
   importPackageFromFolderDocUrl,
   importPackageFromHttpUrl,
+  injectImportMapForPackage,
 } from "./packages.js";
 import { getType, type HasPatchworkMetadata } from "./metadata.js";
 import { BranchesDoc, FolderDoc } from "./types.js";
@@ -261,6 +262,11 @@ export class ModuleWatcher {
         // resolve against the exact same version of the folder doc.
         const handle = await this.repo.find(importName as AutomergeUrl);
         const urlAtHeads = handle.view(handle.heads()).url;
+        try {
+          await injectImportMapForPackage(urlAtHeads);
+        } catch (error) {
+          console.warn(`couldn't inject importmap for ${urlAtHeads}`, error);
+        }
         return await this.importAutomergePackage(urlAtHeads);
       }
       return await importPackageFromHttpUrl(importName);
