@@ -35,17 +35,17 @@ catalogs:
       version: 5.9.3
 
 overrides:
-  '@automerge/automerge': link:/Users/chee/soft/automerge/automerge-classic
+  '@automerge/automerge': 3.3.2
   '@automerge/automerge-repo': 2.6.0-subduction.47
   '@automerge/automerge-repo-keyhive': 0.3.0-alpha.sub.8b
   '@automerge/automerge-repo-network-messagechannel': 2.6.0-subduction.47
   '@automerge/automerge-repo-network-websocket': 2.6.0-subduction.47
   '@automerge/automerge-repo-react-hooks': 2.6.0-subduction.47
   '@automerge/automerge-repo-storage-indexeddb': 2.6.0-subduction.47
-  '@automerge/automerge-subduction': link:/Users/chee/soft/inkandswitch/subduction/automerge_subduction_js
+  '@automerge/automerge-subduction': 0.16.1
   '@automerge/react': 2.6.0-subduction.47
   '@automerge/vanillajs': 2.6.0-subduction.47
-  '@keyhive/keyhive': link:/Users/chee/soft/inkandswitch/patchwork/patchwork.inkandswitch.com/vendor/keyhive-noop
+  '@keyhive/keyhive': 0.1.0-alpha.5
   solid-automerge: ^2.0.1
 
 importers:
@@ -74,8 +74,8 @@ importers:
   core/bootloader:
     dependencies:
       '@automerge/automerge':
-        specifier: link:/Users/chee/soft/automerge/automerge-classic
-        version: link:../../../../../automerge/automerge-classic
+        specifier: 3.3.2
+        version: 3.3.2
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
@@ -92,8 +92,8 @@ importers:
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
       '@automerge/automerge-subduction':
-        specifier: link:/Users/chee/soft/inkandswitch/subduction/automerge_subduction_js
-        version: link:../../../../subduction/automerge_subduction_js
+        specifier: 0.16.1
+        version: 0.16.1
       '@automerge/vanillajs':
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
@@ -122,8 +122,8 @@ importers:
         specifier: workspace:^
         version: link:../../packages/providers/core
       '@keyhive/keyhive':
-        specifier: link:/Users/chee/soft/inkandswitch/patchwork/patchwork.inkandswitch.com/vendor/keyhive-noop
-        version: link:../../../patchwork.inkandswitch.com/vendor/keyhive-noop
+        specifier: 0.1.0-alpha.5
+        version: 0.1.0-alpha.5
       '@types/debug':
         specifier: ^4.1.13
         version: 4.1.13
@@ -196,8 +196,8 @@ importers:
   core/filesystem:
     dependencies:
       '@automerge/automerge':
-        specifier: link:/Users/chee/soft/automerge/automerge-classic
-        version: link:../../../../../automerge/automerge-classic
+        specifier: 3.3.2
+        version: 3.3.2
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
@@ -212,8 +212,8 @@ importers:
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
       '@automerge/automerge-subduction':
-        specifier: link:/Users/chee/soft/inkandswitch/subduction/automerge_subduction_js
-        version: link:../../../../subduction/automerge_subduction_js
+        specifier: 0.16.1
+        version: 0.16.1
       '@types/debug':
         specifier: ^4.1.13
         version: 4.1.13
@@ -227,8 +227,8 @@ importers:
   core/patchwork:
     dependencies:
       '@automerge/automerge':
-        specifier: link:/Users/chee/soft/automerge/automerge-classic
-        version: link:../../../../../automerge/automerge-classic
+        specifier: 3.3.2
+        version: 3.3.2
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
@@ -239,8 +239,8 @@ importers:
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
       '@automerge/automerge-subduction':
-        specifier: link:/Users/chee/soft/inkandswitch/subduction/automerge_subduction_js
-        version: link:../../../../subduction/automerge_subduction_js
+        specifier: 0.16.1
+        version: 0.16.1
       '@automerge/vanillajs':
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
@@ -284,9 +284,6 @@ importers:
 
   core/plugins:
     dependencies:
-      '@automerge/automerge':
-        specifier: link:/Users/chee/soft/automerge/automerge-classic
-        version: link:../../../../../automerge/automerge-classic
       '@types/debug':
         specifier: ^4.1.13
         version: 4.1.13
@@ -303,6 +300,9 @@ importers:
         specifier: ^2.0.3
         version: 2.0.3
     devDependencies:
+      '@automerge/automerge':
+        specifier: 3.3.2
+        version: 3.3.2
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
@@ -332,14 +332,14 @@ importers:
   packages/edge-handles:
     devDependencies:
       '@automerge/automerge':
-        specifier: link:/Users/chee/soft/automerge/automerge-classic
-        version: link:../../../../../automerge/automerge-classic
+        specifier: 3.3.2
+        version: 3.3.2
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.47
         version: 2.6.0-subduction.47
       '@automerge/automerge-subduction':
-        specifier: link:/Users/chee/soft/inkandswitch/subduction/automerge_subduction_js
-        version: link:../../../../subduction/automerge_subduction_js
+        specifier: 0.16.1
+        version: 0.16.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -440,6 +440,12 @@ packages:
   '@automerge/automerge-repo@2.6.0-subduction.47':
     resolution: {integrity: sha512-NGBQUjGH67Kyrc8a6zoafvDKT1+pnFi2/yiMgULS7l+apWQT2QkgQZ3vQGms/ngdrmM6ye1fhcwHwBn/DGJ6tA==}
     engines: {node: '>=22.13'}
+
+  '@automerge/automerge-subduction@0.16.1':
+    resolution: {integrity: sha512-alH7U4eYn0O7sT6hNLv7CJhNODJi+QD6qfRQTNfZCxL3Q5JZdJ8lFpdvXUkBf+I3bu0GLvVlTaYPWGrBihjpIw==}
+
+  '@automerge/automerge@3.3.2':
+    resolution: {integrity: sha512-9vCdCL7pdQwUra66SBxPVHr+/t9epXKni9KDeak2rNBFMzABVh2u6gSpcwxi3jkR5qr047jVqZv9DlrOfVxLFw==}
 
   '@automerge/vanillajs@2.6.0-subduction.47':
     resolution: {integrity: sha512-OR0OIfxQzD9lOyagpMxQIHngC8J/NBBVi/Fxps3NXx752Vwrxn2RYEcb/8gg1NuYB8bkuVL3Jt477AZn2uhykw==}
@@ -1025,6 +1031,9 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
+
+  '@keyhive/keyhive@0.1.0-alpha.5':
+    resolution: {integrity: sha512-RoFimLwO91OR4/794pVT0SyTA4Gn3Jk9KL64ONrLe1UYLBdIPhrqeeQgY6i0FBcS1/zSeIFeK3AJZ8GzCRTRmA==}
 
   '@lezer/common@1.5.2':
     resolution: {integrity: sha512-sxQE460fPZyU3sdc8lafxiPwJHBzZRy/udNFynGQky1SePYBdhkBl1kOagA9uT3pxR8K09bOrmTUqA9wb/PjSQ==}
@@ -2080,8 +2089,8 @@ snapshots:
     dependencies:
       '@automerge/automerge-repo': 2.6.0-subduction.47
       '@automerge/automerge-repo-network-websocket': 2.6.0-subduction.47
-      '@automerge/automerge-subduction': link:../../subduction/automerge_subduction_js
-      '@keyhive/keyhive': link:../patchwork.inkandswitch.com/vendor/keyhive-noop
+      '@automerge/automerge-subduction': 0.16.1
+      '@keyhive/keyhive': 0.1.0-alpha.5
       '@noble/hashes': 2.2.0
       cbor-x: 1.6.4
       eventemitter3: 5.0.4
@@ -2123,7 +2132,7 @@ snapshots:
 
   '@automerge/automerge-repo-react-hooks@2.6.0-subduction.47(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
-      '@automerge/automerge': link:../../../automerge/automerge-classic
+      '@automerge/automerge': 3.3.2
       '@automerge/automerge-repo': 2.6.0-subduction.47
       eventemitter3: 5.0.4
       react: 18.3.1
@@ -2143,8 +2152,8 @@ snapshots:
 
   '@automerge/automerge-repo@2.6.0-subduction.47':
     dependencies:
-      '@automerge/automerge': link:../../../automerge/automerge-classic
-      '@automerge/automerge-subduction': link:../../subduction/automerge_subduction_js
+      '@automerge/automerge': 3.3.2
+      '@automerge/automerge-subduction': 0.16.1
       bs58check: 4.0.0
       cbor-x: 1.6.4
       debug: 4.4.3
@@ -2158,6 +2167,10 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+
+  '@automerge/automerge-subduction@0.16.1': {}
+
+  '@automerge/automerge@3.3.2': {}
 
   '@automerge/vanillajs@2.6.0-subduction.47':
     dependencies:
@@ -2632,6 +2645,8 @@ snapshots:
       '@types/node': 24.13.3
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
+
+  '@keyhive/keyhive@0.1.0-alpha.5': {}
 
   '@lezer/common@1.5.2': {}
 

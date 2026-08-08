@@ -4,7 +4,6 @@ import type {
   PatchworkVitePluginOptions,
 } from "./patchwork-plugin.js";
 import { fileURLToPath } from "node:url";
-import { relative } from "node:path";
 
 /**
  * bootloader owns resolving/emitting its own dependencies (it's the one that
@@ -116,22 +115,11 @@ export function importmap(options?: PatchworkVitePluginOptions): Plugin {
     },
     transformIndexHtml: {
       order: "pre",
-      async handler(html, context) {
+      handler(html, context) {
         const activeImportmap = structuredClone(importmap);
         if (context.server) {
-          // The importmap has to name the same URL the site's own imports get
-          // rewritten to, which is the pre-bundled dep. `/@id/<dep>` resolves
-          // to the same file but is a second URL, and a module fetched under
-          // two URLs is evaluated twice — two solids, two automerges.
-          const optimizer = context.server.environments.client.depsOptimizer;
-          await optimizer?.init();
-          const root = context.server.config.root;
           for (const id of Object.keys(builtins)) {
-            const dependency = devDependencyId(id);
-            const optimized = optimizer?.metadata.optimized[dependency];
-            activeImportmap.imports[id] = optimized
-              ? `/${relative(root, optimized.file)}?v=${optimized.browserHash}`
-              : `/@id/${dependency}`;
+            activeImportmap.imports[id] = `/@id/${devDependencyId(id)}`;
           }
         }
         return {
