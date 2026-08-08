@@ -1,0 +1,42 @@
+{
+  "name": "@inkandswitch/patchwork-packages",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
+    "directory": "core/packages"
+  },
+  "type": "module",
+  "version": "0.0.0",
+  "author": "Ink & Switch",
+  "description": "Read patchwork.json package manifests and watch the packages a settings doc lists.",
+  "main": "dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w --preserveWatchOutput",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "license": "MIT",
+  "peerDependencies": {
+    "@automerge/automerge": "*",
+    "@automerge/automerge-repo": "*"
+  },
+  "dependencies": {
+    "@inkandswitch/patchwork-bootloader": "workspace:^",
+    "@inkandswitch/patchwork-filesystem": "workspace:^",
+    "debug": "^4.4.3",
+    "resolve.exports": "^2.0.3"
+  },
+  "devDependencies": {
+    "@automerge/automerge-subduction": "catalog:",
+    "@types/debug": "^4.1.13",
+    "@types/node": "catalog:",
+    "vitest": "^3.2.6"
+  }
+}

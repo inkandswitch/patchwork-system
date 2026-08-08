@@ -6,17 +6,17 @@ packages:
   - sites/*
 
 overrides:
-  "@automerge/automerge": "catalog:"
+  "@automerge/automerge": "link:/Users/chee/soft/automerge/automerge-classic"
   "@automerge/automerge-repo": "catalog:"
   "@automerge/automerge-repo-keyhive": "catalog:"
   "@automerge/automerge-repo-network-messagechannel": "catalog:"
   "@automerge/automerge-repo-network-websocket": "catalog:"
   "@automerge/automerge-repo-react-hooks": "catalog:"
   "@automerge/automerge-repo-storage-indexeddb": "catalog:"
-  "@automerge/automerge-subduction": "catalog:"
+  "@automerge/automerge-subduction": "link:/Users/chee/soft/inkandswitch/subduction/automerge_subduction_js"
   "@automerge/react": "catalog:"
   "@automerge/vanillajs": "catalog:"
-  "@keyhive/keyhive": "catalog:"
+  "@keyhive/keyhive": "link:/Users/chee/soft/inkandswitch/patchwork/patchwork.inkandswitch.com/vendor/keyhive-noop"
   solid-automerge: "catalog:"
 
 minimumReleaseAgeExclude:
