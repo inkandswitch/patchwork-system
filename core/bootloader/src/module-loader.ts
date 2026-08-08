@@ -33,49 +33,81 @@ const pending = new Map<
   }
 >();
 
-function getResolvedImportMap(): ImportMap {
-  const script = document.querySelector('script[type="importmap"]');
-  if (!script?.textContent) return {};
+function resolveImportMapValue(value: string, baseURI: string): string {
   try {
-    const raw = JSON.parse(script.textContent) as ImportMap;
-    const baseURI = document.baseURI;
-    const resolved: ImportMap = {};
-
-    if (raw.imports) {
-      resolved.imports = {};
-      for (const [key, value] of Object.entries(raw.imports)) {
-        try {
-          resolved.imports[key] = new URL(value, baseURI).href;
-        } catch {
-          resolved.imports[key] = value;
-        }
-      }
-    }
-
-    if (raw.scopes) {
-      resolved.scopes = {};
-      for (const [scopeKey, scopeMap] of Object.entries(raw.scopes)) {
-        let resolvedKey: string;
-        try {
-          resolvedKey = new URL(scopeKey, baseURI).href;
-        } catch {
-          resolvedKey = scopeKey;
-        }
-        resolved.scopes[resolvedKey] = {};
-        for (const [key, value] of Object.entries(scopeMap)) {
-          try {
-            resolved.scopes[resolvedKey][key] = new URL(value, baseURI).href;
-          } catch {
-            resolved.scopes[resolvedKey][key] = value;
-          }
-        }
-      }
-    }
-
-    return resolved;
+    return new URL(value, baseURI).href;
   } catch {
-    return {};
+    return value;
   }
+}
+
+function resolveImportMap(raw: ImportMap, baseURI: string): ImportMap {
+  const resolved: ImportMap = {};
+
+  if (raw.imports) {
+    resolved.imports = {};
+    for (const [key, value] of Object.entries(raw.imports)) {
+      resolved.imports[key] = resolveImportMapValue(value, baseURI);
+    }
+  }
+
+  if (raw.scopes) {
+    resolved.scopes = {};
+    for (const [scopeKey, scopeMap] of Object.entries(raw.scopes)) {
+      const resolvedScopeKey = resolveImportMapValue(scopeKey, baseURI);
+      resolved.scopes[resolvedScopeKey] = {};
+      for (const [key, value] of Object.entries(scopeMap)) {
+        resolved.scopes[resolvedScopeKey][key] = resolveImportMapValue(
+          value,
+          baseURI
+        );
+      }
+    }
+  }
+
+  return resolved;
+}
+
+// Multiple import maps apply in document order; later ones fill gaps but don't
+// override earlier entries.
+function mergeImportMaps(merged: ImportMap, next: ImportMap = {}): ImportMap {
+  if (next.imports) {
+    merged.imports ??= {};
+    for (const [key, value] of Object.entries(next.imports)) {
+      if (!Object.hasOwn(merged.imports, key)) merged.imports[key] = value;
+    }
+  }
+
+  if (next.scopes) {
+    merged.scopes ??= {};
+    for (const [scopeKey, scopeMap] of Object.entries(next.scopes)) {
+      const mergedScope = (merged.scopes[scopeKey] ??= {});
+      for (const [key, value] of Object.entries(scopeMap)) {
+        if (!Object.hasOwn(mergedScope, key)) mergedScope[key] = value;
+      }
+    }
+  }
+
+  return merged;
+}
+
+function getResolvedImportMap(): ImportMap {
+  const merged: ImportMap = {};
+  for (const script of document.querySelectorAll('script[type="importmap"]')) {
+    if (!script.textContent) continue;
+    try {
+      mergeImportMaps(
+        merged,
+        resolveImportMap(
+          JSON.parse(script.textContent) as ImportMap,
+          document.baseURI
+        )
+      );
+    } catch {
+      continue;
+    }
+  }
+  return merged;
 }
 
 function getWorker(): Worker {
