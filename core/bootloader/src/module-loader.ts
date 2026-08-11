@@ -11,9 +11,14 @@ import { importPluginFromFolderDocUrl } from "@inkandswitch/patchwork-filesystem
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
 
 type Descriptor = Record<string, unknown> & { id?: string; type?: string };
+type ImportMap = {
+  imports?: Record<string, string>;
+  scopes?: Record<string, Record<string, string>>;
+};
 
 type WorkerReply =
   | { type: "descriptors"; id: number; descriptors: Descriptor[] }
+  | { type: "datatype"; id: number; bytes: Uint8Array }
   | { type: "error"; id: number; error: string };
 
 const WORKER_PATH = "/module-loader-worker.js";
@@ -22,8 +27,88 @@ let worker: Worker | undefined;
 let nextRequestId = 1;
 const pending = new Map<
   number,
-  { resolve: (d: Descriptor[]) => void; reject: (e: Error) => void }
+  {
+    resolve: (value: any) => void;
+    reject: (e: Error) => void;
+  }
 >();
+
+function resolveImportMapValue(value: string, baseURI: string): string {
+  try {
+    return new URL(value, baseURI).href;
+  } catch {
+    return value;
+  }
+}
+
+function resolveImportMap(raw: ImportMap, baseURI: string): ImportMap {
+  const resolved: ImportMap = {};
+
+  if (raw.imports) {
+    resolved.imports = {};
+    for (const [key, value] of Object.entries(raw.imports)) {
+      resolved.imports[key] = resolveImportMapValue(value, baseURI);
+    }
+  }
+
+  if (raw.scopes) {
+    resolved.scopes = {};
+    for (const [scopeKey, scopeMap] of Object.entries(raw.scopes)) {
+      const resolvedScopeKey = resolveImportMapValue(scopeKey, baseURI);
+      resolved.scopes[resolvedScopeKey] = {};
+      for (const [key, value] of Object.entries(scopeMap)) {
+        resolved.scopes[resolvedScopeKey][key] = resolveImportMapValue(
+          value,
+          baseURI
+        );
+      }
+    }
+  }
+
+  return resolved;
+}
+
+// Multiple import maps apply in document order; later ones fill gaps but don't
+// override earlier entries.
+function mergeImportMaps(merged: ImportMap, next: ImportMap = {}): ImportMap {
+  if (next.imports) {
+    merged.imports ??= {};
+    for (const [key, value] of Object.entries(next.imports)) {
+      if (!Object.hasOwn(merged.imports, key)) merged.imports[key] = value;
+    }
+  }
+
+  if (next.scopes) {
+    merged.scopes ??= {};
+    for (const [scopeKey, scopeMap] of Object.entries(next.scopes)) {
+      const mergedScope = (merged.scopes[scopeKey] ??= {});
+      for (const [key, value] of Object.entries(scopeMap)) {
+        if (!Object.hasOwn(mergedScope, key)) mergedScope[key] = value;
+      }
+    }
+  }
+
+  return merged;
+}
+
+function getResolvedImportMap(): ImportMap {
+  const merged: ImportMap = {};
+  for (const script of document.querySelectorAll('script[type="importmap"]')) {
+    if (!script.textContent) continue;
+    try {
+      mergeImportMaps(
+        merged,
+        resolveImportMap(
+          JSON.parse(script.textContent) as ImportMap,
+          document.baseURI
+        )
+      );
+    } catch {
+      continue;
+    }
+  }
+  return merged;
+}
 
 function getWorker(): Worker {
   if (worker) return worker;
@@ -33,11 +118,19 @@ function getWorker(): Worker {
   });
   worker.addEventListener("message", (event: MessageEvent<WorkerReply>) => {
     const data = event.data;
-    if (!data || (data.type !== "descriptors" && data.type !== "error")) return;
+    if (
+      !data ||
+      (data.type !== "descriptors" &&
+        data.type !== "datatype" &&
+        data.type !== "error")
+    ) {
+      return;
+    }
     const entry = pending.get(data.id);
     if (!entry) return;
     pending.delete(data.id);
     if (data.type === "descriptors") entry.resolve(data.descriptors);
+    else if (data.type === "datatype") entry.resolve(data.bytes);
     else entry.reject(new Error(data.error));
   });
   worker.addEventListener("error", (event) => {
@@ -56,7 +149,73 @@ function discoverDescriptors(urlAtHeads: AutomergeUrl): Promise<Descriptor[]> {
   const id = nextRequestId++;
   return new Promise<Descriptor[]>((resolve, reject) => {
     pending.set(id, { resolve, reject });
-    getWorker().postMessage({ type: "discover", id, url: urlAtHeads });
+    getWorker().postMessage({
+      type: "discover",
+      id,
+      url: urlAtHeads,
+      importMap: getResolvedImportMap(),
+      baseURI: document.baseURI,
+    });
+  });
+}
+
+export function initializeDatatypeViaWorker<D>(
+  importUrl: string,
+  datatypeId: string,
+  repoPort: MessagePort
+): Promise<D> {
+  const id = nextRequestId++;
+  const worker = new Worker(WORKER_PATH, {
+    type: "module",
+    name: `patchwork-datatype-${datatypeId}`,
+  });
+  return new Promise<D>((resolve, reject) => {
+    const cleanup = () => {
+      worker.terminate();
+      pending.delete(id);
+    };
+    pending.set(id, {
+      resolve(value) {
+        cleanup();
+        resolve(value as D);
+      },
+      reject(error) {
+        cleanup();
+        reject(error);
+      },
+    });
+    worker.addEventListener("message", (event: MessageEvent<WorkerReply>) => {
+      const data = event.data;
+      if (
+        !data ||
+        data.id !== id ||
+        (data.type !== "datatype" && data.type !== "error")
+      ) {
+        return;
+      }
+      const entry = pending.get(id);
+      if (!entry) return;
+      if (data.type === "datatype") entry.resolve(data.bytes);
+      else entry.reject(new Error(data.error));
+    });
+    worker.addEventListener("error", (event) => {
+      const entry = pending.get(id);
+      if (!entry) return;
+      entry.reject(
+        new Error(`datatype worker error: ${event.message ?? "unknown"}`)
+      );
+    });
+    worker.postMessage(
+      {
+        type: "init-datatype",
+        id,
+        importUrl,
+        datatypeId,
+        importMap: getResolvedImportMap(),
+        baseURI: document.baseURI,
+      },
+      [repoPort]
+    );
   });
 }
 
