@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-89.4528 -89.4528 1669.7856000000002 1669.7856000000002" role="img" aria-label="Patchwork">
+  <title>Patchwork</title>
+  <rect id="left" x="46.78" y="83.81" width="300" height="1400" rx="25" ry="25" transform="rotate(1.08 143 799) rotate(-4 196.78 783.81)" fill="#0094c5"/>
+  <circle id="circle" cx="724.52" cy="446.17" r="300" transform="translate(725 446) scale(0.9892) translate(-725 -446)" fill="#369935"/>
+  <path id="triangle" d="M446.15,1340.55l117.95-501.74c3.16-13.44,16.62-21.78,30.06-18.62l501.74,117.95c21.68,5.1,26.38,33.86,7.44,45.59l-619.69,383.79c-18.94,11.73-42.6-5.29-37.5-26.98Z" transform="translate(694 1061) scale(1.0000) translate(-694 -1061)" fill="#5878e3"/>
+  <rect id="right" x="1144.1" y="7.08" width="300" height="1400" rx="25" ry="25" transform="rotate(-0.84 1248 799) rotate(-4 1294.1 707.08)" fill="#b855ac"/>
+</svg>

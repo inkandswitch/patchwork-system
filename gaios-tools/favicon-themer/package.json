@@ -1,0 +1,11 @@
+{
+  "name": "@gaios/favicon-themer",
+  "version": "0.0.0",
+  "description": "System-tray tool that recolors the browser-tab favicon to match the active Patchwork theme.",
+  "type": "module",
+  "private": true,
+  "main": "./favicon-themer.js",
+  "exports": {
+    ".": "./favicon-themer.js"
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "format": "patchwork-logo",
+  "version": 1,
+  "source": "triangle",
+  "color": "#69854a",
+  "mode": "mono",
+  "snap": "avatar",
+  "gaps": [
+    60,
+    60,
+    99
+  ],
+  "avoidYellow": true,
+  "yellow": {
+    "center": 60,
+    "width": 60
+  },
+  "evenness": 0,
+  "lockSource": true,
+  "adjustPaletteToSelection": false,
+  "pose": 0,
+  "colors": {
+    "circle": "#587caf",
+    "left": "#258998",
+    "triangle": "#69854a",
+    "right": "#a8636e"
+  }
+}
