@@ -20,7 +20,6 @@
 import {
   type AutomergeUrl,
   type DocHandle,
-  MessageChannelNetworkAdapter,
   Repo,
 } from "@automerge/vanillajs/slim";
 import * as Automerge from "@automerge/automerge/slim";
@@ -53,12 +52,7 @@ import type {
   PatchworkOptions,
   SignerIdentity,
 } from "./types.js";
-import {
-  createRepo,
-  firstRepoPort,
-  initWasm,
-  removeAdapterFor,
-} from "./repo.js";
+import { createRepo, firstRepoPort, initWasm } from "./repo.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 
@@ -135,6 +129,9 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   // Called with a fresh port when the automerge worker dies and is recreated.
   // Assigned once the repo exists.
   let onWorkerPortRenewed: ((port: MessagePort) => void) | undefined;
+  // Resolves once the worker has answered on the repo port. A provided repo
+  // brings its own network, so there's nothing here to wait for.
+  let linked: Promise<void> = Promise.resolve();
 
   if (options.repo) {
     log("using provided Repo");
@@ -150,22 +147,14 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
       }
     });
 
-    let workerAdapter = new MessageChannelNetworkAdapter(workerPort);
-    ({ repo, hive, signerIdentity } = await createRepo(workerAdapter));
+    const tab = await createRepo(workerPort);
+    ({ repo, hive, signerIdentity } = tab);
+    linked = tab.linked();
 
     // The worker was recreated with cold state: wire the repo onto the fresh
-    // port and drop the adapter stranded on the dead one.
-    const bootHive = hive;
+    // port and drop whatever is stranded on the dead one.
     onWorkerPortRenewed = (port) => {
-      const fresh = new MessageChannelNetworkAdapter(port);
-      // Mirror the boot wiring: a keyhive repo talks to the worker through a
-      // keyhive adapter wrapped around the message channel.
-      const registered = bootHive
-        ? bootHive.createKeyhiveNetworkAdapter(fresh, false, false, 2000)
-        : fresh;
-      repo.networkSubsystem.addNetworkAdapter(registered as any);
-      removeAdapterFor(repo, workerAdapter, registered);
-      workerAdapter = fresh;
+      tab.rewire(port);
       lifecycleLog("repo re-wired to the recreated automerge worker");
     };
   }
@@ -179,8 +168,8 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     AutomergeRepo as typeof import("@automerge/automerge-repo");
   if (hive) window.hive = hive;
 
-  await repo.networkSubsystem.whenReady();
-  log("networkSubsystem ready");
+  await linked;
+  log("worker link ready");
   (hive?.networkAdapter as any)?.syncKeyhive?.();
 
   registerRepoProviderElement(repo as any);

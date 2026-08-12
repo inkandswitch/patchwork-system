@@ -5,6 +5,10 @@ import {
   type AutomergeUrl,
 } from "@automerge/vanillajs/slim";
 import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
+import {
+  PortHubAdapter,
+  WORKER_SUBDUCTION_SERVICE,
+} from "@inkandswitch/patchwork-bootloader/port-hub";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import {
   initKeyhiveWasm,
@@ -53,16 +57,21 @@ export function initWasm(): Promise<void> {
   return wasmReady;
 }
 
-export async function createRepo(
-  workerAdapter: MessageChannelNetworkAdapter
-): Promise<{
+export type TabRepo = {
   repo: Repo;
   hive?: AutomergeRepoKeyhive;
   signerIdentity?: SignerIdentity;
-}> {
+  /** Wire the repo onto a port from a freshly recreated automerge worker. */
+  rewire(port: MessagePort): void;
+  /** Resolves once the worker has answered on some port. */
+  linked(): Promise<void>;
+};
+
+export async function createRepo(workerPort: MessagePort): Promise<TabRepo> {
   if (syncServer.keyhive) {
     log("setting up keyhive");
     initKeyhiveWasm();
+    let workerAdapter = new MessageChannelNetworkAdapter(workerPort);
     const { hive, repo } = await initializeAutomergeRepoKeyhiveWithRepo({
       createRepo: (repoConfig) => new Repo(repoConfig),
       storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
@@ -79,21 +88,43 @@ export async function createRepo(
       },
     });
     log("keyhive setup complete");
-    return { repo, hive };
+    return {
+      repo,
+      hive,
+      linked: async () => void (await repo.networkSubsystem.whenReady()),
+      rewire(port) {
+        const fresh = new MessageChannelNetworkAdapter(port);
+        // Mirror the boot wiring: a keyhive repo talks to the worker through a
+        // keyhive adapter wrapped around the message channel.
+        const registered = hive.createKeyhiveNetworkAdapter(
+          fresh,
+          false,
+          false,
+          2000
+        );
+        repo.networkSubsystem.addNetworkAdapter(registered as any);
+        removeAdapterFor(repo, workerAdapter, registered);
+        workerAdapter = fresh;
+      },
+    };
   }
 
-  // An explicit signer, rather than the Repo's internal default, so the tab's
-  // identity can be exposed on window.patchwork. The tab never connects via
-  // Subduction, so this id never goes on the wire.
+  // The tab is a storageless node: the worker holds the IndexedDB and the tab
+  // syncs against it over subduction, one transport per repo port. The signer
+  // is explicit rather than the Repo's internal default so the identity the tab
+  // presents in that handshake can be shown on window.patchwork.
   const signer = new MemorySigner();
+  const link = new PortHubAdapter();
+  let dropWorkerPort = link.addPort(workerPort);
   const repo = new Repo({
-    network: [workerAdapter],
-    storage: new IndexedDBWorkerStorageAdapter(),
     signer,
-    async sharePolicy(peerId) {
-      return peerId.includes("automerge-worker");
-    },
-    enableRemoteHeadsGossiping: true,
+    subductionAdapters: [
+      {
+        adapter: link,
+        serviceName: WORKER_SUBDUCTION_SERVICE,
+        role: "connect",
+      },
+    ],
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
   });
@@ -106,7 +137,15 @@ export async function createRepo(
     ).toHex(),
   };
   log("repo created, tab subduction identity:", signerIdentity);
-  return { repo, signerIdentity };
+  return {
+    repo,
+    signerIdentity,
+    linked: () => link.whenReady(),
+    rewire(port) {
+      dropWorkerPort();
+      dropWorkerPort = link.addPort(port);
+    },
+  };
 }
 
 /**

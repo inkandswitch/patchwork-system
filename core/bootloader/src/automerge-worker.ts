@@ -38,6 +38,7 @@ import {
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
+import { PortHubAdapter, WORKER_SUBDUCTION_SERVICE } from "./port-hub.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import {
   HANDOFF_CHANNEL,
@@ -195,6 +196,11 @@ function pushSyncState(message: SyncStateDocMessage): void {
 
 const subductionPortProvider = makePortProvider();
 
+// Tabs sync with this repo over subduction, one transport per repo port. The
+// hub exists before the repo does because ports arrive whenever a tab connects,
+// long after `subductionAdapters` is read.
+const tabHub = new PortHubAdapter({ useWeakRef: true });
+
 // Memoized so a construction retry reuses the endpoint instead of leaking one
 // per attempt.
 let subductionEndpoints: WorkerWebSocketEndpoint[] | null = null;
@@ -273,6 +279,13 @@ async function buildPlainRepo(): Promise<BuiltRepo> {
     },
     enableRemoteHeadsGossiping: true,
     subductionWebsocketEndpoints: getSubductionEndpoints(),
+    subductionAdapters: [
+      {
+        adapter: tabHub,
+        serviceName: WORKER_SUBDUCTION_SERVICE,
+        role: "accept",
+      },
+    ],
   });
   console.log("[patchwork] shared-worker subduction identity:", identity);
   return { repo, identity };
@@ -634,56 +647,39 @@ function reviewAllResync(state: SyncState): void {
 
 // ── Tab connections ────────────────────────────────────────────────────
 // Each tab connects with a control port and opens repo MessageChannel ports
-// through it. `adapter` is what was registered with the network subsystem (the
-// MessageChannel adapter, or the keyhive wrapper around it); `mcAdapter` is
-// always the underlying MessageChannel adapter, so the port itself can be
-// disconnected.
+// through it. A plain repo hands those ports to the subduction hub, so the tab
+// syncs over subduction. A keyhive repo keeps classic sync, with the keyhive
+// wrapper registered in the network subsystem.
 
-type RepoChannel = {
-  adapter: { disconnect(): void };
-  mcAdapter: MessageChannelNetworkAdapter;
-  port: MessagePort;
-};
+type RepoChannel = { drop(): void };
 type Connection = { channels: Set<RepoChannel> };
 
-function dropRepoChannel(repo: Repo, channel: RepoChannel) {
-  // removeNetworkAdapter pulls the adapter out of networkSubsystem.adapters and
-  // calls disconnect(), which for the MessageChannel adapter emits the
-  // close/peer-disconnected events that clear #adaptersByPeer.
-  try {
-    repo.networkSubsystem.removeNetworkAdapter(channel.adapter as any);
-  } catch (err) {
-    console.error("removeNetworkAdapter failed", err);
-  }
-  // On the keyhive path the registered adapter is a wrapper, so make sure the
-  // underlying port is disconnected and closed too.
-  try {
-    channel.mcAdapter.disconnect();
-  } catch {}
-  try {
-    channel.port.close();
-  } catch {}
-}
-
 async function dropConnection(connection: Connection) {
-  if (!connection.channels.size || !repoHivePromise) return;
-  const { repo } = await getRepoHive();
-  log(`tab gone — removing ${connection.channels.size} network adapter(s)`);
-  for (const channel of connection.channels) dropRepoChannel(repo, channel);
+  if (!connection.channels.size) return;
+  log(`tab gone — dropping ${connection.channels.size} repo channel(s)`);
+  for (const channel of connection.channels) channel.drop();
   connection.channels.clear();
 }
 
 async function connectPort(port: MessagePort, connection: Connection) {
   const { hive, repo } = await getRepoHive();
+
+  if (!hive) {
+    const removePort = tabHub.addPort(port);
+    connection.channels.add({
+      drop() {
+        removePort();
+        try {
+          port.close();
+        } catch {}
+      },
+    });
+    return;
+  }
+
   const mcAdapter = new MessageChannelNetworkAdapter(port, {
     useWeakRef: true,
   });
-
-  if (!hive) {
-    repo.networkSubsystem.addNetworkAdapter(mcAdapter);
-    connection.channels.add({ adapter: mcAdapter, mcAdapter, port });
-    return;
-  }
 
   const onlyShareWithHardcodedServerPeerId = false;
   const periodicallyRequestKeyhiveSync = false;
@@ -710,7 +706,25 @@ async function connectPort(port: MessagePort, connection: Connection) {
   });
 
   repo.networkSubsystem.addNetworkAdapter(adapter);
-  connection.channels.add({ adapter, mcAdapter, port });
+  connection.channels.add({
+    drop() {
+      // removeNetworkAdapter pulls the adapter out of
+      // networkSubsystem.adapters and calls disconnect(); the registered
+      // adapter is the keyhive wrapper, so disconnect the underlying
+      // MessageChannel adapter too.
+      try {
+        repo.networkSubsystem.removeNetworkAdapter(adapter as any);
+      } catch (err) {
+        console.error("removeNetworkAdapter failed", err);
+      }
+      try {
+        mcAdapter.disconnect();
+      } catch {}
+      try {
+        port.close();
+      } catch {}
+    },
+  });
 }
 
 function handleControlMessage(
