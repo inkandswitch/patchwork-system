@@ -1,5 +1,4 @@
 import type {
-  ServiceWorkerRepoChannelListener,
   SetupServiceWorkerOptions,
   SetupServiceWorkerResult,
   SyncStateDocMessage,
@@ -75,7 +74,7 @@ let automergeWorker: SharedWorker | undefined;
 // channel ends in a dead worker — so deliveries are guarded on generation.
 let workerGeneration = 0;
 let disposeWorkerDeathDetection: (() => void) | undefined;
-const repoChannelListeners = new Set<ServiceWorkerRepoChannelListener>();
+const workerRecreatedListeners = new Set<() => void>();
 let recoveringWorker = false;
 let lastWorkerRecoveryAt = 0;
 // Below this spacing, skip: if the fresh worker is dead too, its own heartbeat
@@ -177,8 +176,9 @@ function createSubductionIoPort(): MessagePort {
 /**
  * Build a replacement worker and re-wire everything a live tab holds against
  * it: console forwarding and port donation (both re-done by
- * getAutomergeWorker), the per-doc sync-state subscriptions, and every
- * subscriber's repo port. The new instance boots with cold state.
+ * getAutomergeWorker) and the per-doc sync-state subscriptions. The new
+ * instance boots with cold state. Listeners are told so they can reopen
+ * whatever they had on the dead one.
  */
 async function recoverAutomergeWorker(
   reason: string,
@@ -204,18 +204,11 @@ async function recoverAutomergeWorker(
     for (const documentId of syncStateListeners.keys()) {
       fresh.port.postMessage({ type: "sync-sub", documentId });
     }
-    for (const listener of repoChannelListeners) {
+    for (const listener of workerRecreatedListeners) {
       try {
-        const generation = workerGeneration;
-        const port = await openRepoChannel();
-        // Replaced again while we waited — the newer recovery re-delivers.
-        if (generation !== workerGeneration) break;
-        await listener(port);
+        listener();
       } catch (err) {
-        console.error(
-          "failed to re-wire a repo channel after worker recovery",
-          err
-        );
+        console.error("worker-recreated listener threw", err);
       }
     }
   } finally {
@@ -475,7 +468,8 @@ function awaitPortReady(control: MessagePort, id: number): Promise<void> {
   });
 }
 
-async function openRepoChannel(): Promise<MessagePort> {
+/** Open a repo sync port to the automerge worker, once it says it is ready. */
+export async function openRepoPort(): Promise<MessagePort> {
   const id = ++nextRepoChannelId;
   const ready = awaitPortReady(getAutomergeWorker().port, id);
   const port = sendRepoPort(id);
@@ -490,11 +484,6 @@ async function openRepoChannel(): Promise<MessagePort> {
     );
   }
   return port;
-}
-
-/** Open a fresh repo sync port to the automerge worker (dev console). */
-function getRepoChannel(): MessagePort {
-  return sendRepoPort(++nextRepoChannelId);
 }
 
 function waitForActive(reg: ServiceWorkerRegistration): Promise<ServiceWorker> {
@@ -570,21 +559,15 @@ export default async function setupServiceWorker(
   return {
     shared,
     connectClassicSync,
-    getRepoChannel,
     subscribeSyncState,
-    // Called once with the boot port. If the automerge worker later dies and is
-    // recreated, the listener is called again with a fresh port — treat every
-    // call as "(re)wire your repo's sync onto this port".
-    async subscribeToRepoChannel(listener: ServiceWorkerRepoChannelListener) {
-      repoChannelListeners.add(listener);
-      const generation = workerGeneration;
-      const port = await openRepoChannel();
-      // If the worker was replaced while this channel was opening, recovery has
-      // already delivered a good port to this listener — drop the stale one
-      // rather than wiring the repo to a dead channel.
-      if (generation === workerGeneration) await listener(port);
+    openPort: openRepoPort,
+    // The automerge worker died and was replaced, so anything held against the
+    // old one — a repo port, a network adapter — is stranded. Ports opened from
+    // here on reach the new instance, which boots with cold state.
+    onRecreated(listener: () => void) {
+      workerRecreatedListeners.add(listener);
       return () => {
-        repoChannelListeners.delete(listener);
+        workerRecreatedListeners.delete(listener);
       };
     },
   };
