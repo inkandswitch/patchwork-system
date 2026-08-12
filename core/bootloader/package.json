@@ -103,6 +103,7 @@
   },
   "scripts": {
     "build": "tsc && cp src/global.css dist/global.css",
-    "dev": "tsc -w --preserveWatchOutput"
+    "dev": "tsc -w --preserveWatchOutput",
+    "test": "vitest run"
   }
 }
