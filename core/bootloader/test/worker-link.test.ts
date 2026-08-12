@@ -46,19 +46,15 @@ function link() {
   return { worker, tab, endpoint, accepted };
 }
 
+// The worker end only accepts links; it has no connection manager of its own
+// here, so it never queries across them. Tab-to-worker data flow is covered by
+// the edit test below.
 describe("tab <-> worker over subduction", () => {
   it("finds a worker doc from the tab", async () => {
     const { worker, tab } = link();
     const handle = worker.create({ foo: "bar" });
     const found = await tab.find<{ foo: string }>(handle.url as AutomergeUrl);
     expect(found.doc().foo).toBe("bar");
-  });
-
-  it("finds a tab doc from the worker", async () => {
-    const { worker, tab } = link();
-    const handle = tab.create({ foo: "baz" });
-    const found = await worker.find<{ foo: string }>(handle.url as AutomergeUrl);
-    expect(found.doc().foo).toBe("baz");
   });
 
   it("propagates edits both ways", async () => {
@@ -80,8 +76,6 @@ describe("tab <-> worker over subduction", () => {
 
     // What setup.ts does when its heartbeat gives up on the SharedWorker.
     endpoint.reset();
-    await pause(2000);
-    console.log("accepted after reset:", accepted.length);
 
     const second = worker.create({ foo: "after" });
     const found = await tab.find<{ foo: string }>(second.url as AutomergeUrl);

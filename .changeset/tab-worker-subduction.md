@@ -5,8 +5,8 @@
 
 Sync the tab with the automerge SharedWorker over Subduction instead of classic automerge-repo sync.
 
-The tab is now a storageless node: it holds no IndexedDB of its own and gets everything from the worker's repo over a Subduction transport, one per repo port. Keyhive sites are unchanged — they keep classic sync through the keyhive network adapter.
+The tab is now a storageless node: it holds no IndexedDB of its own and gets everything from the worker over a Subduction transport on the repo port. Keyhive sites are unchanged — they keep classic sync through the keyhive network adapter.
 
-New: `@inkandswitch/patchwork-bootloader/port-hub` exports `PortHubAdapter`, a network adapter that carries many MessagePorts, and `WORKER_SUBDUCTION_SERVICE`, the service name both ends of the link name. `subductionAdapters` is read once when a Repo is built, and ports come and go after that — the worker gains one per tab, a tab gets a fresh one whenever the worker is recreated — so both ends register a hub up front and add ports to it.
+New: `@inkandswitch/patchwork-bootloader/worker-link` exports `MessagePortTransport`, a Subduction transport over a MessagePort, and `WorkerSubductionEndpoint`, which opens one per connection. The tab passes the endpoint as a `subductionWebsocketEndpoint`, so automerge-repo's own reconnect loop replaces the port re-wiring the tab used to do by hand.
 
-`createRepo` in `@inkandswitch/patchwork` now takes the worker's `MessagePort` rather than a `MessageChannelNetworkAdapter`, and returns `rewire(port)` and `linked()` alongside the repo.
+The worker handoff on `patchwork.sw` changed with it: `subscribeToRepoChannel(listener)` and `getRepoChannel()` are gone, replaced by `openPort(): Promise<MessagePort>` and `onRecreated(listener)`. `createRepo` in `@inkandswitch/patchwork` takes those two rather than a network adapter.
