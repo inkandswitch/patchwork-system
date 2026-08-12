@@ -200,6 +200,11 @@ export type SetupServiceWorkerOptions = {
    * Defaults to `/automerge-worker.js`
    */
   workerPath?: string;
+  /**
+   * The public path to the subduction shared worker file.
+   * Defaults to `/subduction-worker.js`
+   */
+  subductionWorkerPath?: string;
 };
 
 export type SetupServiceWorkerResult = {

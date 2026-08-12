@@ -1,9 +1,12 @@
 import { describe, it, expect, afterEach } from "vitest";
 import {
   Repo,
+  SubductionStorageBridge,
   type PeerId,
   type AutomergeUrl,
 } from "@automerge/automerge-repo";
+import { Subduction, MemorySigner } from "@automerge/automerge-subduction";
+import { DummyStorageAdapter } from "@automerge/automerge-repo/helpers/DummyStorageAdapter.js";
 import {
   MessagePortTransport,
   WorkerSubductionEndpoint,
@@ -21,65 +24,102 @@ function pause(ms: number) {
 }
 
 /**
- * A worker repo accepting tab links, and a tab repo whose only network is one
- * of them. `openPort` stands in for the bootloader's control-port handshake.
+ * The subduction worker — a bare Subduction node, no Repo — and the Repos that
+ * hang off it: tabs, and the automerge worker that resolves URLs for the
+ * service worker. `openPort` stands in for the bootloader's control-port
+ * handshake.
  */
-function link() {
-  const worker = new Repo({ peerId: "automerge-worker-1" as PeerId });
+function site() {
+  const subduction = new Subduction({
+    signer: new MemorySigner(),
+    storage: new SubductionStorageBridge(new DummyStorageAdapter()) as never,
+  });
   const accepted: MessagePortTransport[] = [];
 
   const openPort = async () => {
     const { port1, port2 } = new MessageChannel();
     const transport = new MessagePortTransport(port1 as unknown as MessagePort);
     accepted.push(transport);
-    const subduction = await worker.subduction;
     void subduction.acceptTransport(transport, WORKER_SUBDUCTION_SERVICE);
     return port2 as unknown as MessagePort;
   };
 
-  const endpoint = new WorkerSubductionEndpoint(openPort);
-  const tab = new Repo({
-    peerId: "tab-1" as PeerId,
-    subductionWebsocketEndpoints: [endpoint],
-  });
-  repos.push(worker, tab);
-  return { worker, tab, endpoint, accepted };
+  return {
+    accepted,
+    node(peerId: string) {
+      const endpoint = new WorkerSubductionEndpoint(openPort);
+      const repo = new Repo({
+        peerId: peerId as PeerId,
+        subductionWebsocketEndpoints: [endpoint],
+      });
+      repos.push(repo);
+      return { repo, endpoint };
+    },
+  };
 }
 
-// The worker end only accepts links; it has no connection manager of its own
-// here, so it never queries across them. Tab-to-worker data flow is covered by
-// the edit test below.
-describe("tab <-> worker over subduction", () => {
-  it("finds a worker doc from the tab", async () => {
-    const { worker, tab } = link();
-    const handle = worker.create({ foo: "bar" });
-    const found = await tab.find<{ foo: string }>(handle.url as AutomergeUrl);
+describe("nodes linked through the subduction worker", () => {
+  it("finds another node's document", async () => {
+    const { node } = site();
+    const tab = node("tab-1").repo;
+    const resolver = node("resolver").repo;
+    const created = tab.create({ foo: "bar" });
+    await pause(500);
+    const found = await resolver.find<{ foo: string }>(
+      created.url as AutomergeUrl
+    );
     expect(found.doc().foo).toBe("bar");
   });
 
   it("propagates edits both ways", async () => {
-    const { worker, tab } = link();
-    const a = worker.create<{ n: number }>({ n: 1 });
-    const b = await tab.find<{ n: number }>(a.url as AutomergeUrl);
-    b.change((d) => (d.n = 2));
+    const { node } = site();
+    const a = node("tab-1").repo;
+    const b = node("tab-2").repo;
+    const here = a.create<{ n: number }>({ n: 1 });
     await pause(500);
-    expect(a.doc().n).toBe(2);
-    a.change((d) => (d.n = 3));
+    const there = await b.find<{ n: number }>(here.url as AutomergeUrl);
+    there.change((d) => (d.n = 2));
     await pause(500);
-    expect(b.doc().n).toBe(3);
+    expect(here.doc().n).toBe(2);
+    here.change((d) => (d.n = 3));
+    await pause(500);
+    expect(there.doc().n).toBe(3);
+  });
+
+  it("relays ephemeral messages", async () => {
+    const { node } = site();
+    const a = node("tab-1").repo;
+    const b = node("tab-2").repo;
+    const here = a.create<{ n: number }>({ n: 1 });
+    await pause(500);
+    const there = await b.find<{ n: number }>(here.url as AutomergeUrl);
+
+    const seen: unknown[] = [];
+    there.on("ephemeral-message", ({ message }: { message: unknown }) =>
+      seen.push(message)
+    );
+    await pause(200);
+    here.broadcast({ hello: "there" });
+    await pause(1000);
+    expect(seen).toEqual([{ hello: "there" }]);
   });
 
   it("reconnects on a fresh port when the worker is replaced", async () => {
-    const { worker, tab, endpoint, accepted } = link();
-    const first = worker.create({ foo: "before" });
-    await tab.find<{ foo: string }>(first.url as AutomergeUrl);
+    const { node, accepted } = site();
+    const tab = node("tab-1");
+    const other = node("tab-2").repo;
+    const before = other.create({ foo: "before" });
+    await pause(500);
+    await tab.repo.find<{ foo: string }>(before.url as AutomergeUrl);
 
     // What setup.ts does when its heartbeat gives up on the SharedWorker.
-    endpoint.reset();
+    tab.endpoint.reset();
 
-    const second = worker.create({ foo: "after" });
-    const found = await tab.find<{ foo: string }>(second.url as AutomergeUrl);
+    const after = other.create({ foo: "after" });
+    const found = await tab.repo.find<{ foo: string }>(
+      after.url as AutomergeUrl
+    );
     expect(found.doc().foo).toBe("after");
-    expect(accepted.length).toBe(2);
+    expect(accepted.length).toBe(3);
   });
 });

@@ -1,8 +1,4 @@
-import {
-  initializeWasm,
-  Repo,
-  type AutomergeUrl,
-} from "@automerge/vanillajs/slim";
+import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
 import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
 import { WorkerSubductionEndpoint } from "@inkandswitch/patchwork-bootloader/worker-link";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
@@ -52,7 +48,7 @@ export function initWasm(): Promise<void> {
   return wasmReady;
 }
 
-/** The bit of the bootloader's automerge worker a Repo needs. */
+/** The bit of the bootloader's subduction worker a Repo needs. */
 export type WorkerLink = {
   openPort: () => Promise<MessagePort>;
   onRecreated: (listener: () => void) => () => void;
