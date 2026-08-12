@@ -159,13 +159,20 @@ async function serverLoop(subduction: Subduction): Promise<void> {
 
 // ── Tab and worker links ───────────────────────────────────────────────
 
+/**
+ * Resolves once this port is being read, which is all the ack means and all
+ * the far side can wait for: `acceptTransport` is the responder half of the
+ * handshake, so it doesn't settle until the other end initiates — and the
+ * other end doesn't initiate until it has the ack.
+ */
 async function acceptPort(port: MessagePort): Promise<void> {
   const subduction = await getSubduction();
-  await subduction.acceptTransport(
-    new MessagePortTransport(port),
-    WORKER_SUBDUCTION_SERVICE
-  );
-  log("accepted a peer");
+  void subduction
+    .acceptTransport(new MessagePortTransport(port), WORKER_SUBDUCTION_SERVICE)
+    .then(
+      () => log("accepted a peer"),
+      (error) => console.error("accepting a peer failed", error)
+    );
 }
 
 function handleControlMessage(

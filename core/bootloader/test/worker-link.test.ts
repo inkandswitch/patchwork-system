@@ -40,6 +40,8 @@ function site() {
     const { port1, port2 } = new MessageChannel();
     const transport = new MessagePortTransport(port1 as unknown as MessagePort);
     accepted.push(transport);
+    // Not awaited, as in the worker: acceptTransport is the responder half of
+    // the handshake and only settles once this port's far side initiates.
     void subduction.acceptTransport(transport, WORKER_SUBDUCTION_SERVICE);
     return port2 as unknown as MessagePort;
   };
