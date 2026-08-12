@@ -26,9 +26,9 @@
       "import": "./dist/externals-list.js",
       "types": "./dist/externals-list.d.ts"
     },
-    "./port-hub": {
-      "import": "./dist/port-hub.js",
-      "types": "./dist/port-hub.d.ts"
+    "./worker-link": {
+      "import": "./dist/worker-link.js",
+      "types": "./dist/worker-link.d.ts"
     },
     "./storage": {
       "import": "./dist/storage.js",

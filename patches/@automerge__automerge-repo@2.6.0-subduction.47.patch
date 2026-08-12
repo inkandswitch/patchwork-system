@@ -1,0 +1,30 @@
+diff --git a/dist/subduction/SubductionConnections.js b/dist/subduction/SubductionConnections.js
+index 4760a1899a8c0127db4840d5de090f6825211d97..5b9d19d4dd1cfb0cb242f140d5401af53aadd6a9 100644
+--- a/dist/subduction/SubductionConnections.js
++++ b/dist/subduction/SubductionConnections.js
+@@ -15,7 +15,9 @@ export class SubductionConnections {
+     // ── ConnectionManager interface ─────────────────────────────────────
+     isConnecting() {
+         for (const state of this.#connectionStates.values()) {
+-            if (state === "connecting")
++            // "awaiting-reconnect" counts: the loop is between attempts, not
++            // given up, so a query should wait rather than report unavailable.
++            if (state === "connecting" || state === "awaiting-reconnect")
+                 return true;
+         }
+         return false;
+diff --git a/src/subduction/SubductionConnections.ts b/src/subduction/SubductionConnections.ts
+index 0d5510500c1e3a8e0d84b6f9b5f87f42096ee8e3..6b8376be24f932f21ab3ddc4b76bc81ff39a5030 100644
+--- a/src/subduction/SubductionConnections.ts
++++ b/src/subduction/SubductionConnections.ts
+@@ -28,7 +28,9 @@ export class SubductionConnections implements ConnectionManager {
+ 
+   isConnecting(): boolean {
+     for (const state of this.#connectionStates.values()) {
+-      if (state === "connecting") return true
++      // "awaiting-reconnect" counts: the loop is between attempts, not given
++      // up, so a query should wait rather than report unavailable.
++      if (state === "connecting" || state === "awaiting-reconnect") return true
+     }
+     return false
+   }

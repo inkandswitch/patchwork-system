@@ -37,7 +37,10 @@ import {
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
-import { PortHubAdapter, WORKER_SUBDUCTION_SERVICE } from "./port-hub.js";
+import {
+  MessagePortTransport,
+  WORKER_SUBDUCTION_SERVICE,
+} from "./worker-link.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import {
   HANDOFF_CHANNEL,
@@ -195,11 +198,6 @@ function pushSyncState(message: SyncStateDocMessage): void {
 
 const subductionPortProvider = makePortProvider();
 
-// Tabs sync with this repo over subduction, one transport per repo port. The
-// hub exists before the repo does because ports arrive whenever a tab connects,
-// long after `subductionAdapters` is read.
-const tabHub = new PortHubAdapter({ useWeakRef: true });
-
 // Memoized so a construction retry reuses the endpoint instead of leaking one
 // per attempt.
 let subductionEndpoints: WorkerWebSocketEndpoint[] | null = null;
@@ -278,13 +276,6 @@ async function buildPlainRepo(): Promise<BuiltRepo> {
     },
     enableRemoteHeadsGossiping: true,
     subductionWebsocketEndpoints: getSubductionEndpoints(),
-    subductionAdapters: [
-      {
-        adapter: tabHub,
-        serviceName: WORKER_SUBDUCTION_SERVICE,
-        role: "accept",
-      },
-    ],
   });
   console.log("[patchwork] shared-worker subduction identity:", identity);
   return { repo, identity };
@@ -307,13 +298,6 @@ async function buildKeyhiveRepo(
     repo: {
       storage: new IndexedDBWorkerStorageAdapter(),
       subductionWebsocketEndpoints: getSubductionEndpoints(),
-      subductionAdapters: [
-        {
-          adapter: tabHub,
-          serviceName: WORKER_SUBDUCTION_SERVICE,
-          role: "accept",
-        },
-      ],
       enableRemoteHeadsGossiping: true,
     },
   });
@@ -653,31 +637,24 @@ function reviewAllResync(state: SyncState): void {
 
 // ── Tab connections ────────────────────────────────────────────────────
 // Each tab connects with a control port and opens repo MessageChannel ports
-// through it. Those ports go to the subduction hub, so tabs sync with this
-// repo over subduction whether or not keyhive is in play.
+// through it. Each of those is accepted as a subduction transport, so tabs sync
+// with this repo over subduction whether or not keyhive is in play.
 
-type RepoChannel = { drop(): void };
-type Connection = { channels: Set<RepoChannel> };
+type Connection = { transports: Set<MessagePortTransport> };
 
 async function dropConnection(connection: Connection) {
-  if (!connection.channels.size) return;
-  log(`tab gone — dropping ${connection.channels.size} repo channel(s)`);
-  for (const channel of connection.channels) channel.drop();
-  connection.channels.clear();
+  if (!connection.transports.size) return;
+  log(`tab gone — dropping ${connection.transports.size} transport(s)`);
+  for (const transport of connection.transports) transport.abort();
+  connection.transports.clear();
 }
 
 async function connectPort(port: MessagePort, connection: Connection) {
-  // The repo has to exist before its hub is worth handing a port to.
-  await getRepoHive();
-  const removePort = tabHub.addPort(port);
-  connection.channels.add({
-    drop() {
-      removePort();
-      try {
-        port.close();
-      } catch {}
-    },
-  });
+  const { repo } = await getRepoHive();
+  const transport = new MessagePortTransport(port);
+  connection.transports.add(transport);
+  const subduction = await repo.subduction;
+  await subduction.acceptTransport(transport, WORKER_SUBDUCTION_SERVICE);
 }
 
 function handleControlMessage(
@@ -758,7 +735,7 @@ function handleControlMessage(
 
 self.addEventListener("connect", (event) => {
   const controlPort = (event as MessageEvent).ports[0];
-  const connection: Connection = { channels: new Set() };
+  const connection: Connection = { transports: new Set() };
 
   controlPort.addEventListener("message", (messageEvent) => {
     handleControlMessage(messageEvent as MessageEvent, controlPort, connection);

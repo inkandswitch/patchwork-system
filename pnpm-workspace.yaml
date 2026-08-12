@@ -54,3 +54,6 @@ catalog:
 allowBuilds:
   cbor-extract: true
   esbuild: true
+
+patchedDependencies:
+  '@automerge/automerge-repo@2.6.0-subduction.47': patches/@automerge__automerge-repo@2.6.0-subduction.47.patch
