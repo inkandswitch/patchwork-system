@@ -28,7 +28,6 @@ import {
 import { resolvePath } from "@inkandswitch/patchwork-filesystem";
 
 import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
-import { MessageChannelNetworkAdapter } from "@automerge/automerge-repo-network-messagechannel";
 import { WebSocketWorkerClientAdapter } from "@automerge/automerge-repo-network-websocket";
 import {
   initializeAutomergeRepoKeyhive,
@@ -38,6 +37,7 @@ import {
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
+import { PortHubAdapter, WORKER_SUBDUCTION_SERVICE } from "./port-hub.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import {
   HANDOFF_CHANNEL,
@@ -195,6 +195,11 @@ function pushSyncState(message: SyncStateDocMessage): void {
 
 const subductionPortProvider = makePortProvider();
 
+// Tabs sync with this repo over subduction, one transport per repo port. The
+// hub exists before the repo does because ports arrive whenever a tab connects,
+// long after `subductionAdapters` is read.
+const tabHub = new PortHubAdapter({ useWeakRef: true });
+
 // Memoized so a construction retry reuses the endpoint instead of leaking one
 // per attempt.
 let subductionEndpoints: WorkerWebSocketEndpoint[] | null = null;
@@ -273,6 +278,13 @@ async function buildPlainRepo(): Promise<BuiltRepo> {
     },
     enableRemoteHeadsGossiping: true,
     subductionWebsocketEndpoints: getSubductionEndpoints(),
+    subductionAdapters: [
+      {
+        adapter: tabHub,
+        serviceName: WORKER_SUBDUCTION_SERVICE,
+        role: "accept",
+      },
+    ],
   });
   console.log("[patchwork] shared-worker subduction identity:", identity);
   return { repo, identity };
@@ -295,6 +307,13 @@ async function buildKeyhiveRepo(
     repo: {
       storage: new IndexedDBWorkerStorageAdapter(),
       subductionWebsocketEndpoints: getSubductionEndpoints(),
+      subductionAdapters: [
+        {
+          adapter: tabHub,
+          serviceName: WORKER_SUBDUCTION_SERVICE,
+          role: "accept",
+        },
+      ],
       enableRemoteHeadsGossiping: true,
     },
   });
@@ -634,80 +653,31 @@ function reviewAllResync(state: SyncState): void {
 
 // ── Tab connections ────────────────────────────────────────────────────
 // Each tab connects with a control port and opens repo MessageChannel ports
-// through it. `adapter` is what was registered with the network subsystem (the
-// MessageChannel adapter, or the keyhive wrapper around it); `mcAdapter` is
-// always the underlying MessageChannel adapter, so the port itself can be
-// disconnected.
+// through it. Those ports go to the subduction hub, so tabs sync with this
+// repo over subduction whether or not keyhive is in play.
 
-type RepoChannel = {
-  adapter: { disconnect(): void };
-  mcAdapter: MessageChannelNetworkAdapter;
-  port: MessagePort;
-};
+type RepoChannel = { drop(): void };
 type Connection = { channels: Set<RepoChannel> };
 
-function dropRepoChannel(repo: Repo, channel: RepoChannel) {
-  // removeNetworkAdapter pulls the adapter out of networkSubsystem.adapters and
-  // calls disconnect(), which for the MessageChannel adapter emits the
-  // close/peer-disconnected events that clear #adaptersByPeer.
-  try {
-    repo.networkSubsystem.removeNetworkAdapter(channel.adapter as any);
-  } catch (err) {
-    console.error("removeNetworkAdapter failed", err);
-  }
-  // On the keyhive path the registered adapter is a wrapper, so make sure the
-  // underlying port is disconnected and closed too.
-  try {
-    channel.mcAdapter.disconnect();
-  } catch {}
-  try {
-    channel.port.close();
-  } catch {}
-}
-
 async function dropConnection(connection: Connection) {
-  if (!connection.channels.size || !repoHivePromise) return;
-  const { repo } = await getRepoHive();
-  log(`tab gone — removing ${connection.channels.size} network adapter(s)`);
-  for (const channel of connection.channels) dropRepoChannel(repo, channel);
+  if (!connection.channels.size) return;
+  log(`tab gone — dropping ${connection.channels.size} repo channel(s)`);
+  for (const channel of connection.channels) channel.drop();
   connection.channels.clear();
 }
 
 async function connectPort(port: MessagePort, connection: Connection) {
-  const { hive, repo } = await getRepoHive();
-  const mcAdapter = new MessageChannelNetworkAdapter(port, {
-    useWeakRef: true,
+  // The repo has to exist before its hub is worth handing a port to.
+  await getRepoHive();
+  const removePort = tabHub.addPort(port);
+  connection.channels.add({
+    drop() {
+      removePort();
+      try {
+        port.close();
+      } catch {}
+    },
   });
-
-  if (!hive) {
-    repo.networkSubsystem.addNetworkAdapter(mcAdapter);
-    connection.channels.add({ adapter: mcAdapter, mcAdapter, port });
-    return;
-  }
-
-  const adapter = hive.createKeyhiveNetworkAdapter(mcAdapter, {
-    onlyShareWithSyncServer: false,
-    periodicallyRequestSync: false,
-    syncRequestInterval: 2000,
-  });
-
-  adapter.on("message", (msg: any) => {
-    if (msg.type !== "sync" && msg.type !== "request") return;
-    if (!msg.documentId) return;
-    const handle = repo.handles[msg.documentId];
-    if (handle && handle.state !== "unavailable") return;
-    repo.findWithProgress(`automerge:${msg.documentId}` as AutomergeUrl);
-    repo.shareConfigChanged();
-  });
-
-  (adapter as any).on("ingest-remote", () => {
-    hive.notifySameAgentKeyhiveChange();
-    (hive.networkAdapter as any).syncKeyhive?.();
-    repo.shareConfigChanged();
-  });
-
-  repo.networkSubsystem.addNetworkAdapter(adapter);
-  connection.channels.add({ adapter, mcAdapter, port });
 }
 
 function handleControlMessage(
