@@ -91,9 +91,7 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
     timer = setTimeout(
       () =>
         reject(
-          new Error(
-            `patchwork.setup: boot did not finish within ${timeout}ms`
-          )
+          new Error(`patchwork.setup: boot did not finish within ${timeout}ms`)
         ),
       timeout
     );
@@ -253,9 +251,8 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     },
 
     async create<D>(type: string, init?: (doc: D) => void) {
-      const datatype = await getRegistry<DatatypeDescription>(
-        "patchwork:datatype"
-      ).load(type);
+      const datatype =
+        await getRegistry<DatatypeDescription>("patchwork:datatype").load(type);
       if (!datatype) {
         throw new Error(
           `patchwork.create: no datatype registered for "${type}"`
