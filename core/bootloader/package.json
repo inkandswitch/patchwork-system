@@ -42,6 +42,10 @@
       "import": "./dist/automerge-worker.js",
       "types": "./dist/automerge-worker.d.ts"
     },
+    "./subduction-worker": {
+      "import": "./dist/subduction-worker.js",
+      "types": "./dist/subduction-worker.d.ts"
+    },
     "./module-loader": {
       "import": "./dist/module-loader.js",
       "types": "./dist/module-loader.d.ts"

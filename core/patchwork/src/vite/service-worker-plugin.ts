@@ -9,8 +9,7 @@ import { builtins } from "./importmap-plugin.js";
 // own node_modules by bare specifier.
 const self = fileURLToPath(import.meta.url);
 
-// The service worker and the automerge shared worker are emitted as their
-// own chunks. Their heavy imports are marked external and resolved to
+// The service worker and the shared workers are emitted as their own chunks. Their heavy imports are marked external and resolved to
 // /packages/... URLs (both workers are created with type:"module", so the
 // browser fetches those as regular network requests).
 export const workers = [
@@ -21,6 +20,10 @@ export const workers = [
   {
     specifier: "@inkandswitch/patchwork-bootloader/automerge-worker",
     fileName: "automerge-worker.js",
+  },
+  {
+    specifier: "@inkandswitch/patchwork-bootloader/subduction-worker",
+    fileName: "subduction-worker.js",
   },
   {
     specifier: "@inkandswitch/patchwork-bootloader/module-loader-worker",
