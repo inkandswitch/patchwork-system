@@ -1,14 +1,17 @@
 import {
   initializeWasm,
-  MessageChannelNetworkAdapter,
   Repo,
   type AutomergeUrl,
 } from "@automerge/vanillajs/slim";
 import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
+import {
+  PortHubAdapter,
+  WORKER_SUBDUCTION_SERVICE,
+} from "@inkandswitch/patchwork-bootloader/port-hub";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import {
   initKeyhiveWasm,
-  initializeLegacyAutomergeRepoKeyhive,
+  initializeAutomergeRepoKeyhive,
   type AutomergeRepoKeyhiveBase,
   type SyncServerSelection,
 } from "@automerge/automerge-repo-keyhive";
@@ -53,47 +56,59 @@ export function initWasm(): Promise<void> {
   return wasmReady;
 }
 
-export async function createRepo(
-  workerAdapter: MessageChannelNetworkAdapter
-): Promise<{
+export type TabRepo = {
   repo: Repo;
   hive?: AutomergeRepoKeyhiveBase;
   signerIdentity?: SignerIdentity;
-}> {
+  /** Wire the repo onto a port from a freshly recreated automerge worker. */
+  rewire(port: MessagePort): void;
+  /** Resolves once the worker has answered on some port. */
+  linked(): Promise<void>;
+};
+
+export async function createRepo(workerPort: MessagePort): Promise<TabRepo> {
+  // The tab is a storageless node: the worker holds the IndexedDB and the tab
+  // syncs against it over subduction, one transport per repo port. The hub
+  // outlives any single port, so a recreated worker just hands over a new one.
+  const link = new PortHubAdapter();
+  let dropWorkerPort = link.addPort(workerPort);
+  const subductionAdapters = [
+    {
+      adapter: link,
+      serviceName: WORKER_SUBDUCTION_SERVICE,
+      role: "connect" as const,
+    },
+  ];
+  const linked = () => link.whenReady();
+  const rewire = (port: MessagePort) => {
+    dropWorkerPort();
+    dropWorkerPort = link.addPort(port);
+  };
+
   if (syncServer.keyhive) {
     log("setting up keyhive");
     initKeyhiveWasm();
-    const { hive, repo } = await initializeLegacyAutomergeRepoKeyhive({
+    const { hive, repo } = await initializeAutomergeRepoKeyhive({
       createRepo: (repoConfig) => new Repo(repoConfig),
       storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
-      networkAdapter: workerAdapter,
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
-      onlyShareWithSyncServer: false,
       // ARK selects the relay via `syncServer`, defaulting to "subduction".
       syncServer: syncServer.keyhive,
-      repo: {
-        storage: new IndexedDBWorkerStorageAdapter(),
-        enableRemoteHeadsGossiping: true,
-      },
+      repo: { subductionAdapters },
     });
     log("keyhive setup complete");
-    return { repo, hive };
+    return { repo, hive, linked, rewire };
   }
 
-  // An explicit signer, rather than the Repo's internal default, so the tab's
-  // identity can be exposed on window.patchwork. The tab never connects via
-  // Subduction, so this id never goes on the wire.
+  // The signer is explicit rather than the Repo's internal default so the
+  // identity the tab presents in the subduction handshake can be shown on
+  // window.patchwork. Keyhive supplies its own.
   const signer = new MemorySigner();
   const repo = new Repo({
-    network: [workerAdapter],
-    storage: new IndexedDBWorkerStorageAdapter(),
     signer,
-    async sharePolicy(peerId) {
-      return peerId.includes("automerge-worker");
-    },
-    enableRemoteHeadsGossiping: true,
+    subductionAdapters,
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
   });
@@ -106,7 +121,7 @@ export async function createRepo(
     ).toHex(),
   };
   log("repo created, tab subduction identity:", signerIdentity);
-  return { repo, signerIdentity };
+  return { repo, signerIdentity, linked, rewire };
 }
 
 /**
@@ -131,23 +146,4 @@ export function firstRepoPort(
       resolve(port);
     });
   });
-}
-
-/** Drop the adapter sitting on the dead worker port, leaving `keep` in place. */
-export function removeAdapterFor(
-  repo: Repo,
-  stale: MessageChannelNetworkAdapter,
-  keep: unknown
-): void {
-  for (const adapter of [...repo.networkSubsystem.adapters]) {
-    if (adapter === keep) continue;
-    // The keyhive wrapper keeps the wrapped adapter on `.networkAdapter`.
-    const base = (adapter as any).networkAdapter ?? adapter;
-    if (base !== stale) continue;
-    try {
-      repo.networkSubsystem.removeNetworkAdapter(adapter as any);
-    } catch (err) {
-      console.error("failed to remove stale worker network adapter", err);
-    }
-  }
 }
