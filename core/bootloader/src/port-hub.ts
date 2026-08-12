@@ -61,6 +61,11 @@ export class PortHubAdapter extends NetworkAdapter {
     this.#children.add(child);
 
     child.on("peer-candidate", (payload) => {
+      // A MessageChannel adapter announces on both `arrive` and `welcome`, so
+      // each end sees its peer twice. The network subsystem dedupes by peerId;
+      // subduction opens a transport per candidate, and a second handshake on
+      // the same peer key tears the first connection down.
+      if (this.#byPeer.get(payload.peerId) === child) return;
       this.#byPeer.set(payload.peerId, child);
       this.#peered.resolve();
       this.emit("peer-candidate", payload);
