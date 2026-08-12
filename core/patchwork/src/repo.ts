@@ -5,10 +5,7 @@ import {
   type AutomergeUrl,
 } from "@automerge/vanillajs/slim";
 import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
-import {
-  PortHubAdapter,
-  WORKER_SUBDUCTION_SERVICE,
-} from "@inkandswitch/patchwork-bootloader/port-hub";
+import { WorkerSubductionEndpoint } from "@inkandswitch/patchwork-bootloader/worker-link";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import {
   initKeyhiveWasm,
@@ -20,7 +17,6 @@ import {
 // @ts-ignore — initSync is a wasm-bindgen runtime helper not in the .d.ts
 import { initSync as initSubductionSync } from "@automerge/automerge-subduction/slim";
 import { MemorySigner } from "@automerge/automerge-subduction/slim";
-import setupServiceWorker from "@inkandswitch/patchwork-bootloader";
 import {
   keyhiveStorageName,
   storagePrefix,
@@ -57,21 +53,25 @@ export function initWasm(): Promise<void> {
   return wasmReady;
 }
 
+/** The bit of the bootloader's automerge worker a Repo needs. */
+export type WorkerLink = {
+  openPort: () => Promise<MessagePort>;
+  onRecreated: (listener: () => void) => () => void;
+};
+
 export type TabRepo = {
   repo: Repo;
   hive?: AutomergeRepoKeyhive;
   signerIdentity?: SignerIdentity;
-  /** Wire the repo onto a port from a freshly recreated automerge worker. */
-  rewire(port: MessagePort): void;
-  /** Resolves once the worker has answered on some port. */
-  linked(): Promise<void>;
 };
 
-export async function createRepo(workerPort: MessagePort): Promise<TabRepo> {
+export async function createRepo(worker: WorkerLink): Promise<TabRepo> {
   if (syncServer.keyhive) {
     log("setting up keyhive");
     initKeyhiveWasm();
-    let workerAdapter = new MessageChannelNetworkAdapter(workerPort);
+    let workerAdapter = new MessageChannelNetworkAdapter(
+      await worker.openPort()
+    );
     const { hive, repo } = await initializeAutomergeRepoKeyhiveWithRepo({
       createRepo: (repoConfig) => new Repo(repoConfig),
       storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
@@ -88,25 +88,22 @@ export async function createRepo(workerPort: MessagePort): Promise<TabRepo> {
       },
     });
     log("keyhive setup complete");
-    return {
-      repo,
-      hive,
-      linked: async () => void (await repo.networkSubsystem.whenReady()),
-      rewire(port) {
-        const fresh = new MessageChannelNetworkAdapter(port);
-        // Mirror the boot wiring: a keyhive repo talks to the worker through a
-        // keyhive adapter wrapped around the message channel.
-        const registered = hive.createKeyhiveNetworkAdapter(
-          fresh,
-          false,
-          false,
-          2000
-        );
-        repo.networkSubsystem.addNetworkAdapter(registered as any);
-        removeAdapterFor(repo, workerAdapter, registered);
-        workerAdapter = fresh;
-      },
-    };
+    // A keyhive tab keeps classic sync, so it re-wires itself onto a fresh port
+    // when the worker is replaced.
+    worker.onRecreated(async () => {
+      const fresh = new MessageChannelNetworkAdapter(await worker.openPort());
+      const registered = hive.createKeyhiveNetworkAdapter(
+        fresh,
+        false,
+        false,
+        2000
+      );
+      repo.networkSubsystem.addNetworkAdapter(registered as any);
+      removeAdapterFor(repo, workerAdapter, registered);
+      workerAdapter = fresh;
+    });
+    await repo.networkSubsystem.whenReady();
+    return { repo, hive };
   }
 
   // The tab is a storageless node: the worker holds the IndexedDB and the tab
@@ -114,17 +111,13 @@ export async function createRepo(workerPort: MessagePort): Promise<TabRepo> {
   // is explicit rather than the Repo's internal default so the identity the tab
   // presents in that handshake can be shown on window.patchwork.
   const signer = new MemorySigner();
-  const link = new PortHubAdapter();
-  let dropWorkerPort = link.addPort(workerPort);
+  const endpoint = new WorkerSubductionEndpoint(() => worker.openPort());
+  // A dead SharedWorker leaves its ports silent rather than closed, so the
+  // reconnect loop is told to give up on the old one.
+  worker.onRecreated(() => endpoint.reset());
   const repo = new Repo({
     signer,
-    subductionAdapters: [
-      {
-        adapter: link,
-        serviceName: WORKER_SUBDUCTION_SERVICE,
-        role: "connect",
-      },
-    ],
+    subductionWebsocketEndpoints: [endpoint],
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
   });
@@ -137,39 +130,7 @@ export async function createRepo(workerPort: MessagePort): Promise<TabRepo> {
     ).toHex(),
   };
   log("repo created, tab subduction identity:", signerIdentity);
-  return {
-    repo,
-    signerIdentity,
-    linked: () => link.whenReady(),
-    rewire(port) {
-      dropWorkerPort();
-      dropWorkerPort = link.addPort(port);
-    },
-  };
-}
-
-/**
- * Resolve with the first repo port the worker delivers, calling `onRenewed` for
- * every later one.
- *
- * subscribeToRepoChannel is deliberately not awaited: it resolves only after
- * the boot channel's port-ready handshake, which can take its full 30s timeout
- * against a stranded worker connection. Boot blocks on the first *delivered*
- * port instead — if the boot channel stalls, worker recovery hands the listener
- * a good port long before that timeout.
- */
-export function firstRepoPort(
-  sw: Awaited<ReturnType<typeof setupServiceWorker>>,
-  onRenewed: (port: MessagePort) => void
-): Promise<MessagePort> {
-  return new Promise<MessagePort>((resolve) => {
-    let seen = false;
-    void sw.subscribeToRepoChannel((port) => {
-      if (seen) return onRenewed(port);
-      seen = true;
-      resolve(port);
-    });
-  });
+  return { repo, signerIdentity };
 }
 
 /** Drop the adapter sitting on the dead worker port, leaving `keep` in place. */

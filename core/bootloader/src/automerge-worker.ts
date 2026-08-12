@@ -38,7 +38,10 @@ import {
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
-import { PortHubAdapter, WORKER_SUBDUCTION_SERVICE } from "./port-hub.js";
+import {
+  MessagePortTransport,
+  WORKER_SUBDUCTION_SERVICE,
+} from "./worker-link.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import {
   HANDOFF_CHANNEL,
@@ -196,11 +199,6 @@ function pushSyncState(message: SyncStateDocMessage): void {
 
 const subductionPortProvider = makePortProvider();
 
-// Tabs sync with this repo over subduction, one transport per repo port. The
-// hub exists before the repo does because ports arrive whenever a tab connects,
-// long after `subductionAdapters` is read.
-const tabHub = new PortHubAdapter({ useWeakRef: true });
-
 // Memoized so a construction retry reuses the endpoint instead of leaking one
 // per attempt.
 let subductionEndpoints: WorkerWebSocketEndpoint[] | null = null;
@@ -279,13 +277,6 @@ async function buildPlainRepo(): Promise<BuiltRepo> {
     },
     enableRemoteHeadsGossiping: true,
     subductionWebsocketEndpoints: getSubductionEndpoints(),
-    subductionAdapters: [
-      {
-        adapter: tabHub,
-        serviceName: WORKER_SUBDUCTION_SERVICE,
-        role: "accept",
-      },
-    ],
   });
   console.log("[patchwork] shared-worker subduction identity:", identity);
   return { repo, identity };
@@ -647,9 +638,9 @@ function reviewAllResync(state: SyncState): void {
 
 // ── Tab connections ────────────────────────────────────────────────────
 // Each tab connects with a control port and opens repo MessageChannel ports
-// through it. A plain repo hands those ports to the subduction hub, so the tab
-// syncs over subduction. A keyhive repo keeps classic sync, with the keyhive
-// wrapper registered in the network subsystem.
+// through it. A plain repo accepts each port as a subduction transport. A
+// keyhive repo keeps classic sync, with the keyhive wrapper registered in the
+// network subsystem.
 
 type RepoChannel = { drop(): void };
 type Connection = { channels: Set<RepoChannel> };
@@ -665,15 +656,10 @@ async function connectPort(port: MessagePort, connection: Connection) {
   const { hive, repo } = await getRepoHive();
 
   if (!hive) {
-    const removePort = tabHub.addPort(port);
-    connection.channels.add({
-      drop() {
-        removePort();
-        try {
-          port.close();
-        } catch {}
-      },
-    });
+    const transport = new MessagePortTransport(port);
+    connection.channels.add({ drop: () => transport.abort() });
+    const subduction = await repo.subduction;
+    await subduction.acceptTransport(transport, WORKER_SUBDUCTION_SERVICE);
     return;
   }
 

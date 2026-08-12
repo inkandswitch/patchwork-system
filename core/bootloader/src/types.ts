@@ -205,20 +205,18 @@ export type SetupServiceWorkerOptions = {
   workerPath?: string;
 };
 
-export type ServiceWorkerRepoChannelListener = (
-  port: MessagePort
-) => void | Promise<void>;
-
 export type SetupServiceWorkerResult = {
   shared?: SharedWorker;
   kill?: () => void;
   /** Open a classic Automerge sync WebSocket from the automerge worker. */
   connectClassicSync: (server?: string) => Promise<void>;
-  subscribeToRepoChannel: (
-    listener: ServiceWorkerRepoChannelListener
-  ) => Promise<() => void>;
-  /** Open a fresh repo sync port to the automerge worker (dev console). */
-  getRepoChannel: () => MessagePort;
+  /** Open a repo sync port to the automerge worker, once it says it is ready. */
+  openPort: () => Promise<MessagePort>;
+  /**
+   * Watch for the automerge worker dying and being replaced. Ports held against
+   * the old instance are stranded; open a fresh one.
+   */
+  onRecreated: (listener: () => void) => () => void;
   /**
    * Watch one document's sync heads (this tab's own and each Subduction peer's,
    * as the worker learns them). Calls `listener` on every update for that doc,

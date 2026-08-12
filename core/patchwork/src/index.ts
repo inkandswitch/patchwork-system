@@ -52,7 +52,7 @@ import type {
   PatchworkOptions,
   SignerIdentity,
 } from "./types.js";
-import { createRepo, firstRepoPort, initWasm } from "./repo.js";
+import { createRepo, initWasm } from "./repo.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 
@@ -124,37 +124,13 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   let hive: AutomergeRepoKeyhive | undefined;
   let repo: Repo;
   let signerIdentity: SignerIdentity | undefined;
-  // Called with a fresh port when the automerge worker dies and is recreated.
-  // Assigned once the repo exists.
-  let onWorkerPortRenewed: ((port: MessagePort) => void) | undefined;
-  // Resolves once the worker has answered on the repo port. A provided repo
-  // brings its own network, so there's nothing here to wait for.
-  let linked: Promise<void> = Promise.resolve();
 
   if (options.repo) {
     log("using provided Repo");
     repo = options.repo;
     hive = options.hive;
   } else {
-    const workerPort = await firstRepoPort(sw, (port) => {
-      if (onWorkerPortRenewed) onWorkerPortRenewed(port);
-      else {
-        console.warn(
-          "automerge worker port renewed before the repo existed; dropping it"
-        );
-      }
-    });
-
-    const tab = await createRepo(workerPort);
-    ({ repo, hive, signerIdentity } = tab);
-    linked = tab.linked();
-
-    // The worker was recreated with cold state: wire the repo onto the fresh
-    // port and drop whatever is stranded on the dead one.
-    onWorkerPortRenewed = (port) => {
-      tab.rewire(port);
-      lifecycleLog("repo re-wired to the recreated automerge worker");
-    };
+    ({ repo, hive, signerIdentity } = await createRepo(sw));
   }
 
   // Dev-console / tool-runtime globals (e2e and loaded tools read these). The
@@ -166,8 +142,6 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     AutomergeRepo as typeof import("@automerge/automerge-repo");
   if (hive) window.hive = hive;
 
-  await linked;
-  log("worker link ready");
   (hive?.networkAdapter as any)?.syncKeyhive?.();
 
   registerRepoProviderElement(repo as any);
@@ -246,7 +220,8 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     plugins,
     sw: {
       connectClassicSync: sw.connectClassicSync,
-      subscribeToRepoChannel: sw.subscribeToRepoChannel,
+      openPort: sw.openPort,
+      onRecreated: sw.onRecreated,
       subscribeSyncState: sw.subscribeSyncState,
     },
 
