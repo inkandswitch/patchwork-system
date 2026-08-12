@@ -40,8 +40,7 @@ export interface SyncStateWhoAmIMessage {
 // now. Per-document heads are addressed to subscribers over the control port
 // instead (see SyncStateDocMessage) rather than fanned out to every tab.
 export type SyncStateBroadcast =
-  | SyncStateConnectionMessage
-  | SyncStateWhoAmIMessage;
+  SyncStateConnectionMessage | SyncStateWhoAmIMessage;
 
 /**
  * Tab → worker: please replay the current global sync signals (whoami +
@@ -180,9 +179,7 @@ export interface HandoffAbortMessage {
 }
 
 export type HandoffReplyMessage =
-  | HandoffCachedMessage
-  | HandoffResponseMessage
-  | HandoffAbortMessage;
+  HandoffCachedMessage | HandoffResponseMessage | HandoffAbortMessage;
 
 /**
  * Automerge worker → world: broadcast once on startup so the service worker
