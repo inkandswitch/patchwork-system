@@ -48,8 +48,10 @@
     "test": "vitest run"
   },
   "devDependencies": {
+    "@automerge/automerge": "catalog:",
     "@automerge/automerge-repo": "catalog:",
     "@automerge/automerge-repo-keyhive": "catalog:",
+    "@automerge/automerge-subduction": "catalog:",
     "@inkandswitch/patchwork-filesystem": "workspace:^",
     "@inkandswitch/patchwork-plugins": "workspace:^",
     "@inkandswitch/patchwork-providers": "workspace:^",
