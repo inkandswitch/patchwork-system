@@ -3,4 +3,4 @@
 "@inkandswitch/patchwork-bootloader": patch
 ---
 
-Patchwork loads persisted Subduction data before opening its sync connection, with an option to opt out.
+Patchwork loads persisted Subduction data before opening its sync connection, with a `syncServers.defer` option to opt out.

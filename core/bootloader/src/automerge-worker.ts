@@ -57,7 +57,7 @@ import {
 declare const __SYNC_SERVER__: {
   url: string;
   keyhive?: SyncServerSelection;
-  connectSubductionAfterStorageLoad?: boolean;
+  defer?: boolean;
 };
 
 const syncServer =
@@ -197,7 +197,7 @@ function pushSyncState(message: SyncStateDocMessage): void {
 
 const subductionPortProvider = makePortProvider();
 let resolveSubductionStorageLoad: (() => void) | undefined;
-const subductionStorageLoaded = syncServer.connectSubductionAfterStorageLoad
+const subductionStorageLoaded = syncServer.defer
   ? new Promise<void>((resolve) => {
       resolveSubductionStorageLoad = resolve;
     })

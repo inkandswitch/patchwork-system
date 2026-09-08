@@ -49,7 +49,7 @@ export type PatchworkSyncServersOptions = {
   /** wss:// URL for the legacy automerge-repo sync-server channel (connected on demand via connectClassicSync). Default: wss://sync3.automerge.org. Pass false to skip its preconnect hint. */
   classic?: string | false;
   /** Wait for persisted Subduction data before opening the primary sync connection. Defaults to true. */
-  connectSubductionAfterStorageLoad?: boolean;
+  defer?: boolean;
 } & PatchworkPrimarySyncServerOptions;
 
 export const DEFAULT_TITLE = "Patchwork";
