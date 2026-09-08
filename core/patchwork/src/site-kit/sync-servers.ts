@@ -14,6 +14,7 @@ export const DEFAULT_SYNC_SERVERS = {
 export function resolvePrimarySyncServer(options: PatchworkSiteOptions): {
   url: string;
   keyhive?: SyncServerSelection;
+  connectSubductionAfterStorageLoad?: boolean;
 } {
   const servers = options.syncServers || undefined;
   if (servers?.keyhive) {
@@ -21,16 +22,22 @@ export function resolvePrimarySyncServer(options: PatchworkSiteOptions): {
       return {
         keyhive: servers.keyhive,
         url: DEFAULT_SYNC_SERVERS[servers.keyhive],
+        connectSubductionAfterStorageLoad:
+          servers.connectSubductionAfterStorageLoad ?? true,
       };
     }
     const { url, ...identity } = servers.keyhive;
     return {
       keyhive: identity,
       url,
+      connectSubductionAfterStorageLoad:
+        servers.connectSubductionAfterStorageLoad ?? true,
     };
   }
   return {
     url: servers?.subduction ?? DEFAULT_SYNC_SERVERS.subduction,
+    connectSubductionAfterStorageLoad:
+      servers?.connectSubductionAfterStorageLoad ?? true,
   };
 }
 
@@ -47,7 +54,9 @@ export function resolveSyncServers(options: PatchworkSiteOptions): string[] {
   if (options.syncServers === false) return [];
   const primary = resolvePrimarySyncServer(options);
   const classic = options.syncServers?.classic ?? DEFAULT_SYNC_SERVERS.classic;
-  const origins = [primary.url];
+  const origins = primary.connectSubductionAfterStorageLoad
+    ? []
+    : [primary.url];
   if (classic) origins.push(classic);
   return origins.map(wsToHttpOrigin);
 }

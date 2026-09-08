@@ -29,6 +29,7 @@ const log = debug("patchwork:setup:repo");
 declare const __SYNC_SERVER__: {
   url: string;
   keyhive?: SyncServerSelection;
+  connectSubductionAfterStorageLoad?: boolean;
 };
 const syncServer =
   typeof __SYNC_SERVER__ !== "undefined"

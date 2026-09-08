@@ -39,6 +39,7 @@ import {
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
+import { DeferredWebSocketEndpoint } from "./deferred-websocket-endpoint.js";
 import {
   HANDOFF_CHANNEL,
   SYNCSTATE_CHANNEL,
@@ -56,6 +57,7 @@ import {
 declare const __SYNC_SERVER__: {
   url: string;
   keyhive?: SyncServerSelection;
+  connectSubductionAfterStorageLoad?: boolean;
 };
 
 const syncServer =
@@ -194,15 +196,34 @@ function pushSyncState(message: SyncStateDocMessage): void {
 }
 
 const subductionPortProvider = makePortProvider();
+let resolveSubductionStorageLoad: (() => void) | undefined;
+const subductionStorageLoaded = syncServer.connectSubductionAfterStorageLoad
+  ? new Promise<void>((resolve) => {
+      resolveSubductionStorageLoad = resolve;
+    })
+  : undefined;
 
 // Memoized so a construction retry reuses the endpoint instead of leaking one
 // per attempt.
-let subductionEndpoints: WorkerWebSocketEndpoint[] | null = null;
-function getSubductionEndpoints(): WorkerWebSocketEndpoint[] {
+type SubductionEndpoint = {
+  readonly url: string;
+  connect(): ReturnType<WorkerWebSocketEndpoint["connect"]>;
+  shutdown?(): void;
+};
+
+let subductionEndpoints: SubductionEndpoint[] | null = null;
+function getSubductionEndpoints(): SubductionEndpoint[] {
   return (subductionEndpoints ??= [
-    new WorkerWebSocketEndpoint(syncServer.url, {
-      worker: subductionPortProvider.source,
-    }),
+    (subductionStorageLoaded
+      ? new DeferredWebSocketEndpoint(
+          new WorkerWebSocketEndpoint(syncServer.url, {
+            worker: subductionPortProvider.source,
+          }),
+          subductionStorageLoaded
+        )
+      : new WorkerWebSocketEndpoint(syncServer.url, {
+          worker: subductionPortProvider.source,
+        })),
   ]);
 }
 
@@ -236,6 +257,20 @@ async function setUpRepoHive(): Promise<RepoHive> {
   const built: BuiltRepo = syncServer.keyhive
     ? await buildKeyhiveRepo(syncServer.keyhive)
     : await buildPlainRepo();
+
+  if (resolveSubductionStorageLoad) {
+    const release = resolveSubductionStorageLoad;
+    resolveSubductionStorageLoad = undefined;
+    void (async () => {
+      const subduction = await built.repo.subduction;
+      await Promise.all(
+        (await subduction.sedimentreeIds()).map((id) => subduction.getBlobs(id))
+      );
+      log("subduction storage loaded");
+    })()
+      .catch((error) => log("subduction storage load failed", error))
+      .finally(release);
+  }
 
   (self as any).repo = built.repo;
   if (built.hive) (self as any).hive = built.hive;
