@@ -1,5 +1,5 @@
 import type { AutomergeUrl, Repo } from "@automerge/automerge-repo";
-import type { initializeAutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import {
   getRegistry,
   isLoadablePlugin,
@@ -17,10 +17,6 @@ import { docIdFromAutomergeUrl } from "@automerge/automerge-repo-keyhive";
 import debug from "debug";
 
 const log = debug("patchwork:elements:patchwork-view");
-
-type AutomergeRepoKeyhive = Awaited<
-  ReturnType<typeof initializeAutomergeRepoKeyhive>
->;
 
 /**
  * A component receives the element it is mounted on plus the realm-local base
