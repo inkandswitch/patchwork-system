@@ -1,6 +1,7 @@
-import type { Repo } from "@automerge/automerge-repo";
+import { Repo } from "@automerge/automerge-repo";
 import { getRegistry } from "@inkandswitch/patchwork-plugins";
-import { beforeEach, describe, expect, it } from "vitest";
+import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   registerPatchworkViewElement,
@@ -8,6 +9,7 @@ import {
 } from "../src/patchwork-view.js";
 
 const registry = getRegistry<ComponentDescription>("patchwork:component");
+const toolRegistry = getRegistry("patchwork:tool");
 
 type Counters = { mounts: number; cleanups: number };
 
@@ -92,5 +94,88 @@ describe("patchwork-view (component mode)", () => {
     expect(firstCounters.cleanups).toBe(1);
     expect(unmounts).toBe(1);
     expect(secondCounters.mounts).toBe(1);
+  });
+});
+
+// A `supportedDatatypes: "*"` tool (the raw viewer) matches every doc, so it is
+// what a doc with no editor of its own falls back to. The registry is global, so
+// tests take it in turns: `afterEach` unregisters, or the previous test's
+// wildcard would be the one a later fallback picks.
+const registeredTools: string[] = [];
+
+function registerWildcardTool(): Counters {
+  const id = `test-wildcard-${++seq}`;
+  const counters: Counters = { mounts: 0, cleanups: 0 };
+  const render = () => {
+    counters.mounts++;
+    return () => {
+      counters.cleanups++;
+    };
+  };
+  toolRegistry.register(
+    {
+      id,
+      type: "patchwork:tool",
+      name: id,
+      supportedDatatypes: "*",
+      load: async () => render,
+      module: render,
+    } as never,
+    `test://${id}`
+  );
+  registeredTools.push(id);
+  return counters;
+}
+
+describe("patchwork-view (legacy mode)", () => {
+  const repo = new Repo({});
+
+  beforeEach(() => {
+    registerPatchworkViewElement({ name: "patchwork-view-legacy", repo });
+    // The overlay shim resolves a doc by asking an ancestor for its handle
+    // descriptor, so a view outside a provider subtree never resolves.
+    registerRepoProviderElement(repo);
+    document.body.replaceChildren();
+  });
+
+  afterEach(() => {
+    for (const id of registeredTools) toolRegistry.remove(id);
+    registeredTools.length = 0;
+  });
+
+  function mount(doc: unknown) {
+    const handle = repo.create(doc);
+    const provider = document.createElement("repo-provider");
+    const view = document.createElement("patchwork-view-legacy");
+    view.setAttribute("doc-url", handle.url);
+    provider.append(view);
+    document.body.append(provider);
+    return view;
+  }
+
+  it("offers a suggested package instead of the wildcard stopgap", async () => {
+    const raw = registerWildcardTool();
+
+    const view = mount({
+      "@patchwork": {
+        type: "test-datatype",
+        suggestedImportUrl: "http://example.invalid/pkg.js",
+      },
+    });
+    await settle();
+
+    expect(raw.mounts).toBe(0);
+    const toast = view.querySelector('[role="status"]');
+    expect(toast?.textContent).toContain("This document suggests a package");
+    expect(toast?.querySelector("button.pw-error__load")).toBeTruthy();
+  });
+
+  it("still mounts the wildcard stopgap when the doc suggests nothing", async () => {
+    const raw = registerWildcardTool();
+
+    mount({ "@patchwork": { type: "test-datatype" } });
+    await settle();
+
+    expect(raw.mounts).toBe(1);
   });
 });
