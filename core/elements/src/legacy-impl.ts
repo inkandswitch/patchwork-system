@@ -22,7 +22,7 @@ import {
 import debug from "debug";
 import {
   docIdFromAutomergeUrl,
-  type initializeAutomergeRepoKeyhive,
+  type AutomergeRepoKeyhive,
 } from "@automerge/automerge-repo-keyhive";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 
@@ -41,10 +41,6 @@ function isWildcardOnlyMatch(
   const list = datatypes === "*" ? ["*"] : datatypes;
   return list.includes("*") && (type === undefined || !list.includes(type));
 }
-
-type AutomergeRepoKeyhive = Awaited<
-  ReturnType<typeof initializeAutomergeRepoKeyhive>
->;
 
 const State = {
   none: "none",

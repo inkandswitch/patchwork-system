@@ -20,7 +20,6 @@
 import {
   type AutomergeUrl,
   type DocHandle,
-  MessageChannelNetworkAdapter,
   Repo,
 } from "@automerge/vanillajs/slim";
 import * as Automerge from "@automerge/automerge/slim";
@@ -53,12 +52,7 @@ import type {
   PatchworkOptions,
   SignerIdentity,
 } from "./types.js";
-import {
-  createRepo,
-  firstRepoPort,
-  initWasm,
-  removeAdapterFor,
-} from "./repo.js";
+import { createRepo, initWasm } from "./repo.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 
@@ -97,9 +91,7 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
     timer = setTimeout(
       () =>
         reject(
-          new Error(
-            `patchwork.setup: boot did not finish within ${timeout}ms`
-          )
+          new Error(`patchwork.setup: boot did not finish within ${timeout}ms`)
         ),
       timeout
     );
@@ -132,42 +124,13 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   let hive: AutomergeRepoKeyhive | undefined;
   let repo: Repo;
   let signerIdentity: SignerIdentity | undefined;
-  // Called with a fresh port when the automerge worker dies and is recreated.
-  // Assigned once the repo exists.
-  let onWorkerPortRenewed: ((port: MessagePort) => void) | undefined;
 
   if (options.repo) {
     log("using provided Repo");
     repo = options.repo;
     hive = options.hive;
   } else {
-    const workerPort = await firstRepoPort(sw, (port) => {
-      if (onWorkerPortRenewed) onWorkerPortRenewed(port);
-      else {
-        console.warn(
-          "automerge worker port renewed before the repo existed; dropping it"
-        );
-      }
-    });
-
-    let workerAdapter = new MessageChannelNetworkAdapter(workerPort);
-    ({ repo, hive, signerIdentity } = await createRepo(workerAdapter));
-
-    // The worker was recreated with cold state: wire the repo onto the fresh
-    // port and drop the adapter stranded on the dead one.
-    const bootHive = hive;
-    onWorkerPortRenewed = (port) => {
-      const fresh = new MessageChannelNetworkAdapter(port);
-      // Mirror the boot wiring: a keyhive repo talks to the worker through a
-      // keyhive adapter wrapped around the message channel.
-      const registered = bootHive
-        ? bootHive.createKeyhiveNetworkAdapter(fresh, false, false, 2000)
-        : fresh;
-      repo.networkSubsystem.addNetworkAdapter(registered as any);
-      removeAdapterFor(repo, workerAdapter, registered);
-      workerAdapter = fresh;
-      lifecycleLog("repo re-wired to the recreated automerge worker");
-    };
+    ({ repo, hive, signerIdentity } = await createRepo(sw));
   }
 
   // Dev-console / tool-runtime globals (e2e and loaded tools read these). The
@@ -179,8 +142,6 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     AutomergeRepo as typeof import("@automerge/automerge-repo");
   if (hive) window.hive = hive;
 
-  await repo.networkSubsystem.whenReady();
-  log("networkSubsystem ready");
   (hive?.networkAdapter as any)?.syncKeyhive?.();
 
   registerRepoProviderElement(repo as any);
@@ -259,14 +220,14 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     plugins,
     sw: {
       connectClassicSync: sw.connectClassicSync,
-      subscribeToRepoChannel: sw.subscribeToRepoChannel,
+      openPort: sw.openPort,
+      onRecreated: sw.onRecreated,
       subscribeSyncState: sw.subscribeSyncState,
     },
 
     async create<D>(type: string, init?: (doc: D) => void) {
-      const datatype = await getRegistry<DatatypeDescription>(
-        "patchwork:datatype"
-      ).load(type);
+      const datatype =
+        await getRegistry<DatatypeDescription>("patchwork:datatype").load(type);
       if (!datatype) {
         throw new Error(
           `patchwork.create: no datatype registered for "${type}"`

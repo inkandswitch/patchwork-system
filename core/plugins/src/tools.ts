@@ -10,10 +10,7 @@ import {
 } from "@inkandswitch/patchwork-filesystem";
 import { getRegistry } from "./registry/index.js";
 
-import type { initializeAutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-type AutomergeRepoKeyhive = Awaited<
-  ReturnType<typeof initializeAutomergeRepoKeyhive>
->;
+import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 export type ToolImplementation<T = unknown> = ToolRender<T>;
 

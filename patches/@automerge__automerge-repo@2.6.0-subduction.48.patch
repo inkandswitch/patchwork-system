@@ -1,0 +1,69 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index 1ca836a0b386a69c63e0fa2f655b9f78d5dfe508..20159edec16bc7d67e79ec41359bfd396399757f 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -30,6 +30,8 @@ export { isValidAutomergeUrl, isValidDocumentId, parseAutomergeUrl, stringifyAut
+ export type { ParsedAutomergeUrl, UrlOptions } from "./AutomergeUrl.js";
+ export { Repo } from "./Repo.js";
+ export { initSubduction } from "./initSubduction.js";
++export { SubductionStorageBridge } from "./subduction/storage.js";
++export { toDocumentId, toSedimentreeId } from "./subduction/helpers.js";
+ export { makeLogger, resetLoggerFactory, setLoggerFactory } from "./Logger.js";
+ export type { Logger, LoggerFactory } from "./Logger.js";
+ export { Presence } from "./presence/Presence.js";
+diff --git a/dist/index.js b/dist/index.js
+index 07c1a138fa618dd1f0538a490519ad5b2cf85f11..e12d141b953938917a191cabb7deccd31450d2c8 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -29,6 +29,8 @@ export { DocHandle } from "./DocHandle.js";
+ export { isValidAutomergeUrl, isValidDocumentId, parseAutomergeUrl, stringifyAutomergeUrl, interpretAsDocumentId, documentIdToBinary, generateAutomergeUrl, encodeHeads, decodeHeads, } from "./AutomergeUrl.js";
+ export { Repo } from "./Repo.js";
+ export { initSubduction } from "./initSubduction.js";
++export { SubductionStorageBridge } from "./subduction/storage.js";
++export { toDocumentId, toSedimentreeId } from "./subduction/helpers.js";
+ export { makeLogger, resetLoggerFactory, setLoggerFactory } from "./Logger.js";
+ export { Presence } from "./presence/Presence.js";
+ export { PeerStateView } from "./presence/PeerStateView.js";
+diff --git a/dist/subduction/SubductionConnections.js b/dist/subduction/SubductionConnections.js
+index 4760a1899a8c0127db4840d5de090f6825211d97..5b9d19d4dd1cfb0cb242f140d5401af53aadd6a9 100644
+--- a/dist/subduction/SubductionConnections.js
++++ b/dist/subduction/SubductionConnections.js
+@@ -15,7 +15,9 @@ export class SubductionConnections {
+     // ── ConnectionManager interface ─────────────────────────────────────
+     isConnecting() {
+         for (const state of this.#connectionStates.values()) {
+-            if (state === "connecting")
++            // "awaiting-reconnect" counts: the loop is between attempts, not
++            // given up, so a query should wait rather than report unavailable.
++            if (state === "connecting" || state === "awaiting-reconnect")
+                 return true;
+         }
+         return false;
+diff --git a/src/index.ts b/src/index.ts
+index b13005dab37c119a016a8edc03969d3f6abefe1f..e9e1efae6d4c99c4caff55fce7e29dc667a595d3 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -41,6 +41,8 @@ export {
+ export type { ParsedAutomergeUrl, UrlOptions } from "./AutomergeUrl.js"
+ export { Repo } from "./Repo.js"
+ export { initSubduction } from "./initSubduction.js"
++export { SubductionStorageBridge } from "./subduction/storage.js"
++export { toDocumentId, toSedimentreeId } from "./subduction/helpers.js"
+ export { makeLogger, resetLoggerFactory, setLoggerFactory } from "./Logger.js"
+ export type { Logger, LoggerFactory } from "./Logger.js"
+ export { Presence } from "./presence/Presence.js"
+diff --git a/src/subduction/SubductionConnections.ts b/src/subduction/SubductionConnections.ts
+index 0d5510500c1e3a8e0d84b6f9b5f87f42096ee8e3..6b8376be24f932f21ab3ddc4b76bc81ff39a5030 100644
+--- a/src/subduction/SubductionConnections.ts
++++ b/src/subduction/SubductionConnections.ts
+@@ -28,7 +28,9 @@ export class SubductionConnections implements ConnectionManager {
+ 
+   isConnecting(): boolean {
+     for (const state of this.#connectionStates.values()) {
+-      if (state === "connecting") return true
++      // "awaiting-reconnect" counts: the loop is between attempts, not given
++      // up, so a query should wait rather than report unavailable.
++      if (state === "connecting" || state === "awaiting-reconnect") return true
+     }
+     return false
+   }

@@ -26,6 +26,10 @@
       "import": "./dist/externals-list.js",
       "types": "./dist/externals-list.d.ts"
     },
+    "./worker-link": {
+      "import": "./dist/worker-link.js",
+      "types": "./dist/worker-link.d.ts"
+    },
     "./storage": {
       "import": "./dist/storage.js",
       "types": "./dist/storage.d.ts"
@@ -37,6 +41,10 @@
     "./automerge-worker": {
       "import": "./dist/automerge-worker.js",
       "types": "./dist/automerge-worker.d.ts"
+    },
+    "./subduction-worker": {
+      "import": "./dist/subduction-worker.js",
+      "types": "./dist/subduction-worker.d.ts"
     },
     "./module-loader": {
       "import": "./dist/module-loader.js",
@@ -99,6 +107,7 @@
   },
   "scripts": {
     "build": "tsc && cp src/global.css dist/global.css",
-    "dev": "tsc -w --preserveWatchOutput"
+    "dev": "tsc -w --preserveWatchOutput",
+    "test": "vitest run"
   }
 }
