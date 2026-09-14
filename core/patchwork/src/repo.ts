@@ -8,8 +8,8 @@ import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import {
   initKeyhiveWasm,
-  initializeAutomergeRepoKeyhiveWithRepo,
-  type AutomergeRepoKeyhive,
+  initializeLegacyAutomergeRepoKeyhive,
+  type AutomergeRepoKeyhiveBase,
   type SyncServerSelection,
 } from "@automerge/automerge-repo-keyhive";
 // eslint-disable-next-line
@@ -57,20 +57,20 @@ export async function createRepo(
   workerAdapter: MessageChannelNetworkAdapter
 ): Promise<{
   repo: Repo;
-  hive?: AutomergeRepoKeyhive;
+  hive?: AutomergeRepoKeyhiveBase;
   signerIdentity?: SignerIdentity;
 }> {
   if (syncServer.keyhive) {
     log("setting up keyhive");
     initKeyhiveWasm();
-    const { hive, repo } = await initializeAutomergeRepoKeyhiveWithRepo({
+    const { hive, repo } = await initializeLegacyAutomergeRepoKeyhive({
       createRepo: (repoConfig) => new Repo(repoConfig),
       storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       networkAdapter: workerAdapter,
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
-      onlyShareWithHardcodedServerPeerId: false,
+      onlyShareWithSyncServer: false,
       // ARK selects the relay via `syncServer`, defaulting to "subduction".
       syncServer: syncServer.keyhive,
       repo: {

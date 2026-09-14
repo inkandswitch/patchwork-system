@@ -25,7 +25,7 @@ import {
 } from "@automerge/vanillajs/slim";
 import * as Automerge from "@automerge/automerge/slim";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
-import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 import { ModuleWatcher } from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
@@ -97,9 +97,7 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
     timer = setTimeout(
       () =>
         reject(
-          new Error(
-            `patchwork.setup: boot did not finish within ${timeout}ms`
-          )
+          new Error(`patchwork.setup: boot did not finish within ${timeout}ms`)
         ),
       timeout
     );
@@ -161,7 +159,11 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
       // Mirror the boot wiring: a keyhive repo talks to the worker through a
       // keyhive adapter wrapped around the message channel.
       const registered = bootHive
-        ? bootHive.createKeyhiveNetworkAdapter(fresh, false, false, 2000)
+        ? bootHive.createKeyhiveNetworkAdapter(fresh, {
+            onlyShareWithSyncServer: false,
+            periodicallyRequestSync: false,
+            syncRequestInterval: 2000,
+          })
         : fresh;
       repo.networkSubsystem.addNetworkAdapter(registered as any);
       removeAdapterFor(repo, workerAdapter, registered);
@@ -264,9 +266,8 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     },
 
     async create<D>(type: string, init?: (doc: D) => void) {
-      const datatype = await getRegistry<DatatypeDescription>(
-        "patchwork:datatype"
-      ).load(type);
+      const datatype =
+        await getRegistry<DatatypeDescription>("patchwork:datatype").load(type);
       if (!datatype) {
         throw new Error(
           `patchwork.create: no datatype registered for "${type}"`

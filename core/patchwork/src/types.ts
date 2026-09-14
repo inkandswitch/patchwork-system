@@ -1,5 +1,5 @@
 import type { AutomergeUrl, DocHandle, Repo } from "@automerge/vanillajs/slim";
-import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import type {
   ModuleWatcher,
   HasPatchworkMetadata,
