@@ -30,17 +30,18 @@ export interface SyncStateConnectionMessage {
  * tell which peer rows are "us". `peerId` is `signer.peerId().toString()` (the
  * value that shows up as a peer id); `verifyingKey` is its hex Ed25519 key.
  */
-export interface SyncStateWhoAmIMessage {
+export type WorkerIdentity = { peerId: string; verifyingKey: string };
+
+export interface SyncStateWhoAmIMessage extends WorkerIdentity {
   type: "whoami";
-  peerId: string;
-  verifyingKey: string;
 }
 
 // What the worker broadcasts on SYNCSTATE_CHANNEL: only the *global* signals
 // now. Per-document heads are addressed to subscribers over the control port
 // instead (see SyncStateDocMessage) rather than fanned out to every tab.
 export type SyncStateBroadcast =
-  SyncStateConnectionMessage | SyncStateWhoAmIMessage;
+  | SyncStateConnectionMessage
+  | SyncStateWhoAmIMessage;
 
 /**
  * Tab → worker: please replay the current global sync signals (whoami +
@@ -179,7 +180,9 @@ export interface HandoffAbortMessage {
 }
 
 export type HandoffReplyMessage =
-  HandoffCachedMessage | HandoffResponseMessage | HandoffAbortMessage;
+  | HandoffCachedMessage
+  | HandoffResponseMessage
+  | HandoffAbortMessage;
 
 /**
  * Automerge worker → world: broadcast once on startup so the service worker
@@ -212,11 +215,13 @@ export type SetupServiceWorkerResult = {
   kill?: () => void;
   /** Open a classic Automerge sync WebSocket from the automerge worker. */
   connectClassicSync: (server?: string) => Promise<void>;
-  /** Open a repo sync port to the automerge worker, once it says it is ready. */
+  /** Open a Subduction port to the subduction worker, once it says it is ready. */
   openPort: () => Promise<MessagePort>;
+  /** The subduction worker's own Subduction identity, once its node exists. */
+  identity: () => Promise<WorkerIdentity>;
   /**
-   * Watch for the automerge worker dying and being replaced. Ports held against
-   * the old instance are stranded; open a fresh one.
+   * Watch for the subduction worker dying and being replaced. Ports held
+   * against the old instance are stranded; open a fresh one.
    */
   onRecreated: (listener: () => void) => () => void;
   /**

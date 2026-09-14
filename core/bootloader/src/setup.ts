@@ -2,6 +2,8 @@ import type {
   SetupServiceWorkerOptions,
   SetupServiceWorkerResult,
   SyncStateDocMessage,
+  SyncStateWhoAmIMessage,
+  WorkerIdentity,
 } from "./types.js";
 import {
   readClassicSyncServer,
@@ -182,6 +184,21 @@ export async function openPort(): Promise<MessagePort> {
   return port1;
 }
 
+/** The subduction worker's identity. Stable across restarts: its key is kept in IndexedDB. */
+export function identity(): Promise<WorkerIdentity> {
+  const control = subductionWorker.get().port;
+  return new Promise((resolve) => {
+    const listener = (event: MessageEvent) => {
+      const data = event.data as SyncStateWhoAmIMessage;
+      if (data?.type !== "whoami") return;
+      control.removeEventListener("message", listener);
+      resolve({ peerId: data.peerId, verifyingKey: data.verifyingKey });
+    };
+    control.addEventListener("message", listener);
+    control.postMessage({ type: "whoami" });
+  });
+}
+
 // ── Sync state ─────────────────────────────────────────────────────────
 // Ref-counted locally so several callers in this tab can watch the same doc
 // with a single worker subscription.
@@ -332,6 +349,7 @@ export default async function setupServiceWorker(
     connectClassicSync,
     subscribeSyncState,
     openPort,
+    identity,
     onRecreated: subductionWorker.onRecreated,
   };
 }

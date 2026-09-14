@@ -4,17 +4,10 @@
 // and arrives through `onMessage`.
 
 /** A fresh instance means cold in-memory state, so tabs watch this. */
-export const WORKER_INSTANCE_ID = Math.random().toString(36).slice(2);
-export const WORKER_BOOT_TIME = Date.now();
+const WORKER_INSTANCE_ID = Math.random().toString(36).slice(2);
+const WORKER_BOOT_TIME = Date.now();
 
 const MAX_BUFFER = 200;
-
-export type WorkerControl = {
-  log: (...args: unknown[]) => void;
-  debugging: () => boolean;
-  post: (port: MessagePort, message: unknown) => void;
-  ports: Set<MessagePort>;
-};
 
 export function postToPort(port: MessagePort, message: unknown): void {
   try {
@@ -41,7 +34,7 @@ export function startWorkerControl(
     onMessage?: (data: any, port: MessagePort, event: MessageEvent) => void;
     onClose?: (port: MessagePort) => void;
   } = {}
-): WorkerControl {
+): { log: (...args: unknown[]) => void } {
   const ports = new Set<MessagePort>();
   // Logs emitted before any tab connects (wasm boot) would otherwise be lost.
   const preConnect: Array<{ level: string; args: string[] }> = [];
@@ -130,9 +123,6 @@ export function startWorkerControl(
   );
 
   return {
-    ports,
-    post: postToPort,
-    debugging: () => debugging,
     log: (...args: unknown[]) => {
       if (debugging) console.log(`[${name}]`, ...args);
     },

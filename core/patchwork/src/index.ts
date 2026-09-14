@@ -221,6 +221,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     sw: {
       connectClassicSync: sw.connectClassicSync,
       openPort: sw.openPort,
+      identity: sw.identity,
       onRecreated: sw.onRecreated,
       subscribeSyncState: sw.subscribeSyncState,
     },
