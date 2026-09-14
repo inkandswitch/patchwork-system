@@ -1,0 +1,26 @@
+{
+  "name": "patchwork-bench",
+  "private": true,
+  "type": "module",
+  "description": "Topology benchmarks: shared subduction worker vs a subduction node per tab.",
+  "scripts": {
+    "build": "vite build",
+    "preview": "vite preview",
+    "bench": "vite build && playwright test -c bench.config.ts",
+    "bench:headed": "vite build && playwright test -c bench.config.ts --headed"
+  },
+  "dependencies": {
+    "@automerge/automerge-repo": "catalog:",
+    "@automerge/automerge-repo-network-broadcastchannel": "2.6.0-subduction.48",
+    "@automerge/automerge-repo-storage-indexeddb": "catalog:",
+    "@automerge/automerge-subduction": "catalog:",
+    "@inkandswitch/patchwork": "workspace:*",
+    "@inkandswitch/patchwork-bootloader": "workspace:*"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.59.1",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite": "^7.3.5"
+  }
+}

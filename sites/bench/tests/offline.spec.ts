@@ -1,0 +1,68 @@
+import { expect, test } from "@playwright/test";
+import {
+  awaitField,
+  createDoc,
+  getField,
+  online,
+  openTab,
+  record,
+  serverConfirmed,
+  setField,
+  type Mode,
+} from "./bench.js";
+
+// Both tabs edit while the network is cut, then it comes back. Playwright's
+// offline emulation applies to page targets, so it cuts a socket the page owns
+// but not one owned by a SharedWorker — shared mode can't be measured this way
+// and is left out rather than reported wrong.
+const MODES: Mode[] = ["pertab", "pertab-bc"];
+
+for (const mode of MODES) {
+  test(`${mode}: concurrent offline edits converge on reconnect`, async ({
+    context,
+  }) => {
+    const a = await openTab(context, mode);
+    const b = await openTab(context, mode);
+    await Promise.all([online(a), online(b)]);
+    const url = await createDoc(a, { x: 0, y: 0 });
+    await awaitField(b, url, "x", 0);
+    await serverConfirmed(a, url);
+
+    await context.setOffline(true);
+    await setField(a, url, "x", 1);
+    await setField(b, url, "y", 1);
+    await a.waitForTimeout(2_000);
+    await context.setOffline(false);
+
+    const reconnected = Date.now();
+    const [seenY, seenX] = await Promise.all([
+      awaitField(a, url, "y", 1, 60_000).then(() => true, () => false),
+      awaitField(b, url, "x", 1, 60_000).then(() => true, () => false),
+    ]);
+    const converged = Date.now() - reconnected;
+    const confirmed = await serverConfirmed(a, url).then(() => true, () => false);
+
+    record({
+      metric: "offline edits in two tabs both survive reconnect",
+      mode,
+      value: seenY && seenX && confirmed,
+      unit: "ok",
+    });
+    if (seenY && seenX) {
+      record({ metric: "reconnect → tabs converged", mode, value: converged, unit: "ms" });
+    }
+
+    const c = await openTab(context, mode);
+    const [x, y] = await Promise.all([
+      getField<number>(c, url, "x"),
+      getField<number>(c, url, "y"),
+    ]);
+    expect({ seenY, seenX, confirmed, x, y }).toEqual({
+      seenY: true,
+      seenX: true,
+      confirmed: true,
+      x: 1,
+      y: 1,
+    });
+  });
+}
