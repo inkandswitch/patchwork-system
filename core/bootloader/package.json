@@ -26,9 +26,9 @@
       "import": "./dist/externals-list.js",
       "types": "./dist/externals-list.d.ts"
     },
-    "./worker-link": {
-      "import": "./dist/worker-link.js",
-      "types": "./dist/worker-link.d.ts"
+    "./siblings": {
+      "import": "./dist/siblings.js",
+      "types": "./dist/siblings.d.ts"
     },
     "./storage": {
       "import": "./dist/storage.js",
@@ -41,10 +41,6 @@
     "./automerge-worker": {
       "import": "./dist/automerge-worker.js",
       "types": "./dist/automerge-worker.d.ts"
-    },
-    "./subduction-worker": {
-      "import": "./dist/subduction-worker.js",
-      "types": "./dist/subduction-worker.d.ts"
     },
     "./module-loader": {
       "import": "./dist/module-loader.js",
@@ -64,6 +60,7 @@
     "@automerge/automerge": "catalog:",
     "@automerge/automerge-repo": "catalog:",
     "@automerge/automerge-repo-keyhive": "catalog:",
+    "@automerge/automerge-repo-network-broadcastchannel": "catalog:",
     "@automerge/automerge-repo-network-messagechannel": "catalog:",
     "@automerge/automerge-repo-network-websocket": "catalog:",
     "@automerge/automerge-repo-storage-indexeddb": "catalog:",
@@ -107,7 +104,6 @@
   },
   "scripts": {
     "build": "tsc && cp src/global.css dist/global.css",
-    "dev": "tsc -w --preserveWatchOutput",
-    "test": "vitest run"
+    "dev": "tsc -w --preserveWatchOutput"
   }
 }

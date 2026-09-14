@@ -1,19 +1,12 @@
 import type {
   SetupServiceWorkerOptions,
   SetupServiceWorkerResult,
-  SyncStateDocMessage,
-  SyncStateWhoAmIMessage,
-  WorkerIdentity,
 } from "./types.js";
 import {
   readClassicSyncServer,
   DEFAULT_CLASSIC_SYNC_SERVER,
 } from "./sync-config.js";
 import debug from "debug";
-import {
-  donatePort,
-  isWorkerErrorMessage,
-} from "@automerge/automerge-repo/worker-port";
 import {
   forwardWorkerConsole,
   lifecycleLog,
@@ -63,34 +56,13 @@ function installServiceWorkerLogForwarding(): void {
   });
 }
 
-// ── The two shared workers ─────────────────────────────────────────────
-//
-// The subduction worker owns this origin's storage and the link to the sync
-// server; tabs are peers of it. The automerge worker is a storageless Repo
-// whose only job is resolving `automerge:` URLs for the service worker. A
-// SharedWorker can neither spawn nor connect to another SharedWorker, so this
-// tab brokers the link between them: it opens a port on the subduction worker
-// and donates it.
+// ── The automerge worker ───────────────────────────────────────────────
+// A SharedWorker holding the Repo that resolves `automerge:` URLs for the
+// service worker. Tabs don't sync through it — each tab is its own node — but
+// each tab keeps it alive and heartbeats it, so it's here rather than in the
+// service worker, which can't own one.
 
-let subductionWorkerPath = "/subduction-worker.js";
 let automergeWorkerPath = "/automerge-worker.js";
-let nextPortId = 0;
-
-const subductionWorker = sharedWorkerHandle(
-  "patchwork-subduction",
-  () => subductionWorkerPath,
-  {
-    debugging: workerDebugging,
-    onMessage(event) {
-      const data = event.data;
-      if (data?.type === "sync-state") {
-        dispatchSyncState(data as SyncStateDocMessage);
-        return;
-      }
-      forwardWorkerConsole("subduction-worker", data);
-    },
-  }
-);
 
 const automergeWorker = sharedWorkerHandle(
   "patchwork-automerge",
@@ -98,146 +70,13 @@ const automergeWorker = sharedWorkerHandle(
   {
     debugging: workerDebugging,
     onMessage(event) {
-      const data = event.data;
-      // Crash/skew reports relayed over the port-provision protocol (e.g. a
-      // mismatch from a stale SW-cached worker chunk). These otherwise only
-      // exist in chrome://inspect.
-      if (isWorkerErrorMessage(data)) {
-        console.error("[automerge-worker]", data);
-        return;
-      }
-      forwardWorkerConsole("automerge-worker", data);
-    },
-    onSpawn(worker) {
-      // Its Repo asks for this link on first use; `eager` would open a port
-      // before the worker had booted its wasm.
-      donatePort(worker.port, () => openPort(), {
-        target: "subduction-link",
-        eager: false,
-      });
+      forwardWorkerConsole("automerge-worker", event.data);
     },
   }
 );
 
-// The resolver's link ends in a worker that no longer exists, and a dead
-// SharedWorker leaves its ports silent rather than closed, so it needs telling.
-subductionWorker.onRecreated(() => {
-  for (const documentId of syncStateListeners.keys()) {
-    subductionWorker.post({ type: "sync-sub", documentId });
-  }
-  automergeWorker.post({ type: "link-lost" });
-});
-
 export function getAutomergeWorker(): SharedWorker {
   return automergeWorker.get();
-}
-
-export function getSubductionWorker(): SharedWorker {
-  return subductionWorker.get();
-}
-
-/**
- * Wait for the worker to confirm it has accepted the port. Nothing on the port
- * itself says so: the far side has to fetch wasm and build its node first.
- */
-function awaitPortReady(control: MessagePort, id: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      clearTimeout(timeout);
-      control.removeEventListener("message", listener);
-    };
-    const listener = (event: MessageEvent) => {
-      if (event.data?.id !== id) return;
-      if (event.data.type === "port-ready") {
-        cleanup();
-        resolve();
-      } else if (event.data.type === "port-failed") {
-        cleanup();
-        reject(new Error(`subduction worker init failed: ${event.data.error}`));
-      }
-    };
-    control.addEventListener("message", listener);
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("subduction worker port-ready timeout"));
-    }, 30_000);
-  });
-}
-
-/** Open a Subduction port to the subduction worker, once it says it is ready. */
-export async function openPort(): Promise<MessagePort> {
-  const id = ++nextPortId;
-  const worker = subductionWorker.get();
-  const ready = awaitPortReady(worker.port, id);
-  const { port1, port2 } = new MessageChannel();
-  worker.port.postMessage({ type: "port", id }, [port2]);
-  try {
-    await ready;
-  } catch (err) {
-    // Surface the problem and let the rest of the site come up rather than
-    // hanging on a blank page.
-    console.warn(
-      "proceeding without worker ready ack:",
-      err instanceof Error ? err.message : err
-    );
-  }
-  return port1;
-}
-
-/** The subduction worker's identity. Stable across restarts: its key is kept in IndexedDB. */
-export function identity(): Promise<WorkerIdentity> {
-  const control = subductionWorker.get().port;
-  return new Promise((resolve) => {
-    const listener = (event: MessageEvent) => {
-      const data = event.data as SyncStateWhoAmIMessage;
-      if (data?.type !== "whoami") return;
-      control.removeEventListener("message", listener);
-      resolve({ peerId: data.peerId, verifyingKey: data.verifyingKey });
-    };
-    control.addEventListener("message", listener);
-    control.postMessage({ type: "whoami" });
-  });
-}
-
-// ── Sync state ─────────────────────────────────────────────────────────
-// Ref-counted locally so several callers in this tab can watch the same doc
-// with a single worker subscription.
-
-type SyncStateListener = (update: SyncStateDocMessage) => void;
-const syncStateListeners = new Map<string, Set<SyncStateListener>>();
-
-function dispatchSyncState(update: SyncStateDocMessage): void {
-  for (const listener of syncStateListeners.get(update.documentId) ?? []) {
-    try {
-      listener(update);
-    } catch (err) {
-      console.error("sync-state listener threw", err);
-    }
-  }
-}
-
-export function subscribeSyncState(
-  documentId: string,
-  listener: SyncStateListener
-): () => void {
-  let listeners = syncStateListeners.get(documentId);
-  if (!listeners) {
-    syncStateListeners.set(documentId, (listeners = new Set()));
-    subductionWorker.post({ type: "sync-sub", documentId });
-  }
-  listeners.add(listener);
-
-  let active = true;
-  return () => {
-    if (!active) return;
-    active = false;
-    const set = syncStateListeners.get(documentId);
-    if (!set) return;
-    set.delete(listener);
-    if (set.size > 0) return;
-    syncStateListeners.delete(documentId);
-    subductionWorker.post({ type: "sync-unsub", documentId });
-  };
 }
 
 export function connectClassicSync(
@@ -303,13 +142,9 @@ export default async function setupServiceWorker(
   void navigator.storage?.persist?.().catch(() => {});
 
   if (options?.workerPath) automergeWorkerPath = options.workerPath;
-  if (options?.subductionWorkerPath) {
-    subductionWorkerPath = options.subductionWorkerPath;
-  }
 
-  // Start both now so they boot wasm while the service worker installs.
-  const shared = subductionWorker.get();
-  automergeWorker.get();
+  // Start it now so it boots wasm while the service worker installs.
+  const shared = automergeWorker.get();
 
   const reg = await navigator.serviceWorker.register(
     options?.path ?? "/service-worker.js",
@@ -344,14 +179,7 @@ export default async function setupServiceWorker(
     "background: #fcf2f0; color: #333; border: 2px solid; border-radius: 4px"
   );
 
-  return {
-    shared,
-    connectClassicSync,
-    subscribeSyncState,
-    openPort,
-    identity,
-    onRecreated: subductionWorker.onRecreated,
-  };
+  return { shared, connectClassicSync };
 }
 
 (window as any).bumpServiceWorkerCache = bumpServiceWorkerCache;

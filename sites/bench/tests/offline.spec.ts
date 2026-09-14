@@ -12,10 +12,9 @@ import {
 } from "./bench.js";
 
 // Both tabs edit while the network is cut, then it comes back. Playwright's
-// offline emulation applies to page targets, so it cuts a socket the page owns
-// but not one owned by a SharedWorker — shared mode can't be measured this way
-// and is left out rather than reported wrong.
-const MODES: Mode[] = ["pertab", "pertab-bc"];
+// offline emulation applies to page targets, which covers every mode now that
+// each tab owns its socket.
+const MODES: Mode[] = ["patchwork", "pertab", "pertab-bc"];
 
 for (const mode of MODES) {
   test(`${mode}: concurrent offline edits converge on reconnect`, async ({

@@ -4,8 +4,7 @@ import { MODES, marks, online, openTab, record, rendererMemory } from "./bench.j
 // Cold boot: navigation start to `window.repo`, then to the server link being
 // up (performance.now() is relative to navigation start, so the marks are
 // already the numbers wanted). Memory is read once every tab is up.
-// The first tab pays everything; later tabs show what a live shared worker
-// saves (or doesn't).
+// The first tab pays everything; later tabs show what a warm origin saves.
 for (const mode of MODES) {
   for (const tabs of [1, 3, 10]) {
     test(`${mode}: boot ${tabs} tab(s)`, async ({ browser, context }) => {

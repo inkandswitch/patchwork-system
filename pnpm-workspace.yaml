@@ -9,6 +9,7 @@ overrides:
   "@automerge/automerge": "catalog:"
   "@automerge/automerge-repo": "catalog:"
   "@automerge/automerge-repo-keyhive": "catalog:"
+  "@automerge/automerge-repo-network-broadcastchannel": "catalog:"
   "@automerge/automerge-repo-network-messagechannel": "catalog:"
   "@automerge/automerge-repo-network-websocket": "catalog:"
   "@automerge/automerge-repo-react-hooks": "catalog:"
@@ -29,6 +30,7 @@ catalog:
   "@automerge/automerge": 3.4.1
   "@automerge/automerge-repo": 2.6.0-subduction.48
   "@automerge/automerge-repo-keyhive": 0.5.0-alpha.7
+  "@automerge/automerge-repo-network-broadcastchannel": 2.6.0-subduction.48
   "@automerge/automerge-repo-network-messagechannel": 2.6.0-subduction.48
   "@automerge/automerge-repo-network-websocket": 2.6.0-subduction.48
   "@automerge/automerge-repo-react-hooks": 2.6.0-subduction.48

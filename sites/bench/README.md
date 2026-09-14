@@ -19,11 +19,14 @@ package list — in one of three shapes, chosen by `?mode=`:
 
 | mode | storage | server socket | tabs meet via |
 | --- | --- | --- | --- |
-| `shared` | subduction SharedWorker | one, in the worker | the worker |
+| `patchwork` | each tab, same IndexedDB | one per tab | the siblings BroadcastChannel, then the server |
 | `pertab` | each tab, same IndexedDB | one per tab | the server (or IndexedDB) |
-| `pertab-bc` | each tab, same IndexedDB | one per tab | BroadcastChannel classic sync, then the server |
+| `pertab-bc` | each tab, same IndexedDB | one per tab | a hand-rolled BroadcastChannel, then the server |
 
-`shared` is this branch. `?server=none` runs the per-tab modes with no socket.
+`patchwork` is `createRepo()` as shipped, plus the automerge worker that
+resolves URLs for the service worker; the other two are bare Repos built in
+the page, kept as the baseline the shipped path is measured against.
+`?server=none` runs the bare modes with no socket.
 
 ## What's measured
 
@@ -36,8 +39,6 @@ package list — in one of three shapes, chosen by `?mode=`:
 - `storage.spec` — a second tab finds the first's doc through storage alone;
   two tabs edit the same doc and close, does a third see everything.
 - `offline.spec` — both tabs edit with the network cut, then it returns.
-  Per-tab modes only: Playwright's offline emulation cuts a page's own socket
-  but not a SharedWorker's.
 - `churn.spec` — close the tab that booted everything, check the rest still sync.
 
 Cross-tab timings use epoch milliseconds, since `performance.now()` counts from
