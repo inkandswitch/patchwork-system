@@ -14,8 +14,25 @@ export type PluginsApi = typeof pluginsNS;
 
 export type SignerIdentity = { peerId: string; verifyingKey: string };
 
+/** The sync server's last-known heads for one document, as it reports them. */
+export interface SyncStateDocMessage {
+  type: "sync-state";
+  documentId: string;
+  storageId: string;
+  heads: string[];
+  timestamp: number;
+}
+
 export interface ServiceWorkerApi {
   connectClassicSync: (server?: string) => Promise<void>;
+  /**
+   * Watch one document's heads at the sync server. Calls `listener` with
+   * what the server holds now, then on every update. Returns unsubscribe.
+   */
+  subscribeSyncState: (
+    documentId: string,
+    listener: (update: SyncStateDocMessage) => void
+  ) => () => void;
 }
 
 export interface OpenOptions {
