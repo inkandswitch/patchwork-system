@@ -11,4 +11,4 @@ A SharedWorker can neither spawn nor connect to another SharedWorker, so a tab b
 
 Sites get a new emitted worker, `subduction-worker.js`; `setupServiceWorker` takes `subductionWorkerPath` alongside `workerPath`. Sync-state subscriptions now come from the subduction worker, which compares its own sedimentree heads against the server's rather than a document's Automerge frontier.
 
-Keyhive sites are not covered by this split yet.
+On a keyhive site the tab's hive addresses the subduction worker rather than the sync server: keyhive frames are point-to-point, so the worker relays them — a tab's to the server, the server's to every tab — without a hive of its own. `setupServiceWorker` returns `identity()` so a tab can find the worker's peer id. The automerge worker has no hive either, so it can't resolve `automerge:` URLs to keyhive-protected documents.

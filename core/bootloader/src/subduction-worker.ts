@@ -32,6 +32,7 @@ import {
   type SyncStateBroadcast,
   type SyncStateDocMessage,
   type SyncStateRequestMessage,
+  type SyncStateWhoAmIMessage,
 } from "./types.js";
 
 declare const __SYNC_SERVER__: {
@@ -122,6 +123,7 @@ async function start(): Promise<Subduction> {
   console.log("[patchwork] subduction identity:", identity);
 
   postWhoAmI();
+  if (syncServer.keyhive) relayKeyhiveFrames(subduction);
   void serverLoop(subduction);
   setInterval(() => void scanOwnHeads(subduction), HEADS_SCAN_INTERVAL_MS);
   setInterval(() => void reviewResync(subduction), RESYNC_REVIEW_INTERVAL_MS);
@@ -155,6 +157,33 @@ async function serverLoop(subduction: Subduction): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, backoff));
     backoff = Math.min(backoff * 2, RECONNECT_MAX_MS);
   }
+}
+
+/**
+ * Keyhive frames are point-to-point and a bare node doesn't forward them, so
+ * a tab's hive addresses this worker and the worker passes frames along: a
+ * tab's go to the server, the server's go to every tab. The hive on each end
+ * checks signatures and sender ids itself; nothing here reads the payload.
+ */
+function relayKeyhiveFrames(subduction: Subduction): void {
+  const isServer = (peerId: { toString(): string }) =>
+    serverPeerIds.includes(peerId.toString());
+  void subduction.registerFrameHandler({
+    onMessage(payload, from) {
+      void (async () => {
+        const fromServer = isServer(from);
+        for (const peer of await subduction.getConnectedPeerIds()) {
+          if (isServer(peer) === fromServer) continue;
+          try {
+            await subduction.sendKeyhiveMessage(payload, peer);
+          } catch (error) {
+            log("relaying a keyhive frame failed", error);
+          }
+        }
+      })();
+    },
+    onPeerDisconnect() {},
+  });
 }
 
 // ── Tab and worker links ───────────────────────────────────────────────
@@ -208,6 +237,16 @@ function handleControlMessage(
       if (typeof data.documentId === "string") {
         syncWatchers.get(controlPort)?.delete(data.documentId);
       }
+      return;
+
+    case "whoami":
+      void getSubduction().then(() => {
+        if (!identity) return;
+        postToPort(controlPort, {
+          type: "whoami",
+          ...identity,
+        } satisfies SyncStateWhoAmIMessage);
+      });
       return;
   }
 }

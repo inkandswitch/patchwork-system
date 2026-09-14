@@ -16,6 +16,7 @@ import {
   keyhiveStorageName,
   storagePrefix,
 } from "@inkandswitch/patchwork-bootloader/storage";
+import type { SetupServiceWorkerResult } from "@inkandswitch/patchwork-bootloader/types";
 import type { SignerIdentity } from "./types.js";
 import debug from "debug";
 
@@ -49,10 +50,10 @@ export function initWasm(): Promise<void> {
 }
 
 /** The bit of the bootloader's subduction worker a Repo needs. */
-export type WorkerLink = {
-  openPort: () => Promise<MessagePort>;
-  onRecreated: (listener: () => void) => () => void;
-};
+export type WorkerLink = Pick<
+  SetupServiceWorkerResult,
+  "openPort" | "identity" | "onRecreated"
+>;
 
 export type TabRepo = {
   repo: Repo;
@@ -78,8 +79,10 @@ export async function createRepo(worker: WorkerLink): Promise<TabRepo> {
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
-      // ARK selects the relay via `syncServer`, defaulting to "subduction".
+      // `syncServer` picks the contact card the hive trusts. The frames go to
+      // the subduction worker, the tab's only peer, which relays them there.
       syncServer: syncServer.keyhive,
+      remotePeerId: (await worker.identity()).peerId as AutomergeRepo.PeerId,
       repo: { subductionWebsocketEndpoints },
     });
     log("keyhive setup complete");
