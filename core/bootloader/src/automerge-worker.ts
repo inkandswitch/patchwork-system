@@ -909,7 +909,18 @@ async function resolveAutomergeUrl(
 
   return new Response(body, {
     status: 200,
-    headers: { "content-type": resolved.type },
+    headers: {
+      "content-type": resolved.type,
+      // Heads on a URL pin the document they name and nothing further, so a URL is only
+      // content-addressed when every link followed to reach the bytes carried heads too.
+      // `resolved.pinned` says whether that held. When it did not, the same URL will answer
+      // differently once anything below it moves, and storing this response would mean serving
+      // the first answer forever — which is what made a rebuilt page invisible in a preview
+      // that was pointed at a pinned repo root.
+      "cache-control": resolved.pinned
+        ? "public, max-age=31536000, immutable"
+        : "no-store",
+    },
   });
 }
 
@@ -986,10 +997,14 @@ async function handleHandoffRequest(message: HandoffRequestMessage) {
   }
 
   try {
-    if (!CACHEABLE_STATUSES.includes(response.status)) {
-      // Errors, redirects and the like go back inline for the service worker to
-      // serve directly, so they aren't cached forever (still in esmodulecache,
-      // cleared after a refresh)
+    // Errors and redirects go back inline for the service worker to serve directly, so they
+    // aren't cached forever (still in esmodulecache, cleared after a refresh) — and so does
+    // anything the resolver marked no-store, which is every path reached through a link that
+    // carried no heads.
+    const immutable =
+      CACHEABLE_STATUSES.includes(response.status) &&
+      !/(^|,)\s*no-store(\s*,|$)/.test(response.headers.get("cache-control") ?? "");
+    if (!immutable) {
       log(`responding inline to ${request.url} with ${response.status}`);
       handoffChannel.postMessage({
         id,
