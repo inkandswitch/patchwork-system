@@ -1,5 +1,30 @@
 # @inkandswitch/patchwork
 
+## 0.7.4
+
+### Patch Changes
+
+- 7339066: The dev importmap now names each builtin's pre-bundled dep URL
+  (`/node_modules/.vite/deps/…?v=…`) instead of `/@id/<dep>`. Both URLs resolve to
+  the same file, but a module fetched under two URLs is evaluated twice — the site
+  imported solid through the pre-bundled URL and tool code imported it through the
+  importmap, so tools ran against a second solid with its own owner stack and
+  logged "computations created outside a `createRoot`" for every effect they
+  created. Builtins that aren't pre-bundled still fall back to `/@id/<dep>`.
+- ebca53b: Move the automerge-repo subduction fork to 2.6.0-subduction.48, `@automerge/automerge-repo-keyhive` to 0.5.0-alpha.7, and `@keyhive/keyhive` to 0.1.0-alpha.8. These three are bumped together because the keyhive package pins its automerge-repo version exactly.
+
+  keyhive 0.5 renames the two hive flavours. The network-adapter hive is now `LegacyAutomergeRepoKeyhive`, built by `initializeLegacyAutomergeRepoKeyhive`; the subduction hive keeps the name `AutomergeRepoKeyhive` and is built by `initializeAutomergeRepoKeyhive`. Both extend `AutomergeRepoKeyhiveBase`, which is what Patchwork's `hive` fields are typed as, so a tool that only reads membership works against either.
+
+  `createKeyhiveNetworkAdapter` takes an options object instead of positional arguments, and `onlyShareWithHardcodedServerPeerId` is now `onlyShareWithSyncServer`.
+
+- Updated dependencies [ebca53b]
+- Updated dependencies [882eacd]
+  - @inkandswitch/patchwork-bootloader@0.6.3
+  - @inkandswitch/patchwork-elements@6.0.2
+  - @inkandswitch/patchwork-filesystem@0.2.8
+  - @inkandswitch/patchwork-plugins@1.2.3
+  - @inkandswitch/patchwork-providers@0.5.2
+
 ## 0.7.3
 
 ### Patch Changes

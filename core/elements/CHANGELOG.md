@@ -1,5 +1,25 @@
 # @inkandswitch/patchwork-elements
 
+## 6.0.2
+
+### Patch Changes
+
+- ebca53b: Move the automerge-repo subduction fork to 2.6.0-subduction.48, `@automerge/automerge-repo-keyhive` to 0.5.0-alpha.7, and `@keyhive/keyhive` to 0.1.0-alpha.8. These three are bumped together because the keyhive package pins its automerge-repo version exactly.
+
+  keyhive 0.5 renames the two hive flavours. The network-adapter hive is now `LegacyAutomergeRepoKeyhive`, built by `initializeLegacyAutomergeRepoKeyhive`; the subduction hive keeps the name `AutomergeRepoKeyhive` and is built by `initializeAutomergeRepoKeyhive`. Both extend `AutomergeRepoKeyhiveBase`, which is what Patchwork's `hive` fields are typed as, so a tool that only reads membership works against either.
+
+  `createKeyhiveNetworkAdapter` takes an options object instead of positional arguments, and `onlyShareWithHardcodedServerPeerId` is now `onlyShareWithSyncServer`.
+
+- 882eacd: A doc whose only match is a wildcard tool (the raw viewer) but which suggests a
+  package now shows just the offer, instead of dropping the reader into raw JSON
+  that gets swapped out from under them once the import lands. If the import
+  registers nothing, the view says so rather than sitting empty.
+
+  The offer's toast is also themed: it took its colours from hardcoded light
+  values while its button read `--studio-*`, so in a dark theme a light card held
+  a black-on-black button. Both now use the theme's ink (`--studio-line` — the
+  `--studio-text` they asked for doesn't exist), surface and accent.
+
 ## 6.0.1
 
 ### Patch Changes

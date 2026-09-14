@@ -1,5 +1,22 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.6.3
+
+### Patch Changes
+
+- ebca53b: Move the automerge-repo subduction fork to 2.6.0-subduction.48, `@automerge/automerge-repo-keyhive` to 0.5.0-alpha.7, and `@keyhive/keyhive` to 0.1.0-alpha.8. These three are bumped together because the keyhive package pins its automerge-repo version exactly.
+
+  keyhive 0.5 renames the two hive flavours. The network-adapter hive is now `LegacyAutomergeRepoKeyhive`, built by `initializeLegacyAutomergeRepoKeyhive`; the subduction hive keeps the name `AutomergeRepoKeyhive` and is built by `initializeAutomergeRepoKeyhive`. Both extend `AutomergeRepoKeyhiveBase`, which is what Patchwork's `hive` fields are typed as, so a tool that only reads membership works against either.
+
+  `createKeyhiveNetworkAdapter` takes an options object instead of positional arguments, and `onlyShareWithHardcodedServerPeerId` is now `onlyShareWithSyncServer`.
+
+- Updated dependencies [ebca53b]
+- Updated dependencies [882eacd]
+  - @inkandswitch/patchwork-elements@6.0.2
+  - @inkandswitch/patchwork-filesystem@0.2.8
+  - @inkandswitch/patchwork-plugins@1.2.3
+  - @inkandswitch/patchwork-providers@0.5.2
+
 ## 0.6.2
 
 ### Patch Changes

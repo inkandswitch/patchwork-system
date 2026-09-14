@@ -1,7 +1,7 @@
 {
   "name": "@inkandswitch/patchwork-providers",
   "type": "module",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "DOM-event based request/respond protocol for Patchwork providers.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
