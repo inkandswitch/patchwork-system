@@ -11,7 +11,7 @@ import {
   forwardWorkerConsole,
   lifecycleLog,
   sharedWorkerHandle,
-} from "./shared-worker.js";
+} from "./shared-worker-lifecycle.js";
 
 export { lifecycleLog };
 
