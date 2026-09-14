@@ -20,6 +20,8 @@
 import {
   type AutomergeUrl,
   type DocHandle,
+  type DocumentId,
+  type StorageId,
   Repo,
 } from "@automerge/vanillajs/slim";
 import * as Automerge from "@automerge/automerge/slim";
@@ -51,6 +53,7 @@ import type {
   Patchwork,
   PatchworkOptions,
   SignerIdentity,
+  SyncStateDocMessage,
 } from "./types.js";
 import { createRepo, initWasm } from "./repo.js";
 import { createRouter, type Router } from "./router.js";
@@ -218,7 +221,11 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     signer: signerIdentity,
     packages: moduleWatcher,
     plugins,
-    sw: { connectClassicSync: sw.connectClassicSync },
+    sw: {
+      connectClassicSync: sw.connectClassicSync,
+      subscribeSyncState: (documentId, listener) =>
+        subscribeSyncState(repo, documentId, listener),
+    },
 
     async create<D>(type: string, init?: (doc: D) => void) {
       const datatype =
@@ -388,6 +395,50 @@ function installLifecycleLogging(): void {
   );
 }
 
+// The tab's own Repo hears the server's heads directly, so this is a filter
+// over its `subduction-remote-heads` event. The current value is replayed
+// from the handle's sync info, when the server has reported any.
+function subscribeSyncState(
+  repo: Repo,
+  documentId: string,
+  listener: (update: SyncStateDocMessage) => void
+): () => void {
+  const onHeads = (payload: {
+    documentId: string;
+    storageId: string;
+    heads: readonly string[];
+    timestamp: number;
+  }) => {
+    if (payload.documentId !== documentId) return;
+    listener({
+      type: "sync-state",
+      documentId,
+      storageId: payload.storageId,
+      heads: [...payload.heads],
+      timestamp: payload.timestamp,
+    });
+  };
+  repo.on("subduction-remote-heads", onHeads);
+
+  void (async () => {
+    const handle = repo.handles[documentId as DocumentId];
+    if (!handle) return;
+    for (const storageId of await repo.connectedSubductionPeerIds()) {
+      const info = handle.getSyncInfo(storageId as StorageId);
+      if (info) {
+        onHeads({
+          documentId,
+          storageId,
+          heads: info.lastHeads,
+          timestamp: info.lastSyncTimestamp,
+        });
+      }
+    }
+  })();
+
+  return () => repo.off("subduction-remote-heads", onHeads);
+}
+
 // ── Named exports ────────────────────────────────────────────────────────
 
 export { createRepo, initWasm } from "./repo.js";
@@ -403,4 +454,5 @@ export type {
   PatchworkOptions,
   ServiceWorkerApi,
   SignerIdentity,
+  SyncStateDocMessage,
 } from "./types.js";
