@@ -11,7 +11,7 @@ import type {
   PluginDescription,
 } from "./registry/types.js";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 // Datatype implementation interface
 export type DatatypeImplementation<D = unknown> = {
@@ -42,7 +42,8 @@ export type LoadedDatatype<D = unknown> = LoadedPlugin<
 const splitImportUrl = (
   importUrl: string | undefined
 ): { url: string | undefined; frozen: string | undefined } => {
-  if (!isValidAutomergeUrl(importUrl)) return { url: importUrl, frozen: undefined };
+  if (!isValidAutomergeUrl(importUrl))
+    return { url: importUrl, frozen: undefined };
   const { documentId, heads } = parseAutomergeUrl(importUrl);
   if (!heads) return { url: importUrl, frozen: undefined };
   return { url: stringifyAutomergeUrl({ documentId }), frozen: importUrl };

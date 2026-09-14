@@ -5,7 +5,7 @@ import {
   type Repo,
 } from "@automerge/automerge-repo/slim";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 /**
  * Site-facing view of the account document. Scalar tool-id fields are written

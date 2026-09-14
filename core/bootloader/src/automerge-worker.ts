@@ -31,9 +31,9 @@ import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage
 import { MessageChannelNetworkAdapter } from "@automerge/automerge-repo-network-messagechannel";
 import { WebSocketWorkerClientAdapter } from "@automerge/automerge-repo-network-websocket";
 import {
-  initializeAutomergeRepoKeyhiveRustWithRepo,
+  initializeAutomergeRepoKeyhive,
   initKeyhiveWasm,
-  type AutomergeRepoKeyhiveRust,
+  type AutomergeRepoKeyhive,
   type SyncServerSelection,
 } from "@automerge/automerge-repo-keyhive";
 
@@ -206,7 +206,7 @@ function getSubductionEndpoints(): WorkerWebSocketEndpoint[] {
   ]);
 }
 
-type RepoHive = { repo: Repo; hive?: AutomergeRepoKeyhiveRust };
+type RepoHive = { repo: Repo; hive?: AutomergeRepoKeyhive };
 type BuiltRepo = RepoHive & { identity?: Identity };
 
 let repoHivePromise: Promise<RepoHive> | null = null;
@@ -282,7 +282,7 @@ async function buildKeyhiveRepo(
   keyhiveSyncServer: SyncServerSelection
 ): Promise<BuiltRepo> {
   initKeyhiveWasm();
-  const { hive, repo } = await initializeAutomergeRepoKeyhiveRustWithRepo({
+  const { hive, repo } = await initializeAutomergeRepoKeyhive({
     createRepo: (config) => new Repo(config),
     storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
     peerIdSuffix:
@@ -685,14 +685,11 @@ async function connectPort(port: MessagePort, connection: Connection) {
     return;
   }
 
-  const onlyShareWithHardcodedServerPeerId = false;
-  const periodicallyRequestKeyhiveSync = false;
-  const adapter = hive.createKeyhiveNetworkAdapter(
-    mcAdapter,
-    onlyShareWithHardcodedServerPeerId,
-    periodicallyRequestKeyhiveSync,
-    2000
-  );
+  const adapter = hive.createKeyhiveNetworkAdapter(mcAdapter, {
+    onlyShareWithSyncServer: false,
+    periodicallyRequestSync: false,
+    syncRequestInterval: 2000,
+  });
 
   adapter.on("message", (msg: any) => {
     if (msg.type !== "sync" && msg.type !== "request") return;
