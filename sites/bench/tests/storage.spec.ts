@@ -11,11 +11,11 @@ import {
 
 const EDITS = 20;
 
-// The second-writer question. Per-tab modes run with no server, so a tab can
-// only see another's work through the IndexedDB they both write. Shared mode
-// keeps its socket (the worker's server is build-time) but tabs there only
-// meet through the worker, so the server doesn't help it either.
-const server = (mode: Mode) => (mode === "shared" ? undefined : "none");
+// The second-writer question. The bare modes run with no server, so a tab can
+// only see another's work through the IndexedDB they both write. The patchwork
+// mode's server is build-time, so it keeps its socket; the siblings channel is
+// what carries the edits there, and closing tabs tests storage all the same.
+const server = (mode: Mode) => (mode === "patchwork" ? undefined : "none");
 
 async function flush(page: import("@playwright/test").Page) {
   await page.evaluate(() => window.repo.flush());

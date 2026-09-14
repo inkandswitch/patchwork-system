@@ -130,7 +130,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     repo = options.repo;
     hive = options.hive;
   } else {
-    ({ repo, hive, signerIdentity } = await createRepo(sw));
+    ({ repo, hive, signerIdentity } = await createRepo());
   }
 
   // Dev-console / tool-runtime globals (e2e and loaded tools read these). The
@@ -218,13 +218,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     signer: signerIdentity,
     packages: moduleWatcher,
     plugins,
-    sw: {
-      connectClassicSync: sw.connectClassicSync,
-      openPort: sw.openPort,
-      identity: sw.identity,
-      onRecreated: sw.onRecreated,
-      subscribeSyncState: sw.subscribeSyncState,
-    },
+    sw: { connectClassicSync: sw.connectClassicSync },
 
     async create<D>(type: string, init?: (doc: D) => void) {
       const datatype =

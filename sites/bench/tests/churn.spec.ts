@@ -11,8 +11,8 @@ import {
 } from "./bench.js";
 
 // Close the tab that booted everything and check the survivors still sync.
-// For shared mode that tab spawned the workers; for per-tab modes it owned a
-// storage worker mid-write.
+// In patchwork mode that tab spawned the automerge worker; in every mode it
+// owned a storage worker mid-write.
 for (const mode of MODES) {
   test(`${mode}: closing the first tab doesn't strand the rest`, async ({
     context,

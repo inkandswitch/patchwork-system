@@ -2,19 +2,18 @@
 // SharedWorker: one instance serves every tab and lives as long as any tab
 // does.
 //
-// It holds no storage of its own — it is a storageless node hanging off the
-// subduction worker, and resolving requests is its whole job. When the service
-// worker misses the cache for a request that looks like a URL encoded URL, it
-// broadcasts a HandoffRequestMessage on HANDOFF_CHANNEL; we resolve the
-// automerge URL, write the response into the service worker's cache (keyed by
-// a Request reconstructed to match the one it's holding), and reply on the same
-// channel.
+// It is a node like any tab's: the same IndexedDB, its own sync-server socket,
+// and the siblings channel to the tabs. Resolving requests is its whole job.
+// When the service worker misses the cache for a request that looks like a URL
+// encoded URL, it broadcasts a HandoffRequestMessage on HANDOFF_CHANNEL; we
+// resolve the automerge URL, write the response into the service worker's
+// cache (keyed by a Request reconstructed to match the one it's holding), and
+// reply on the same channel.
 import { initializeWasm, hasHeads } from "@automerge/automerge/slim";
 // eslint-disable-next-line
 // @ts-ignore — initSync is a wasm-bindgen runtime helper not in the .d.ts
 import { initSync as initSubductionSync } from "@automerge/automerge-subduction/slim";
 import { MemorySigner } from "@automerge/automerge-subduction/slim";
-import { makePortProvider } from "@automerge/automerge-repo/worker-port";
 
 import {
   Repo,
@@ -27,11 +26,19 @@ import {
 } from "@automerge/automerge-repo/slim";
 import { resolvePath } from "@inkandswitch/patchwork-filesystem";
 
+import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
 import { WebSocketWorkerClientAdapter } from "@automerge/automerge-repo-network-websocket";
+import {
+  initializeAutomergeRepoKeyhive,
+  initKeyhiveWasm,
+  type AutomergeRepoKeyhive,
+  type SyncServerSelection,
+} from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
-import { WorkerSubductionEndpoint } from "./worker-link.js";
-import { startWorkerControl, postToPort } from "./worker-control.js";
+import { connectSiblings } from "./siblings.js";
+import { keyhiveStorageName, storagePrefix } from "./storage.js";
+import { startWorkerControl } from "./worker-control.js";
 import {
   HANDOFF_CHANNEL,
   type HandoffCachedMessage,
@@ -41,24 +48,24 @@ import {
   type HandoffResponseMessage,
 } from "./types.js";
 
+declare const __SYNC_SERVER__: {
+  url: string;
+  keyhive?: SyncServerSelection;
+};
+
+const syncServer =
+  typeof __SYNC_SERVER__ !== "undefined"
+    ? __SYNC_SERVER__
+    : { url: "wss://subduction.sync.inkandswitch.com" };
+
 const RESOLVE_TIMEOUT_MS = 30_000;
 
 const CACHEABLE_STATUSES = [200, 203, 204];
 
-let link: WorkerSubductionEndpoint | undefined;
-
 const control = startWorkerControl("automerge-worker", {
-  // The tab side runs donatePort; the messages are channel-tagged so they
-  // coexist with the control protocol.
-  onConnect: (port) => linkPortProvider.attachClient(port),
   onMessage: handleControlMessage,
 });
 const log = control.log;
-
-// A SharedWorker can neither spawn nor connect to another SharedWorker, so a
-// tab brokers this worker's link to the subduction worker: it asks for a port
-// and donates one.
-const linkPortProvider = makePortProvider({ target: "subduction-link" });
 
 // ── The repo ───────────────────────────────────────────────────────────
 
@@ -86,18 +93,52 @@ async function buildRepo(): Promise<Repo> {
   await initializeWasm(new Uint8Array(automergeWasm));
   log("wasm initialized");
 
-  const repo = new Repo({
+  const { repo, hive } = syncServer.keyhive
+    ? await buildKeyhiveRepo(syncServer.keyhive)
+    : { repo: buildPlainRepo() };
+  connectSiblings(repo, hive);
+
+  (self as any).repo = repo;
+  if (hive) (self as any).hive = hive;
+  return repo;
+}
+
+function buildPlainRepo(): Repo {
+  return new Repo({
     signer: new MemorySigner(),
-    peerId: `resolver-${Math.random().toString(36).slice(2)}` as PeerId,
-    subductionWebsocketEndpoints: [
-      (link = new WorkerSubductionEndpoint(
-        () => linkPortProvider.source() as Promise<MessagePort>
-      )),
-    ],
+    storage: new IndexedDBWorkerStorageAdapter(),
+    peerId: `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
+    subductionWebsocketEndpoints: [syncServer.url],
+    enableRemoteHeadsGossiping: true,
+  });
+}
+
+async function buildKeyhiveRepo(
+  keyhiveSyncServer: SyncServerSelection
+): Promise<{ repo: Repo; hive: AutomergeRepoKeyhive }> {
+  initKeyhiveWasm();
+  const { hive, repo } = await initializeAutomergeRepoKeyhive({
+    createRepo: (config) => new Repo(config),
+    storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
+    peerIdSuffix:
+      `${storagePrefix}-resolver` + Math.random().toString(36).slice(2),
+    automaticArchiveIngestion: true,
+    cachingMode: "periodic",
+    // ARK selects the relay via `syncServer`, which pairs the contact card with
+    // the matching peer id. Omitting it defaults to "subduction".
+    syncServer: keyhiveSyncServer,
+    repo: {
+      storage: new IndexedDBWorkerStorageAdapter(),
+      subductionWebsocketEndpoints: [syncServer.url],
+      enableRemoteHeadsGossiping: true,
+    },
   });
 
-  (self as never as { repo: Repo }).repo = repo;
-  return repo;
+  hive.networkAdapter.whenReady().then(() => {
+    (hive.networkAdapter as any).syncKeyhive();
+  });
+
+  return { repo, hive };
 }
 
 // ── Classic sync ───────────────────────────────────────────────────────
@@ -144,14 +185,6 @@ function handleControlMessage(
   controlPort: MessagePort,
   event: MessageEvent
 ): void {
-  // The subduction worker died and was replaced: the donated port ends in a
-  // worker that no longer exists, so drop it and ask for another.
-  if (data?.type === "link-lost") {
-    linkPortProvider.invalidate();
-    link?.reset();
-    return;
-  }
-
   if (data?.type !== "connect-classic-sync") return;
   const [replyPort] = event.ports;
   const server =

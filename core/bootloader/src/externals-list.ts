@@ -6,10 +6,7 @@ const externals = [
   "@automerge/automerge/slim",
   "@automerge/automerge-repo",
   "@automerge/automerge-repo/slim",
-  // Port-donation plumbing: a tab opens a port on the subduction worker and
-  // donates it to the automerge worker, since a SharedWorker can neither spawn
-  // nor connect to another one. See setup.ts/automerge-worker.ts.
-  "@automerge/automerge-repo/worker-port",
+  "@automerge/automerge-repo-network-broadcastchannel",
   "@automerge/automerge-repo-network-messagechannel",
   "@automerge/automerge-repo-network-websocket",
   "@automerge/automerge-repo-storage-indexeddb",

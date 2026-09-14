@@ -1,12 +1,14 @@
 ---
-"@inkandswitch/patchwork-bootloader": patch
-"@inkandswitch/patchwork": patch
+"@inkandswitch/patchwork-bootloader": minor
+"@inkandswitch/patchwork": minor
 ---
 
-Sync the tab with the automerge SharedWorker over Subduction instead of classic automerge-repo sync.
+Every Repo on the origin is its own Subduction node. A tab holds this origin's IndexedDB, keeps its own WebSocket to the sync server, and meets the other tabs over a BroadcastChannel (`connectSiblings` in `@inkandswitch/patchwork-bootloader/siblings`, classic automerge sync, wrapped in the keyhive adapter on keyhive sites). The automerge SharedWorker no longer sits between tabs and storage — it is one more such node, kept only to resolve `automerge:` URLs for the service worker, which can't own a Repo itself. The websocket proxy worker is gone with it.
 
-The tab is now a storageless node: it holds no IndexedDB of its own and gets everything from the worker over a Subduction transport on the repo port. Keyhive sites take the same path: the tab builds its hive with `initializeAutomergeRepoKeyhive`, the subduction-backed one, and syncs keyhive state over the same transport instead of wrapping a classic adapter.
+Benchmarked against the shared-worker arrangement (`sites/bench`): boot and memory are a wash or better, cross-tab propagation matches, and two shared-worker failures go away — a `find()` racing a sibling's `create()` settled as unavailable, and edits made just before a tab closed were lost, since a storageless tab had nothing to flush to. Each tab flushing its own IndexedDB closes both.
 
-New: `@inkandswitch/patchwork-bootloader/worker-link` exports `MessagePortTransport`, a Subduction transport over a MessagePort, and `WorkerSubductionEndpoint`, which opens one per connection. The tab passes the endpoint as a `subductionWebsocketEndpoint`, so automerge-repo's own reconnect loop replaces the port re-wiring the tab used to do by hand.
+Keyhive sites use the subduction-backed hive in both the tab and the worker, each talking to the sync server directly.
 
-The worker handoff on `patchwork.sw` changed with it: `subscribeToRepoChannel(listener)` and `getRepoChannel()` are gone, replaced by `openPort(): Promise<MessagePort>` and `onRecreated(listener)`. `createRepo` in `@inkandswitch/patchwork` takes those two rather than a network adapter.
+Removed from `setupServiceWorker()`'s result and `patchwork.sw`: `subscribeToRepoChannel`, `getRepoChannel`, `subscribeSyncState`. The `@patchwork/syncstate` BroadcastChannel and its `SyncState*` message types are gone too; a tab's own Repo now has everything they carried — `repo.isSubductionConnected()` and the `subduction-connection` event for the link, `repo.connectedSubductionPeerIds()` for which peers are the server, the `subduction-remote-heads` event and `handle.getSyncInfo()` for per-document heads, and `patchwork.signerIdentity` for this tab's peer id. `createRepo` in `@inkandswitch/patchwork` takes no arguments.
+
+`@inkandswitch/patchwork-bootloader` depends on `@automerge/automerge-repo-network-broadcastchannel`, which is also on the importmap.

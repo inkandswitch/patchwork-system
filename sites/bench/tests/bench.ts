@@ -2,8 +2,8 @@ import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 
-export type Mode = "shared" | "pertab" | "pertab-bc";
-export const MODES: Mode[] = ["shared", "pertab", "pertab-bc"];
+export type Mode = "patchwork" | "pertab" | "pertab-bc";
+export const MODES: Mode[] = ["patchwork", "pertab", "pertab-bc"];
 
 export const RESULTS = "bench-results/results.jsonl";
 

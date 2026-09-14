@@ -8,10 +8,6 @@ import type {
   AccountCreator,
   AccountDoc,
 } from "@inkandswitch/patchwork-plugins";
-import type {
-  SyncStateDocMessage,
-  WorkerIdentity,
-} from "@inkandswitch/patchwork-bootloader/types";
 import type * as pluginsNS from "@inkandswitch/patchwork-plugins";
 
 export type PluginsApi = typeof pluginsNS;
@@ -20,13 +16,6 @@ export type SignerIdentity = { peerId: string; verifyingKey: string };
 
 export interface ServiceWorkerApi {
   connectClassicSync: (server?: string) => Promise<void>;
-  openPort: () => Promise<MessagePort>;
-  identity: () => Promise<WorkerIdentity>;
-  onRecreated: (listener: () => void) => () => void;
-  subscribeSyncState: (
-    documentId: string,
-    listener: (update: SyncStateDocMessage) => void
-  ) => () => void;
 }
 
 export interface OpenOptions {

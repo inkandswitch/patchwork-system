@@ -1,11 +1,11 @@
 import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
 import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
-import { WorkerSubductionEndpoint } from "@inkandswitch/patchwork-bootloader/worker-link";
+import { connectSiblings } from "@inkandswitch/patchwork-bootloader/siblings";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import {
   initKeyhiveWasm,
   initializeAutomergeRepoKeyhive,
-  type AutomergeRepoKeyhiveBase,
+  type AutomergeRepoKeyhive,
   type SyncServerSelection,
 } from "@automerge/automerge-repo-keyhive";
 // eslint-disable-next-line
@@ -16,7 +16,6 @@ import {
   keyhiveStorageName,
   storagePrefix,
 } from "@inkandswitch/patchwork-bootloader/storage";
-import type { SetupServiceWorkerResult } from "@inkandswitch/patchwork-bootloader/types";
 import type { SignerIdentity } from "./types.js";
 import debug from "debug";
 
@@ -49,27 +48,18 @@ export function initWasm(): Promise<void> {
   return wasmReady;
 }
 
-/** The bit of the bootloader's subduction worker a Repo needs. */
-export type WorkerLink = Pick<
-  SetupServiceWorkerResult,
-  "openPort" | "identity" | "onRecreated"
->;
-
 export type TabRepo = {
   repo: Repo;
-  hive?: AutomergeRepoKeyhiveBase;
+  hive?: AutomergeRepoKeyhive;
   signerIdentity?: SignerIdentity;
 };
 
-export async function createRepo(worker: WorkerLink): Promise<TabRepo> {
-  // The tab is a storageless node: the subduction worker holds the IndexedDB
-  // and the tab syncs against it over one Subduction transport.
-  const endpoint = new WorkerSubductionEndpoint(() => worker.openPort());
-  // A dead SharedWorker leaves its ports silent rather than closed, so the
-  // reconnect loop is told to give up on the old one.
-  worker.onRecreated(() => endpoint.reset());
-  const subductionWebsocketEndpoints = [endpoint];
-
+/**
+ * The tab's own node: this origin's IndexedDB, a socket to the sync server,
+ * and the siblings channel to every other Repo on the origin. Nothing is
+ * shared with other tabs except the database underneath.
+ */
+export async function createRepo(): Promise<TabRepo> {
   if (syncServer.keyhive) {
     log("setting up keyhive");
     initKeyhiveWasm();
@@ -79,26 +69,31 @@ export async function createRepo(worker: WorkerLink): Promise<TabRepo> {
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
-      // `syncServer` picks the contact card the hive trusts. The frames go to
-      // the subduction worker, the tab's only peer, which relays them there.
+      // ARK selects the relay via `syncServer`, defaulting to "subduction".
       syncServer: syncServer.keyhive,
-      remotePeerId: (await worker.identity()).peerId as AutomergeRepo.PeerId,
-      repo: { subductionWebsocketEndpoints },
+      repo: {
+        storage: new IndexedDBWorkerStorageAdapter(),
+        subductionWebsocketEndpoints: [syncServer.url],
+        enableRemoteHeadsGossiping: true,
+      },
     });
+    connectSiblings(repo, hive);
     log("keyhive setup complete");
     return { repo, hive };
   }
 
   // The signer is explicit rather than the Repo's internal default so the
-  // identity the tab presents in the subduction handshake can be shown on
-  // window.patchwork. Keyhive supplies its own.
+  // identity the tab presents to the server can be shown on window.patchwork.
   const signer = new MemorySigner();
   const repo = new Repo({
     signer,
-    subductionWebsocketEndpoints,
+    storage: new IndexedDBWorkerStorageAdapter(),
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
+    subductionWebsocketEndpoints: [syncServer.url],
+    enableRemoteHeadsGossiping: true,
   });
+  connectSiblings(repo);
   const signerIdentity = {
     peerId: signer.peerId().toString(),
     verifyingKey: (
