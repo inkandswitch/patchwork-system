@@ -1,5 +1,13 @@
 # @inkandswitch/patchwork-plugins
 
+## 1.2.5
+
+### Patch Changes
+
+- 26d50c0: Only call `addSyncServerRelayToDoc` for documents whose URL is a keyhive document id. Legacy padded-zero documents are skipped instead of throwing when created with a hive present.
+
+  Adds `isKeyhiveDoc(url)`, exported from the package root.
+
 ## 1.2.4
 
 ### Patch Changes
