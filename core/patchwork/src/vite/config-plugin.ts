@@ -40,9 +40,7 @@ export function buildDefines(
  * used to hand-write in its own vite.config.ts. Each is switched off
  * individually via the matching `false` option.
  */
-export function config(
-  options: PatchworkVitePluginOptions = {}
-): Plugin {
+export function config(options: PatchworkVitePluginOptions = {}): Plugin {
   return {
     name: "@patchwork/config",
     config() {
@@ -87,11 +85,11 @@ export function config(
         },
       };
     },
-    // The shared automerge-worker's chunk imports bypass the page's service
-    // worker, so offline boot needs the browser's HTTP cache to serve them
-    // without revalidating. Content hashes make that safe; a new build gets
-    // new URLs. Production gets this from the generated _headers file — vite
-    // preview doesn't read that, so mirror it here.
+    // The shared automerge-protocol-handler-worker's chunk imports bypass the
+    // page's service worker, so offline boot needs the browser's HTTP cache to
+    // serve them without revalidating. Content hashes make that safe; a new
+    // build gets new URLs. Production gets this from the generated _headers
+    // file — vite preview doesn't read that, so mirror it here.
     configurePreviewServer(server) {
       if (
         options.netlify === false ||
@@ -101,10 +99,7 @@ export function config(
       }
       server.middlewares.use((req, res, next) => {
         if (req.url?.startsWith("/assets/")) {
-          res.setHeader(
-            "Cache-Control",
-            "public, max-age=31536000, immutable"
-          );
+          res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
         }
         next();
       });

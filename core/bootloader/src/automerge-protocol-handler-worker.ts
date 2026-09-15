@@ -62,7 +62,7 @@ const RESOLVE_TIMEOUT_MS = 30_000;
 
 const CACHEABLE_STATUSES = [200, 203, 204];
 
-const control = startWorkerControl("automerge-worker", {
+const control = startWorkerControl("automerge-protocol-handler-worker", {
   onMessage: handleControlMessage,
 });
 const log = control.log;
@@ -107,7 +107,8 @@ function buildPlainRepo(): Repo {
   return new Repo({
     signer: new MemorySigner(),
     storage: new IndexedDBWorkerStorageAdapter(),
-    peerId: `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
+    peerId:
+      `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
     subductionWebsocketEndpoints: [syncServer.url],
     enableRemoteHeadsGossiping: true,
   });

@@ -19,8 +19,9 @@ export const workers = [
     fileName: "service-worker.js",
   },
   {
-    specifier: "@inkandswitch/patchwork-bootloader/automerge-worker",
-    fileName: "automerge-worker.js",
+    specifier:
+      "@inkandswitch/patchwork-bootloader/automerge-protocol-handler-worker",
+    fileName: "automerge-protocol-handler-worker.js",
   },
   {
     specifier: "@inkandswitch/patchwork-bootloader/module-loader-worker",

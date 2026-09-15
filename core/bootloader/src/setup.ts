@@ -62,21 +62,22 @@ function installServiceWorkerLogForwarding(): void {
 // each tab keeps it alive and heartbeats it, so it's here rather than in the
 // service worker, which can't own one.
 
-let automergeWorkerPath = "/automerge-worker.js";
+let automergeProtocolHandlerWorkerPath =
+  "/automerge-protocol-handler-worker.js";
 
-const automergeWorker = sharedWorkerHandle(
-  "patchwork-automerge",
-  () => automergeWorkerPath,
+const automergeProtocolHandlerWorker = sharedWorkerHandle(
+  "patchwork-automerge-protocol-handler",
+  () => automergeProtocolHandlerWorkerPath,
   {
     debugging: workerDebugging,
     onMessage(event) {
-      forwardWorkerConsole("automerge-worker", event.data);
+      forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
     },
   }
 );
 
-export function getAutomergeWorker(): SharedWorker {
-  return automergeWorker.get();
+export function getAutomergeProtocolHandlerWorker(): SharedWorker {
+  return automergeProtocolHandlerWorker.get();
 }
 
 export function connectClassicSync(
@@ -102,9 +103,10 @@ export function connectClassicSync(
       else
         reject(new Error(event.data?.error ?? "connect-classic-sync failed"));
     };
-    automergeWorker.post({ type: "connect-classic-sync", server: url }, [
-      port2,
-    ]);
+    automergeProtocolHandlerWorker.post(
+      { type: "connect-classic-sync", server: url },
+      [port2]
+    );
   });
 }
 
@@ -141,10 +143,11 @@ export default async function setupServiceWorker(
   // default eviction.
   void navigator.storage?.persist?.().catch(() => {});
 
-  if (options?.workerPath) automergeWorkerPath = options.workerPath;
+  if (options?.workerPath)
+    automergeProtocolHandlerWorkerPath = options.workerPath;
 
   // Start it now so it boots wasm while the service worker installs.
-  const shared = automergeWorker.get();
+  const shared = automergeProtocolHandlerWorker.get();
 
   const reg = await navigator.serviceWorker.register(
     options?.path ?? "/service-worker.js",

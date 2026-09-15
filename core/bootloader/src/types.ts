@@ -96,9 +96,7 @@ export interface HandoffAbortMessage {
 }
 
 export type HandoffReplyMessage =
-  | HandoffCachedMessage
-  | HandoffResponseMessage
-  | HandoffAbortMessage;
+  HandoffCachedMessage | HandoffResponseMessage | HandoffAbortMessage;
 
 /**
  * Automerge worker → world: broadcast once on startup so the service worker
@@ -116,7 +114,7 @@ export type SetupServiceWorkerOptions = {
   path?: string;
   /**
    * The public path to the automerge shared worker file.
-   * Defaults to `/automerge-worker.js`
+   * Defaults to `/automerge-protocol-handler-worker.js`
    */
   workerPath?: string;
 };
