@@ -1,5 +1,11 @@
 # @inkandswitch/patchwork-plugins
 
+## 1.2.4
+
+### Patch Changes
+
+- 47bc4cf: `@automerge/automerge` goes to `3.4.1`, and `@automerge/automerge-repo-network-broadcastchannel` joins the automerge-repo family at `2.6.0-subduction.48`.
+
 ## 1.2.3
 
 ### Patch Changes
