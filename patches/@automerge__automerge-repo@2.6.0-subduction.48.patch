@@ -1,3 +1,54 @@
+diff --git a/dist/Repo.d.ts b/dist/Repo.d.ts
+index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..0f89be0e8b7e19ebb706d88685593259ddf67c89 100644
+--- a/dist/Repo.d.ts
++++ b/dist/Repo.d.ts
+@@ -259,8 +259,11 @@ export interface RepoConfig {
+         adapter: NetworkAdapterInterface;
+         serviceName: string;
+         /** Whether to initiate ("connect") or accept ("accept") the subduction
+-         *  handshake for peers on this adapter. Defaults to "connect". */
+-        role?: "connect" | "accept";
++         *  handshake for peers on this adapter. "mesh" decides per peer, for
++         *  adapters where every node sees every other one (e.g. a
++         *  BroadcastChannel): the side whose peer id sorts lower initiates.
++         *  Defaults to "connect". */
++        role?: "connect" | "accept" | "mesh";
+     }[];
+     /**
+      * Tunable timeouts for the Subduction sync engine and its
+diff --git a/dist/subduction/AdapterConnections.d.ts b/dist/subduction/AdapterConnections.d.ts
+index 55231beca6494ed4ab0eaeb45383b822bcea5fe3..419c4ec3d17dc9f521292d780d293f5b1aafa8ce 100644
+--- a/dist/subduction/AdapterConnections.d.ts
++++ b/dist/subduction/AdapterConnections.d.ts
+@@ -10,6 +10,6 @@ export declare class AdapterConnections implements ConnectionManager {
+     generation(): number;
+     onChange(callback: () => void): void;
+     shutdown(): void;
+-    addAdapter(adapter: NetworkAdapterInterface, serviceName: string, role: "connect" | "accept"): void;
++    addAdapter(adapter: NetworkAdapterInterface, serviceName: string, role: "connect" | "accept" | "mesh"): void;
+ }
+ //# sourceMappingURL=AdapterConnections.d.ts.map
+\ No newline at end of file
+diff --git a/dist/subduction/AdapterConnections.js b/dist/subduction/AdapterConnections.js
+index 40f525a6be944be10dd5e707c73f6af48d7ffde1..51d27e89d02439b4724eb830aceb9339c65a761c 100644
+--- a/dist/subduction/AdapterConnections.js
++++ b/dist/subduction/AdapterConnections.js
+@@ -57,11 +57,12 @@ export class AdapterConnections {
+         try {
+             const subduction = await this.#subduction;
+             const transport = new NetworkAdapterTransport(adapter, this.#localPeerId, peerId);
+-            if (role === "accept") {
+-                await subduction.acceptTransport(transport, serviceName);
++            const initiate = role === "mesh" ? this.#localPeerId < peerId : role !== "accept";
++            if (initiate) {
++                await subduction.connectTransport(transport, serviceName);
+             }
+             else {
+-                await subduction.connectTransport(transport, serviceName);
++                await subduction.acceptTransport(transport, serviceName);
+             }
+         }
+         catch {
 diff --git a/dist/subduction/SubductionConnections.js b/dist/subduction/SubductionConnections.js
 index 4760a1899a8c0127db4840d5de090f6825211d97..5b9d19d4dd1cfb0cb242f140d5401af53aadd6a9 100644
 --- a/dist/subduction/SubductionConnections.js
@@ -13,6 +64,62 @@ index 4760a1899a8c0127db4840d5de090f6825211d97..5b9d19d4dd1cfb0cb242f140d5401af5
                  return true;
          }
          return false;
+diff --git a/src/Repo.ts b/src/Repo.ts
+index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..c3df442b29c5a6ecd59a9464b3a30c4f59e3adc4 100644
+--- a/src/Repo.ts
++++ b/src/Repo.ts
+@@ -1060,8 +1060,11 @@ export interface RepoConfig {
+     adapter: NetworkAdapterInterface
+     serviceName: string
+     /** Whether to initiate ("connect") or accept ("accept") the subduction
+-     *  handshake for peers on this adapter. Defaults to "connect". */
+-    role?: "connect" | "accept"
++     *  handshake for peers on this adapter. "mesh" decides per peer, for
++     *  adapters where every node sees every other one (e.g. a
++     *  BroadcastChannel): the side whose peer id sorts lower initiates.
++     *  Defaults to "connect". */
++    role?: "connect" | "accept" | "mesh"
+   }[]
+ 
+   /**
+diff --git a/src/subduction/AdapterConnections.ts b/src/subduction/AdapterConnections.ts
+index 4426f11291a00b230332c63d77c683bb7ab02d24..e1fb64697b94637cd9dd968a6cebe8f5e06d89b2 100644
+--- a/src/subduction/AdapterConnections.ts
++++ b/src/subduction/AdapterConnections.ts
+@@ -52,7 +52,7 @@ export class AdapterConnections implements ConnectionManager {
+   addAdapter(
+     adapter: NetworkAdapterInterface,
+     serviceName: string,
+-    role: "connect" | "accept"
++    role: "connect" | "accept" | "mesh"
+   ) {
+     this.#adapters.push(adapter)
+     adapter.on("peer-candidate", ({ peerId }) => {
+@@ -77,7 +77,7 @@ export class AdapterConnections implements ConnectionManager {
+     adapter: NetworkAdapterInterface,
+     serviceName: string,
+     peerId: PeerId,
+-    role: "connect" | "accept"
++    role: "connect" | "accept" | "mesh"
+   ) {
+     try {
+       const subduction = await this.#subduction
+@@ -86,10 +86,12 @@ export class AdapterConnections implements ConnectionManager {
+         this.#localPeerId,
+         peerId
+       )
+-      if (role === "accept") {
+-        await subduction.acceptTransport(transport, serviceName)
+-      } else {
++      const initiate =
++        role === "mesh" ? this.#localPeerId < peerId : role !== "accept"
++      if (initiate) {
+         await subduction.connectTransport(transport, serviceName)
++      } else {
++        await subduction.acceptTransport(transport, serviceName)
+       }
+     } catch {
+       // Transport connection failed (e.g. peer disconnected during handshake)
 diff --git a/src/subduction/SubductionConnections.ts b/src/subduction/SubductionConnections.ts
 index 0d5510500c1e3a8e0d84b6f9b5f87f42096ee8e3..6b8376be24f932f21ab3ddc4b76bc81ff39a5030 100644
 --- a/src/subduction/SubductionConnections.ts
