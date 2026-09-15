@@ -1,6 +1,6 @@
 import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
 import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
-import { connectSiblings } from "@inkandswitch/patchwork-bootloader/siblings";
+import { siblingAdapters } from "@inkandswitch/patchwork-bootloader/siblings";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import {
   initKeyhiveWasm,
@@ -74,10 +74,10 @@ export async function createRepo(): Promise<TabRepo> {
       repo: {
         storage: new IndexedDBWorkerStorageAdapter(),
         subductionWebsocketEndpoints: [syncServer.url],
+        subductionAdapters: siblingAdapters(),
         enableRemoteHeadsGossiping: true,
       },
     });
-    connectSiblings(repo, hive);
     log("keyhive setup complete");
     return { repo, hive };
   }
@@ -91,9 +91,9 @@ export async function createRepo(): Promise<TabRepo> {
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
     subductionWebsocketEndpoints: [syncServer.url],
+    subductionAdapters: siblingAdapters(),
     enableRemoteHeadsGossiping: true,
   });
-  connectSiblings(repo);
   const signerIdentity = {
     peerId: signer.peerId().toString(),
     verifyingKey: (

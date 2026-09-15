@@ -36,7 +36,7 @@ import {
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
-import { connectSiblings } from "./siblings.js";
+import { siblingAdapters } from "./siblings.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
 import {
@@ -96,7 +96,6 @@ async function buildRepo(): Promise<Repo> {
   const { repo, hive } = syncServer.keyhive
     ? await buildKeyhiveRepo(syncServer.keyhive)
     : { repo: buildPlainRepo() };
-  connectSiblings(repo, hive);
 
   (self as any).repo = repo;
   if (hive) (self as any).hive = hive;
@@ -110,6 +109,7 @@ function buildPlainRepo(): Repo {
     peerId:
       `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
     subductionWebsocketEndpoints: [syncServer.url],
+    subductionAdapters: siblingAdapters(),
     enableRemoteHeadsGossiping: true,
   });
 }
@@ -131,6 +131,7 @@ async function buildKeyhiveRepo(
     repo: {
       storage: new IndexedDBWorkerStorageAdapter(),
       subductionWebsocketEndpoints: [syncServer.url],
+      subductionAdapters: siblingAdapters(),
       enableRemoteHeadsGossiping: true,
     },
   });
