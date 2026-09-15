@@ -1,8 +1,9 @@
 /**
  * One import for a Patchwork site.
  *
- * `setup(options)` constructs the Repo, wires up the automerge-worker port,
- * loads plugins via the ModuleWatcher, resolves the user's account document,
+ * `setup(options)` constructs the Repo, wires up the
+ * automerge-protocol-handler-worker port, loads plugins via the
+ * ModuleWatcher, resolves the user's account document,
  * installs the router, and resolves with the site's runtime API — `repo`,
  * `create`, `open`, `find`, `packages`, `plugins`, `sw` — which is what a
  * site assigns to `window.patchwork`.
@@ -15,7 +16,7 @@
  * Pulls in DOM- and plugin-layer dependencies, so it is for a browser site's
  * `main.ts` only. Non-UI consumers should import
  * `@inkandswitch/patchwork-bootloader` directly, which does SW registration
- * and the automerge-worker handoff and nothing else.
+ * and the automerge-protocol-handler-worker handoff and nothing else.
  */
 import {
   type AutomergeUrl,

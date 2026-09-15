@@ -97,7 +97,8 @@ export interface PatchworkOptions {
   /**
    * Bring your own Repo. When provided, setup skips wasm initialization and
    * repo creation entirely — you are responsible for having initialized
-   * automerge/subduction and wired the automerge-worker port yourself.
+   * automerge/subduction and wired the automerge-protocol-handler-worker
+   * port yourself.
    */
   repo?: Repo;
 

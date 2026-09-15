@@ -38,9 +38,9 @@
       "import": "./dist/service-worker.js",
       "types": "./dist/service-worker.d.ts"
     },
-    "./automerge-worker": {
-      "import": "./dist/automerge-worker.js",
-      "types": "./dist/automerge-worker.d.ts"
+    "./automerge-protocol-handler-worker": {
+      "import": "./dist/automerge-protocol-handler-worker.js",
+      "types": "./dist/automerge-protocol-handler-worker.d.ts"
     },
     "./module-loader": {
       "import": "./dist/module-loader.js",

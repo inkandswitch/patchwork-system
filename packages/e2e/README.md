@@ -118,7 +118,8 @@ lookup missed entries when the request was the wasm
 offline boot 503'd — it now falls back to a url-keyed match — and hashed
 `/assets/*` get `Cache-Control: immutable` (netlify `_headers` + a preview
 middleware) so the browser's HTTP cache can serve the shared
-automerge-worker's chunk imports offline, which bypass the page's SW.
+automerge-protocol-handler-worker's chunk imports offline, which bypass the
+page's SW.
 
 Heads-up: repeated full-suite runs can get the machine's IP temporarily
 rate-limited by netlify (the full-UI tests fetch the whole base module

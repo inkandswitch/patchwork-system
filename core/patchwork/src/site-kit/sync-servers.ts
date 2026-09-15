@@ -2,9 +2,10 @@ import type { PatchworkSiteOptions } from "./options.js";
 import type { SyncServerSelection } from "@automerge/automerge-repo-keyhive";
 
 // Mirrors core/bootloader/src/sync-config.ts's DEFAULT_CLASSIC_SYNC_SERVER
-// and automerge-worker.ts's SUBDUCTION_SYNC_URL selection — kept here as
-// plain constants (rather than importing those runtime modules) since this
-// only needs the hostnames, not the browser-only logic that reads them.
+// and automerge-protocol-handler-worker.ts's SUBDUCTION_SYNC_URL selection —
+// kept here as plain constants (rather than importing those runtime modules)
+// since this only needs the hostnames, not the browser-only logic that reads
+// them.
 export const DEFAULT_SYNC_SERVERS = {
   classic: "wss://sync3.automerge.org",
   subduction: "wss://subduction.sync.inkandswitch.com",
