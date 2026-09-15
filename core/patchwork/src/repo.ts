@@ -1,6 +1,7 @@
 import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
 import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
 import { siblingAdapters } from "@inkandswitch/patchwork-bootloader/siblings";
+import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import {
   initKeyhiveWasm,
@@ -11,7 +12,6 @@ import {
 // eslint-disable-next-line
 // @ts-ignore — initSync is a wasm-bindgen runtime helper not in the .d.ts
 import { initSync as initSubductionSync } from "@automerge/automerge-subduction/slim";
-import { MemorySigner } from "@automerge/automerge-subduction/slim";
 import {
   keyhiveStorageName,
   storagePrefix,
@@ -82,12 +82,14 @@ export async function createRepo(): Promise<TabRepo> {
     return { repo, hive };
   }
 
-  // The signer is explicit rather than the Repo's internal default so the
-  // identity the tab presents to the server can be shown on window.patchwork.
-  const signer = new MemorySigner();
+  // The signer is explicit rather than the Repo's internal default so that
+  // every tab on this origin signs as the same peer, and so the identity the
+  // tab presents to the server can be shown on window.patchwork.
+  const storage = new IndexedDBWorkerStorageAdapter();
+  const signer = await loadOrCreateSigner(storage);
   const repo = new Repo({
     signer,
-    storage: new IndexedDBWorkerStorageAdapter(),
+    storage,
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
     subductionWebsocketEndpoints: [syncServer.url],

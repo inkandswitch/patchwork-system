@@ -30,6 +30,10 @@
       "import": "./dist/siblings.js",
       "types": "./dist/siblings.d.ts"
     },
+    "./signer": {
+      "import": "./dist/signer.js",
+      "types": "./dist/signer.d.ts"
+    },
     "./storage": {
       "import": "./dist/storage.js",
       "types": "./dist/storage.d.ts"

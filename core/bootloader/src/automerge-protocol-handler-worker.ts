@@ -13,7 +13,6 @@ import { initializeWasm, hasHeads } from "@automerge/automerge/slim";
 // eslint-disable-next-line
 // @ts-ignore — initSync is a wasm-bindgen runtime helper not in the .d.ts
 import { initSync as initSubductionSync } from "@automerge/automerge-subduction/slim";
-import { MemorySigner } from "@automerge/automerge-subduction/slim";
 
 import {
   Repo,
@@ -37,6 +36,7 @@ import {
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
 import { siblingAdapters } from "./siblings.js";
+import { loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
 import {
@@ -95,17 +95,18 @@ async function buildRepo(): Promise<Repo> {
 
   const { repo, hive } = syncServer.keyhive
     ? await buildKeyhiveRepo(syncServer.keyhive)
-    : { repo: buildPlainRepo() };
+    : { repo: await buildPlainRepo() };
 
   (self as any).repo = repo;
   if (hive) (self as any).hive = hive;
   return repo;
 }
 
-function buildPlainRepo(): Repo {
+async function buildPlainRepo(): Promise<Repo> {
+  const storage = new IndexedDBWorkerStorageAdapter();
   return new Repo({
-    signer: new MemorySigner(),
-    storage: new IndexedDBWorkerStorageAdapter(),
+    signer: await loadOrCreateSigner(storage),
+    storage,
     peerId:
       `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
     subductionWebsocketEndpoints: [syncServer.url],
