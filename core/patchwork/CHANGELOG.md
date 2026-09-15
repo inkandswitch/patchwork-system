@@ -1,5 +1,25 @@
 # @inkandswitch/patchwork
 
+## 0.8.1
+
+### Patch Changes
+
+- 5462610: Apply Patchwork's automerge-repo source patches at bundle time, so a site that installs `@inkandswitch/patchwork` gets them. They were only a pnpm patch, which exists in this repo's node_modules and nowhere else, so every consumer bundled an automerge-repo without the `mesh` subduction role or the `awaiting-reconnect` fix to `isConnecting()`.
+
+  The new `patches` plugin is part of `patchwork()` and also exported on its own. It rewrites the two files as they pass through rollup, and registers the same rewrite as an esbuild plugin for dep pre-bundling, which runs outside the plugin pipeline. It is pinned to one automerge-repo version and every anchor has to match, so bumping the dependency fails the build rather than quietly dropping the patches. A copy that already carries the edits — this repo's, via the pnpm patch — is left alone.
+
+- 5462610: Move keyhive out of `syncServers` and into its own top-level site option: `keyhive?: boolean | { syncServer?, useIdFactory? }`. `keyhive: true` enables it against the `"subduction"` relay; the object form picks a different relay (or a custom `{url, contactCardJson, peerId}` identity) and turns individual behaviour off. `keyhive.useIdFactory: false` drops the `idFactory` ARK injects into the repo config, so document ids are generated the Repo's own way instead of derived from keyhive. It reaches both the tab repo and the automerge protocol handler worker through the `__SYNC_SERVER__` define.
+
+  `syncServers` is now just URLs — `subduction` and `classic`, no longer mutually exclusive with anything. Sites passing `syncServers: { keyhive: X }` should pass `keyhive: { syncServer: X }` instead; `syncServers.subduction` still overrides the URL a named relay implies.
+
+- 5462610: Persist the Subduction signer so every context on an origin presents the same identity. The seed lives in the shared IndexedDB, so tabs and the automerge protocol handler worker adopt one signer instead of each minting a fresh `MemorySigner` on load. Generating it takes a Web Lock, so a cold profile opening two contexts at once still settles on one seed.
+
+  `@inkandswitch/patchwork-bootloader/signer` is a new export: `loadOrCreateSigner(storage)` returns the origin's `MemorySigner`, generating and storing a seed the first time.
+
+- Updated dependencies [5462610]
+- Updated dependencies [5462610]
+  - @inkandswitch/patchwork-bootloader@0.7.1
+
 ## 0.8.0
 
 ### Minor Changes
