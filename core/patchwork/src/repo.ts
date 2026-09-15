@@ -24,6 +24,7 @@ const log = debug("patchwork:setup:repo");
 declare const __SYNC_SERVER__: {
   url: string;
   keyhive?: SyncServerSelection;
+  useIdFactory?: boolean;
 };
 const syncServer =
   typeof __SYNC_SERVER__ !== "undefined"
@@ -64,7 +65,14 @@ export async function createRepo(): Promise<TabRepo> {
     log("setting up keyhive");
     initKeyhiveWasm();
     const { hive, repo } = await initializeAutomergeRepoKeyhive({
-      createRepo: (repoConfig) => new Repo(repoConfig),
+      // ARK injects an `idFactory` deriving document ids from keyhive. A site
+      // can opt out of it with `keyhive: { useIdFactory: false }`.
+      createRepo: ({ idFactory, ...repoConfig }) =>
+        new Repo(
+          syncServer.useIdFactory === false
+            ? repoConfig
+            : { ...repoConfig, idFactory }
+        ),
       storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       automaticArchiveIngestion: true,

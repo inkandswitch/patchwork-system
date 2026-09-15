@@ -15,24 +15,26 @@ export const DEFAULT_SYNC_SERVERS = {
 export function resolvePrimarySyncServer(options: PatchworkSiteOptions): {
   url: string;
   keyhive?: SyncServerSelection;
+  useIdFactory?: boolean;
 } {
-  const servers = options.syncServers || undefined;
-  if (servers?.keyhive) {
-    if (typeof servers.keyhive === "string") {
-      return {
-        keyhive: servers.keyhive,
-        url: DEFAULT_SYNC_SERVERS[servers.keyhive],
-      };
-    }
-    const { url, ...identity } = servers.keyhive;
+  const subduction = (options.syncServers || undefined)?.subduction;
+  if (!options.keyhive) {
+    return { url: subduction ?? DEFAULT_SYNC_SERVERS.subduction };
+  }
+  const keyhive = options.keyhive === true ? {} : options.keyhive;
+  const useIdFactory = keyhive.useIdFactory ?? true;
+  const syncServer = keyhive.syncServer ?? "subduction";
+  if (typeof syncServer === "string") {
     return {
-      keyhive: identity,
-      url,
+      keyhive: syncServer,
+      url: subduction ?? DEFAULT_SYNC_SERVERS[syncServer],
+      useIdFactory,
     };
   }
-  return {
-    url: servers?.subduction ?? DEFAULT_SYNC_SERVERS.subduction,
-  };
+  // A custom relay carries the only URL it can be reached on, so it wins over
+  // `syncServers.subduction`.
+  const { url, ...identity } = syncServer;
+  return { keyhive: identity, url, useIdFactory };
 }
 
 function wsToHttpOrigin(wsUrl: string): string {

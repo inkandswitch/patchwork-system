@@ -36,19 +36,31 @@ export interface PatchworkNetlifyOptions {
   immutableAssets?: boolean;
 }
 
-type PatchworkPrimarySyncServerOptions =
-  | { subduction?: string; keyhive?: never }
-  | { subduction?: never; keyhive: PatchworkKeyhiveSyncServer };
-
 export type PatchworkKeyhiveSyncServer =
   | "keyhive"
   | "subduction"
   | ({ url: string } & SyncServerIdentity);
 
+export interface PatchworkKeyhiveOptions {
+  /**
+   * Which relay ARK registers and grants access to. Default `"subduction"`.
+   * A custom identity also carries the WebSocket URL to reach it on.
+   */
+  syncServer?: PatchworkKeyhiveSyncServer;
+  /**
+   * Use the `idFactory` ARK injects into the repo config, which derives
+   * document ids from keyhive. Default true. `false` drops it and lets the
+   * Repo generate ids its own way.
+   */
+  useIdFactory?: boolean;
+}
+
 export type PatchworkSyncServersOptions = {
   /** wss:// URL for the legacy automerge-repo sync-server channel (connected on demand via connectClassicSync). Default: wss://sync3.automerge.org. Pass false to skip its preconnect hint. */
   classic?: string | false;
-} & PatchworkPrimarySyncServerOptions;
+  /** wss:// URL for the subduction channel. Default: wss://subduction.sync.inkandswitch.com. Overrides the URL a named `keyhive.syncServer` would otherwise imply. */
+  subduction?: string;
+};
 
 export const DEFAULT_TITLE = "Patchwork";
 
@@ -81,12 +93,15 @@ export interface PatchworkSiteOptions {
   backgroundColor?: string;
 
   /**
-   * Sync-server configuration for this build. Providing `keyhive` enables
-   * keyhive and selects the relay identity ARK grants access to. Custom
-   * identities also require their WebSocket URL. `subduction` and `keyhive`
-   * are mutually exclusive. The live server and `classic` are also emitted as
-   * connection hints. Pass `false` to keep the default servers but skip those
-   * hints.
+   * Enables keyhive for this build. `true` takes every default; an object
+   * picks the relay and turns individual behaviour off. Omitted or `false`
+   * builds a plain subduction repo.
+   */
+  keyhive?: boolean | PatchworkKeyhiveOptions;
+
+  /**
+   * The sync-server URLs for this build. Also emitted as connection hints;
+   * pass `false` to keep the URLs but skip the hints.
    */
   syncServers?: false | PatchworkSyncServersOptions;
 
