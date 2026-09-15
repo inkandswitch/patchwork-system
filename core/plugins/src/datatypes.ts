@@ -12,6 +12,7 @@ import type {
 } from "./registry/types.js";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import { isKeyhiveDoc } from "./keyhive.js";
 
 // Datatype implementation interface
 export type DatatypeImplementation<D = unknown> = {
@@ -58,7 +59,7 @@ export const createDocOfDatatype2 = async <D>(
 ): Promise<DocHandle<D & HasPatchworkMetadata>> => {
   const handle = await repo.create2<D & HasPatchworkMetadata>();
   // Add sync server with relay access
-  if (hive) {
+  if (hive && isKeyhiveDoc(handle.url)) {
     await hive.addSyncServerRelayToDoc(handle.url);
   }
   handle.change((doc: D & HasPatchworkMetadata) => {
