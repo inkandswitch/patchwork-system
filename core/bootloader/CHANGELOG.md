@@ -1,5 +1,11 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.7.2
+
+### Patch Changes
+
+- 483e23c: Bump @automerge/automerge to 3.5.0.
+
 ## 0.7.1
 
 ### Patch Changes
