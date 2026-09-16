@@ -27,7 +27,7 @@ minimumReleaseAgeExclude:
   - solid-automerge
 
 catalog:
-  "@automerge/automerge": 3.4.1
+  "@automerge/automerge": 3.5.0
   "@automerge/automerge-repo": 2.6.0-subduction.48
   "@automerge/automerge-repo-keyhive": 0.5.0-alpha.7
   "@automerge/automerge-repo-network-broadcastchannel": 2.6.0-subduction.48

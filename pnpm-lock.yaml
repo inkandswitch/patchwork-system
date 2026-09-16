@@ -35,7 +35,7 @@ catalogs:
       version: 5.9.3
 
 overrides:
-  '@automerge/automerge': 3.4.1
+  '@automerge/automerge': 3.5.0
   '@automerge/automerge-repo': 2.6.0-subduction.48
   '@automerge/automerge-repo-keyhive': 0.5.0-alpha.7
   '@automerge/automerge-repo-network-broadcastchannel': 2.6.0-subduction.48
@@ -78,8 +78,8 @@ importers:
   core/bootloader:
     dependencies:
       '@automerge/automerge':
-        specifier: 3.4.1
-        version: 3.4.1
+        specifier: 3.5.0
+        version: 3.5.0
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.48
         version: 2.6.0-subduction.48(patch_hash=37266639cf8001b55f69d72d72274d4c512898628937a4e0c8b96cb0b8dd67f4)
@@ -164,8 +164,8 @@ importers:
         version: 4.4.3
     devDependencies:
       '@automerge/automerge':
-        specifier: 3.4.1
-        version: 3.4.1
+        specifier: 3.5.0
+        version: 3.5.0
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.48
         version: 2.6.0-subduction.48(patch_hash=37266639cf8001b55f69d72d72274d4c512898628937a4e0c8b96cb0b8dd67f4)
@@ -209,8 +209,8 @@ importers:
   core/filesystem:
     dependencies:
       '@automerge/automerge':
-        specifier: 3.4.1
-        version: 3.4.1
+        specifier: 3.5.0
+        version: 3.5.0
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.48
         version: 2.6.0-subduction.48(patch_hash=37266639cf8001b55f69d72d72274d4c512898628937a4e0c8b96cb0b8dd67f4)
@@ -240,8 +240,8 @@ importers:
   core/patchwork:
     dependencies:
       '@automerge/automerge':
-        specifier: 3.4.1
-        version: 3.4.1
+        specifier: 3.5.0
+        version: 3.5.0
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.48
         version: 2.6.0-subduction.48(patch_hash=37266639cf8001b55f69d72d72274d4c512898628937a4e0c8b96cb0b8dd67f4)
@@ -314,8 +314,8 @@ importers:
         version: 2.0.3
     devDependencies:
       '@automerge/automerge':
-        specifier: 3.4.1
-        version: 3.4.1
+        specifier: 3.5.0
+        version: 3.5.0
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.48
         version: 2.6.0-subduction.48(patch_hash=37266639cf8001b55f69d72d72274d4c512898628937a4e0c8b96cb0b8dd67f4)
@@ -345,8 +345,8 @@ importers:
   packages/edge-handles:
     devDependencies:
       '@automerge/automerge':
-        specifier: 3.4.1
-        version: 3.4.1
+        specifier: 3.5.0
+        version: 3.5.0
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.48
         version: 2.6.0-subduction.48(patch_hash=37266639cf8001b55f69d72d72274d4c512898628937a4e0c8b96cb0b8dd67f4)
@@ -480,8 +480,8 @@ packages:
   '@automerge/automerge-subduction@0.16.1':
     resolution: {integrity: sha512-alH7U4eYn0O7sT6hNLv7CJhNODJi+QD6qfRQTNfZCxL3Q5JZdJ8lFpdvXUkBf+I3bu0GLvVlTaYPWGrBihjpIw==}
 
-  '@automerge/automerge@3.4.1':
-    resolution: {integrity: sha512-zsZpbs/iDPvp+ZojIYd+gxmbcPVz2Xbkcx778G8zrt3E0zS+6saHJOm666lOuZyNRlTV4wHw9qzGTKueedeCsQ==}
+  '@automerge/automerge@3.5.0':
+    resolution: {integrity: sha512-ejbqJWfXWM2QbTcUK/5ugYiQiyOP7LYVAp/RuSvthCc07oek0FClMxEuouuhjrLjVPDSI34RP1ftGc45PF7WRA==}
 
   '@automerge/vanillajs@2.6.0-subduction.48':
     resolution: {integrity: sha512-pmgwTtukitG5kY60cJ7x527IQgeG0NSnoSU35Is1xmswS+05QYpZ1vVdeyKNlGcIz2Kttdvn4vzm/45h0eicYQ==}
@@ -2082,7 +2082,7 @@ snapshots:
 
   '@automerge/automerge-repo-react-hooks@2.6.0-subduction.48(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
-      '@automerge/automerge': 3.4.1
+      '@automerge/automerge': 3.5.0
       '@automerge/automerge-repo': 2.6.0-subduction.48(patch_hash=37266639cf8001b55f69d72d72274d4c512898628937a4e0c8b96cb0b8dd67f4)
       eventemitter3: 5.0.4
       react: 18.3.1
@@ -2102,7 +2102,7 @@ snapshots:
 
   '@automerge/automerge-repo@2.6.0-subduction.48(patch_hash=37266639cf8001b55f69d72d72274d4c512898628937a4e0c8b96cb0b8dd67f4)':
     dependencies:
-      '@automerge/automerge': 3.4.1
+      '@automerge/automerge': 3.5.0
       '@automerge/automerge-subduction': 0.16.1
       bs58check: 4.0.0
       cbor-x: 1.6.4
@@ -2120,7 +2120,7 @@ snapshots:
 
   '@automerge/automerge-subduction@0.16.1': {}
 
-  '@automerge/automerge@3.4.1': {}
+  '@automerge/automerge@3.5.0': {}
 
   '@automerge/vanillajs@2.6.0-subduction.48':
     dependencies:
