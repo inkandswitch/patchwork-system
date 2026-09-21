@@ -175,7 +175,9 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     unregisterPlugins,
     // Discover an Automerge package's plugin descriptors off the main thread;
     // each plugin's load() re-imports the package (at heads) on this thread.
-    importAutomergePackageViaWorker
+    options.importModulesInWorker === false
+      ? undefined
+      : importAutomergePackageViaWorker
   );
 
   const accountDocHandle = (await resolveAccountHandle(repo, {

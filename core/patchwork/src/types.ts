@@ -120,6 +120,14 @@ export interface PatchworkOptions {
    * Defaults to 30 seconds; `false` disables the deadline.
    */
   timeout?: number | false;
+
+  /**
+   * Discover an Automerge package's plugin descriptors in a dedicated module
+   * worker instead of importing the package on the main thread. Each plugin's
+   * `load()` still imports the package (at the same heads) on the main thread.
+   * Defaults to `true`; `false` imports every package directly.
+   */
+  importModulesInWorker?: boolean;
 }
 
 /**

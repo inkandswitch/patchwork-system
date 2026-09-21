@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import {
   MODES,
   createDoc,
+  flush,
   getField,
   openTab,
   record,
@@ -11,15 +12,12 @@ import {
 
 const EDITS = 20;
 
-// The second-writer question. The bare modes run with no server, so a tab can
-// only see another's work through the IndexedDB they both write. The patchwork
-// mode's server is build-time, so it keeps its socket; the siblings channel is
-// what carries the edits there, and closing tabs tests storage all the same.
+// The second-writer question. Every mode but patchwork runs with no server, so
+// a tab can only see another's work through storage — its own IndexedDB, or
+// the worker's. The patchwork mode's server is build-time, so it keeps its
+// socket; the siblings channel is what carries the edits there, and closing
+// tabs tests storage all the same.
 const server = (mode: Mode) => (mode === "patchwork" ? undefined : "none");
-
-async function flush(page: import("@playwright/test").Page) {
-  await page.evaluate(() => window.repo.flush());
-}
 
 for (const mode of MODES) {
   test(`${mode}: a doc written by one tab is found by the next`, async ({
@@ -50,9 +48,10 @@ for (const mode of MODES) {
     expect(seen).toBe(EDITS);
   });
 
-  // Both tabs close right after their last edit, as a user would. With tabs
-  // alive the worker ends up with everything (checked separately); this asks
-  // whether edits still in flight when the tab goes away make it.
+  // Both tabs close right after their last edit, as a user would. This asks
+  // whether edits still in flight when the tab goes away make it: a tab with
+  // its own storage flushes to disk, a storageless tab can only have handed
+  // them to its worker.
   test(`${mode}: two tabs write the same doc and close; a third reads it`, async ({
     context,
   }) => {

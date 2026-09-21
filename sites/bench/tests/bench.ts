@@ -2,14 +2,31 @@ import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 
-export type Mode = "patchwork" | "pertab" | "pertab-bc";
-export const MODES: Mode[] = ["patchwork", "pertab", "pertab-bc"];
+export type Mode =
+  | "patchwork"
+  | "pertab"
+  | "pertab-bc"
+  | "tab-worker"
+  | "shared-worker";
+export const MODES: Mode[] = [
+  "patchwork",
+  "pertab",
+  "pertab-bc",
+  "tab-worker",
+  "shared-worker",
+];
+export const WORKER_MODES: Mode[] = ["tab-worker", "shared-worker"];
+
+export type Storage = "worker" | "direct";
+export const STORAGES: Storage[] = ["worker", "direct"];
 
 export const RESULTS = "bench-results/results.jsonl";
 
 export type Result = {
   metric: string;
   mode: Mode;
+  /** Set for the storage-adapter comparison, which is its own table. */
+  storage?: Storage;
   tabs?: number;
   value: number | boolean;
   unit: "ms" | "MB" | "n" | "ok";
@@ -27,14 +44,43 @@ export function median(values: number[]): number {
     : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+// The sync server's subduction peer id, learned once per run from a bare tab
+// in a throwaway context (so nothing it fetches warms the test's own). A
+// worker-hosted node can't tell the server from the tabs it accepts any other
+// way; the tab modes can, but get it too so every mode measures the same peer.
+let serverPeer: Promise<string> | undefined;
+function probeServerPeer(browser: Browser): Promise<string> {
+  return (serverPeer ??= (async () => {
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.goto("/?mode=pertab");
+      await page.waitForFunction(() => window.repo != null, null, {
+        timeout: 60_000,
+      });
+      await page.evaluate(() => window.bench.online());
+      const [peer] = await page.evaluate(() => window.bench.serverPeerIds());
+      if (!peer) throw new Error("couldn't learn the sync server's peer id");
+      return peer;
+    } finally {
+      await context.close();
+    }
+  })());
+}
+
 export async function openTab(
   context: BrowserContext,
   mode: Mode,
-  { server }: { server?: string } = {}
+  { server, storage }: { server?: string; storage?: Storage } = {}
 ): Promise<Page> {
-  const page = await context.newPage();
   const query = new URLSearchParams({ mode });
   if (server !== undefined) query.set("server", server);
+  if (storage !== undefined) query.set("storage", storage);
+  if (server !== "none") {
+    query.set("serverPeer", await probeServerPeer(context.browser()!));
+  }
+  const page = await context.newPage();
+  page.on("pageerror", (error) => console.error(`[${mode}]`, error.message));
   await page.goto(`/?${query}`);
   await page.waitForFunction(() => window.repo != null, null, {
     timeout: 60_000,
@@ -48,6 +94,42 @@ export function marks(page: Page): Promise<Record<string, number>> {
 
 export function online(page: Page): Promise<number> {
   return page.evaluate(() => window.bench.online());
+}
+
+export function isOnline(page: Page): Promise<boolean> {
+  return page.evaluate(() => window.bench.isOnline());
+}
+
+/**
+ * Cut the link to the sync server. Playwright's offline emulation reaches a
+ * page's own socket but not a worker's (it skips worker sessions), so the
+ * worker modes are also told to drop theirs and hold off reconnecting.
+ */
+export async function setOffline(
+  context: BrowserContext,
+  pages: Page[],
+  offline: boolean
+): Promise<void> {
+  await context.setOffline(offline);
+  await Promise.all(
+    pages.map((page) =>
+      page.evaluate((offline) => window.bench.setOffline(offline), offline)
+    )
+  );
+}
+
+/** Wait for `isOnline()` to report `expected`; false if it never does. */
+export async function awaitOnline(
+  page: Page,
+  expected: boolean,
+  timeoutMs = 10_000
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((await isOnline(page)) === expected) return true;
+    await page.waitForTimeout(50);
+  }
+  return false;
 }
 
 export function createDoc(page: Page, value: object): Promise<string> {
@@ -139,6 +221,28 @@ export function getField<T>(page: Page, url: string, field: string): Promise<T> 
     },
     [url, field] as const
   );
+}
+
+export function flush(page: Page): Promise<void> {
+  return page.evaluate(() => window.repo.flush());
+}
+
+export type Stall = {
+  maxMs: number;
+  totalMs: number;
+  longTasks: number;
+  longTaskMs: number;
+};
+
+/** Run `work` with the page's main-thread stall probe around it. */
+export async function withStall<T>(
+  page: Page,
+  work: () => Promise<T>
+): Promise<{ result: T; stall: Stall }> {
+  await page.evaluate(() => window.bench.stallStart());
+  const result = await work();
+  const stall = await page.evaluate(() => window.bench.stallStop());
+  return { result, stall };
 }
 
 /**

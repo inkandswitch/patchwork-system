@@ -1,5 +1,13 @@
 import { test } from "@playwright/test";
-import { MODES, marks, online, openTab, record, rendererMemory } from "./bench.js";
+import {
+  MODES,
+  WORKER_MODES,
+  marks,
+  online,
+  openTab,
+  record,
+  rendererMemory,
+} from "./bench.js";
 
 // Cold boot: navigation start to `window.repo`, then to the server link being
 // up (performance.now() is relative to navigation start, so the marks are
@@ -38,6 +46,19 @@ for (const mode of MODES) {
       });
 
       await Promise.all(pages.map((page) => online(page)));
+      if (WORKER_MODES.includes(mode)) {
+        // The tab's own link is to its worker; set once the handshake is done.
+        const linked = (await marks(pages[0])).linked;
+        if (linked !== undefined) {
+          record({
+            metric: "boot → linked to worker, first tab",
+            mode,
+            tabs,
+            value: linked,
+            unit: "ms",
+          });
+        }
+      }
       // Let storage flushes and the first sync rounds settle first.
       await pages[0].waitForTimeout(2_000);
       const memory = await rendererMemory(browser);
