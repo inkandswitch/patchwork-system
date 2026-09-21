@@ -1,11 +1,6 @@
 // The control protocol every patchwork SharedWorker speaks with its tabs:
-// console forwarding, a `hello` on connect, ping/pong for the tab's death
-// detection, and a debug toggle. Everything else is the worker's own business
-// and arrives through `onMessage`.
-
-/** A fresh instance means cold in-memory state, so tabs watch this. */
-const WORKER_INSTANCE_ID = Math.random().toString(36).slice(2);
-const WORKER_BOOT_TIME = Date.now();
+// console forwarding and a debug toggle. Everything else is the worker's own
+// business and arrives through `onMessage`.
 
 const MAX_BUFFER = 200;
 
@@ -84,14 +79,6 @@ export function startWorkerControl(
 
     port.addEventListener("message", (messageEvent) => {
       const data = (messageEvent as MessageEvent).data;
-      if (data?.type === "ping") {
-        postToPort(port, {
-          type: "pong",
-          id: data.id,
-          instanceId: WORKER_INSTANCE_ID,
-        });
-        return;
-      }
       if (data?.type === "debug") {
         debugging = data.debug;
         return;
@@ -106,21 +93,13 @@ export function startWorkerControl(
     });
 
     port.start();
-    postToPort(port, {
-      type: "hello",
-      instanceId: WORKER_INSTANCE_ID,
-      bootTime: WORKER_BOOT_TIME,
-    });
-
     ports.add(port);
     for (const { level, args } of preConnect.splice(0)) {
       postToPort(port, { type: "console", level, args });
     }
   });
 
-  console.warn(
-    `[lifecycle] ${name} SharedWorker started (instance ${WORKER_INSTANCE_ID})`
-  );
+  console.warn(`[lifecycle] ${name} SharedWorker started`);
 
   return {
     log: (...args: unknown[]) => {

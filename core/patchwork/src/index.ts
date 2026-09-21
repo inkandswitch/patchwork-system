@@ -44,9 +44,7 @@ import {
   unregisterPlugins,
 } from "@inkandswitch/patchwork-plugins";
 import * as plugins from "@inkandswitch/patchwork-plugins";
-import setupServiceWorker, {
-  lifecycleLog,
-} from "@inkandswitch/patchwork-bootloader";
+import setupServiceWorker from "@inkandswitch/patchwork-bootloader";
 import debug from "debug";
 
 import type {
@@ -117,7 +115,6 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   const routing = options.routing ?? "hash";
 
   log("booting", options);
-  installLifecycleLogging();
 
   if (!options.repo) await initWasm();
 
@@ -352,48 +349,6 @@ function wireModuleSettings(
   if (!accountDocHandle.doc()?.moduleSettingsUrl) {
     accountDocHandle.on("change", wire);
   }
-}
-
-/** Page Lifecycle and connectivity transitions, to line up against the
- * SharedWorker's sync-socket reaps. */
-function installLifecycleLogging(): void {
-  if (typeof document === "undefined") return;
-  const opts = { capture: true } as const;
-  const persisted = (e: Event) => (e as PageTransitionEvent).persisted;
-
-  document.addEventListener(
-    "visibilitychange",
-    () => lifecycleLog("visibilitychange → %s", document.visibilityState),
-    opts
-  );
-  document.addEventListener(
-    "freeze",
-    () => lifecycleLog("freeze (tab suspended)"),
-    opts
-  );
-  document.addEventListener(
-    "resume",
-    () => lifecycleLog("resume (tab unsuspended)"),
-    opts
-  );
-  window.addEventListener(
-    "pageshow",
-    (e) => lifecycleLog("pageshow persisted=%s", persisted(e)),
-    opts
-  );
-  window.addEventListener(
-    "pagehide",
-    (e) => lifecycleLog("pagehide persisted=%s", persisted(e)),
-    opts
-  );
-  window.addEventListener("online", () => lifecycleLog("online"), opts);
-  window.addEventListener("offline", () => lifecycleLog("offline"), opts);
-
-  lifecycleLog(
-    "logging installed (visibilityState=%s, hasFocus=%s)",
-    document.visibilityState,
-    document.hasFocus()
-  );
 }
 
 // The tab's own Repo hears the server's heads directly, so this is a filter
