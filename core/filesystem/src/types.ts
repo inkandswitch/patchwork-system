@@ -1,4 +1,7 @@
-import type { AutomergeUrl, ImmutableString } from "@automerge/automerge-repo";
+import type {
+  AutomergeUrl,
+  ImmutableString,
+} from "@automerge/automerge-repo/slim";
 import type { HasPatchworkMetadata } from "./metadata.js";
 
 // needed in serviceworker only right now?

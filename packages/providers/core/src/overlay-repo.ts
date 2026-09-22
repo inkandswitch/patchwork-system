@@ -10,7 +10,7 @@ import {
   type DocumentProgress,
   type QueryState,
   type Repo,
-} from "@automerge/automerge-repo";
+} from "@automerge/automerge-repo/slim";
 
 import { subscribe } from "./index.js";
 import { forwardingProxy } from "./forwarding-proxy.js";

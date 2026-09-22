@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 
-export { default } from "./externals-list.js";
+export { default, slim } from "./externals-list.js";
 
 /**
  * pretend the import came from inside this package, so node_modules resolution

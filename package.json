@@ -14,6 +14,7 @@
     "dev": "pnpm -r --filter ...{sites/${SITE:-patchwork.inkandswitch.com}}... --parallel dev",
     "format": "prettier --write \"**/*.{js,jsx,ts,tsx,json,css,md,html,yaml,yml}\"",
     "format:check": "prettier --check \"**/*.{js,jsx,ts,tsx,json,css,md,html,yaml,yml}\"",
+    "lint": "node scripts/lint-slim-imports.mts",
     "link-cli": "pnpm --ignore-workspace --dir scripts/module-settings install && pnpm link --global",
     "preinstall": "npx only-allow pnpm",
     "preview": "pnpm --filter patchwork.inkandswitch.com preview",

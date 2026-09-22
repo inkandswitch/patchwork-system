@@ -1,4 +1,4 @@
-import type { Repo } from "@automerge/automerge-repo";
+import type { Repo } from "@automerge/automerge-repo/slim";
 
 export type JSONValue =
   | string

@@ -1,4 +1,4 @@
-import { type DocHandle, type Repo } from "@automerge/automerge-repo";
+import { type DocHandle, type Repo } from "@automerge/automerge-repo/slim";
 import type { FolderDoc } from "./types.js";
 
 /**

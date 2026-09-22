@@ -4,7 +4,7 @@ import {
   type AutomergeUrl,
   type DocHandle,
   type DocumentId,
-} from "@automerge/automerge-repo";
+} from "@automerge/automerge-repo/slim";
 
 import { forwardingProxy } from "./forwarding-proxy.js";
 

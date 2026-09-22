@@ -12,18 +12,24 @@ import { relative } from "node:path";
  * packages as real dependencies) — reused here rather than duplicated.
  */
 import externals, {
+  slim,
   resolveExternal,
   emitWasmAssets,
 } from "@inkandswitch/patchwork-bootloader/externals";
 
 export const builtins = externals.reduce(
-  (builtins, name) => ((builtins[name] = `/packages/${name}.js`), builtins),
+  (builtins, name) => (
+    (builtins[name] = `/packages/${slim[name] ?? name}.js`),
+    builtins
+  ),
   {} as Record<string, string>
 );
 
 // This package importmaps itself too, so tool code loaded at runtime can
 // bare-import it just like the other @inkandswitch/patchwork-* packages.
 builtins["@inkandswitch/patchwork"] = "/packages/@inkandswitch/patchwork.js";
+
+export const chunks = Object.keys(builtins).filter((id) => !(id in slim));
 
 /**
  * Node resolves a package's own name from within its own source when its
@@ -82,7 +88,7 @@ export function importmap(options?: PatchworkVitePluginOptions): Plugin {
     config() {
       return {
         optimizeDeps: {
-          include: Object.keys(builtins).map(devDependencyId),
+          include: chunks.map(devDependencyId),
         },
       };
     },
@@ -91,10 +97,10 @@ export function importmap(options?: PatchworkVitePluginOptions): Plugin {
     },
     async buildStart() {
       if (serve) return;
-      for (const [id, fileName] of Object.entries(builtins)) {
+      for (const id of chunks) {
         this.emitFile({
           type: "chunk",
-          fileName: fileName.slice(1),
+          fileName: builtins[id]!.slice(1),
           id: await resolveBuiltin(this, id),
           preserveSignature: "strict",
         });
@@ -108,7 +114,7 @@ export function importmap(options?: PatchworkVitePluginOptions): Plugin {
         // point the site's own imports at the same copy we emit as a chunk,
         // otherwise rollup bundles a second one out of the site's node_modules
         // and you end up with two automerges racing to init the same wasm
-        return resolveBuiltin(this, id);
+        return resolveBuiltin(this, slim[id] ?? id);
       }
       if (id in importmap.imports) {
         return { id: importmap.imports[id], external: true };
@@ -127,7 +133,7 @@ export function importmap(options?: PatchworkVitePluginOptions): Plugin {
           await optimizer?.init();
           const root = context.server.config.root;
           for (const id of Object.keys(builtins)) {
-            const dependency = devDependencyId(id);
+            const dependency = devDependencyId(slim[id] ?? id);
             const optimized = optimizer?.metadata.optimized[dependency];
             activeImportmap.imports[id] = optimized
               ? `/${relative(root, optimized.file)}?v=${optimized.browserHash}`

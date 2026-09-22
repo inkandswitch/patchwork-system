@@ -3,7 +3,7 @@ import type {
   DocHandle,
   DocumentId,
   DocumentProgress,
-} from "@automerge/automerge-repo";
+} from "@automerge/automerge-repo/slim";
 
 /**
  * Minimal repo surface that both the real `Repo` and overlay repos (e.g.

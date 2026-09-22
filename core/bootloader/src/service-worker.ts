@@ -344,7 +344,10 @@ async function servePassthrough(
       CACHEABLE_STATUSES.includes(result.status) &&
       /^https?:/.test(request.url)
     ) {
-      cacheInBackground(fetchEvent, cache, request, result.clone());
+      const etag = result.headers.get("etag");
+      if (!etag || etag !== cached?.headers.get("etag")) {
+        cacheInBackground(fetchEvent, cache, request, result.clone());
+      }
     } else {
       log(`not caching status ${result.status} for ${request.url}`);
     }
