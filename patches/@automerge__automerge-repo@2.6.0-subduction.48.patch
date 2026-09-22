@@ -1,3 +1,16 @@
+diff --git a/dist/DocumentSource.d.ts b/dist/DocumentSource.d.ts
+index 08d36a6efcf9b93ba170dfe8a6a54e51a1b8f92d..fafdbda628f968bb266588d5a45192f5fb965cde 100644
+--- a/dist/DocumentSource.d.ts
++++ b/dist/DocumentSource.d.ts
+@@ -34,7 +34,7 @@ export interface DocumentSource {
+      *  appropriate to participate in the query's availability tracking. */
+     attach(query: DocumentQuery<unknown>): void;
+     /** Called when a document is removed from the repo. */
+-    detach(documentId: DocumentId): void;
++    detach(documentId: DocumentId): void | Promise<void>;
+     shareConfigChanged(): void;
+     /**
+      * Optional: drain any pending writes for the given documents (or all
 diff --git a/dist/Repo.d.ts b/dist/Repo.d.ts
 index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..0f89be0e8b7e19ebb706d88685593259ddf67c89 100644
 --- a/dist/Repo.d.ts
@@ -16,6 +29,24 @@ index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..0f89be0e8b7e19ebb706d88685593259
      }[];
      /**
       * Tunable timeouts for the Subduction sync engine and its
+diff --git a/dist/Repo.js b/dist/Repo.js
+index adfddd9b3926510604274217c42f97f104e119a3..47a4a3b22b7cd006f98e5279107fc27ce89ab95b 100644
+--- a/dist/Repo.js
++++ b/dist/Repo.js
+@@ -702,11 +702,10 @@ export class Repo extends EventEmitter {
+      * @param documentId - documentId of the DocHandle to remove from handleCache, if present in cache.
+      */
+     async removeFromCache(documentId) {
+-        for (const source of this.#sources.values()) {
+-            source.detach(documentId);
+-        }
++        const detached = [...this.#sources.values()].map(source => source.detach(documentId));
+         delete this.#queries[documentId];
+         this.#syncStateTracker.delete(documentId);
++        await Promise.all(detached);
+     }
+     async shutdown() {
+         // Quiesce Subduction first — stops reconnect loops, flushes pending
 diff --git a/dist/subduction/AdapterConnections.d.ts b/dist/subduction/AdapterConnections.d.ts
 index 55231beca6494ed4ab0eaeb45383b822bcea5fe3..419c4ec3d17dc9f521292d780d293f5b1aafa8ce 100644
 --- a/dist/subduction/AdapterConnections.d.ts
@@ -64,11 +95,158 @@ index 4760a1899a8c0127db4840d5de090f6825211d97..5b9d19d4dd1cfb0cb242f140d5401af5
                  return true;
          }
          return false;
+diff --git a/dist/subduction/source.d.ts b/dist/subduction/source.d.ts
+index c1f722a51f7e273ee8161e4569b1602c2e3c3d11..4b03ccf5cd3905946e9b92e577b9d6ddaf062f34 100644
+--- a/dist/subduction/source.d.ts
++++ b/dist/subduction/source.d.ts
+@@ -128,7 +128,7 @@ export declare class SubductionSource implements DocumentSource {
+     isConnected(): boolean;
+     getSubduction(): Promise<Subduction>;
+     attach(query: DocumentQuery<unknown>): void;
+-    detach(_documentId: DocumentId): void;
++    detach(documentId: DocumentId): Promise<void>;
+     shareConfigChanged(): void;
+     /** Check whether a sedimentree is currently in heal-backoff. */
+     isHealing(sedimentreeId: SedimentreeId): boolean;
+diff --git a/dist/subduction/source.js b/dist/subduction/source.js
+index 4692619444edfae0ef5f111cef6ce29499507afa..0af4cec8aa7000e600917732a47d86aba1825497 100644
+--- a/dist/subduction/source.js
++++ b/dist/subduction/source.js
+@@ -27,6 +27,7 @@ const DEFAULT_SYNC_TIMEOUT_MS = 60_000;
+  * unresponsive or half-torn-down peer.
+  */
+ const SHUTDOWN_SYNC_TIMEOUT_MS = 5_000;
++const MAX_DETACH_SAVE_ROUNDS = 8;
+ /**
+  * Deadline for draining in-flight storage-bridge operations at shutdown.
+  * An adapter promise that never settles (e.g. IndexedDB in a frozen or
+@@ -364,6 +365,7 @@ export class SubductionSource {
+                 return;
+             void this.#save(entry);
+         }, 100);
++        const onHeadsChanged = () => throttledSave();
+         this.#entries.set(sidStr, {
+             syncState: "initializing",
+             query,
+@@ -383,6 +385,7 @@ export class SubductionSource {
+             persistedFragmentHashes: new Set(),
+             compactionInFlight: null,
+             flushSave: throttledSave,
++            onHeadsChanged,
+             saveSettled,
+             saveInProgress: false,
+             saveDeltaPending: false,
+@@ -394,7 +397,7 @@ export class SubductionSource {
+             transformRetryScheduled: false,
+         });
+         query.sourcePending("subduction");
+-        query.handle.on("heads-changed", () => throttledSave());
++        query.handle.on("heads-changed", onHeadsChanged);
+         throttledSave();
+         // Subscribe to ephemeral messages for this sedimentree
+         void (async () => {
+@@ -441,6 +444,10 @@ export class SubductionSource {
+                 this.#log.debug(`failed to seed persistedHashes for ${sidStr.slice(0, 8)}: %O`, e);
+             }
+         })();
++        for (const key of this.#lastRemoteHeads.keys()) {
++            if (key.startsWith(`${sidStr}|`))
++                this.#lastRemoteHeads.delete(key);
++        }
+         // Replay the last-known remote heads for this sedimentree so the
+         // DocHandle reflects the last sync state immediately on (re)attach,
+         // before any network round-trip completes. Does not re-persist.
+@@ -457,7 +464,47 @@ export class SubductionSource {
+         })();
+         this.#scheduleRecompute(this.#entries.get(sidStr));
+     }
+-    detach(_documentId) { }
++    async detach(documentId) {
++        const sid = toSedimentreeId(documentId);
++        const sidStr = sid.toString();
++        const entry = this.#entries.get(sidStr);
++        if (!entry)
++            return;
++        this.#entries.delete(sidStr);
++        entry.handle.off("heads-changed", entry.onHeadsChanged);
++        await entry.saveSettled;
++        for (let round = 0; round < MAX_DETACH_SAVE_ROUNDS; round++) {
++            await this.#save(entry);
++            if (!entry.saveDeltaPending)
++                break;
++        }
++        if (entry.lastSaveError !== null) {
++            this.#log.warn(`detach ${sidStr.slice(0, 8)}: unsaved commits could not be persisted`, entry.lastSaveError);
++        }
++        await entry.syncSettled;
++        if (entry.needsResync || this.#needsOutboundSync(entry)) {
++            await this.#doSync(entry, SHUTDOWN_SYNC_TIMEOUT_MS);
++        }
++        let subduction;
++        try {
++            subduction = await this.#subduction;
++        }
++        catch (e) {
++            this.#log.debug("subduction never initialized, skipping unsubscribe: %O", e);
++            subduction = null;
++        }
++        if (this.#entries.has(sidStr))
++            return;
++        this.#scheduler.resetHealState(sidStr);
++        if (!subduction)
++            return;
++        try {
++            await subduction.unsubscribeEphemeral([Topic.fromBytes(sid.toBytes())]);
++        }
++        catch (e) {
++            this.#log.debug("ephemeral unsubscribe failed: %O", e);
++        }
++    }
+     shareConfigChanged() {
+         for (const entry of this.#entries.values()) {
+             // A share-config change can flip a previously-denied fetch to
+@@ -663,6 +710,8 @@ export class SubductionSource {
+             await entry.saveSettled;
+             this.#log.debug(`doSync ${sid} (state=${entry.syncState})`);
+             const peerResultMap = await subduction.syncWithAllPeers(sedimentreeId, true, timeoutMs !== undefined ? timeoutMs : this.#syncTimeout);
++            if (this.#entries.get(sedimentreeId.toString()) !== entry)
++                return;
+             const results = peerResultMap.entries();
+             const anySuccess = results.some(r => r.success);
+             this.#log.debug(`doSync ${sid}: ${results.length} peer(s), success=${anySuccess}`);
+diff --git a/src/DocumentSource.ts b/src/DocumentSource.ts
+index 363cbbad5af3f2db28ed5fa0ca85ca584a60bb49..d9eb3c5d8429607480867bf105d0e772ba1aecfd 100644
+--- a/src/DocumentSource.ts
++++ b/src/DocumentSource.ts
+@@ -37,7 +37,7 @@ export interface DocumentSource {
+   attach(query: DocumentQuery<unknown>): void
+ 
+   /** Called when a document is removed from the repo. */
+-  detach(documentId: DocumentId): void
++  detach(documentId: DocumentId): void | Promise<void>
+ 
+   shareConfigChanged(): void
+ 
 diff --git a/src/Repo.ts b/src/Repo.ts
-index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..c3df442b29c5a6ecd59a9464b3a30c4f59e3adc4 100644
+index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..e82cc4254f609a460a14dcf2310616cbc94382b6 100644
 --- a/src/Repo.ts
 +++ b/src/Repo.ts
-@@ -1060,8 +1060,11 @@ export interface RepoConfig {
+@@ -930,11 +930,12 @@ export class Repo extends EventEmitter<RepoEvents> {
+    * @param documentId - documentId of the DocHandle to remove from handleCache, if present in cache.
+    */
+   async removeFromCache(documentId: DocumentId): Promise<void> {
+-    for (const source of this.#sources.values()) {
++    const detached = [...this.#sources.values()].map(source =>
+       source.detach(documentId)
+-    }
++    )
+     delete this.#queries[documentId]
+     this.#syncStateTracker.delete(documentId)
++    await Promise.all(detached)
+   }
+ 
+   async shutdown() {
+@@ -1060,8 +1061,11 @@ export interface RepoConfig {
      adapter: NetworkAdapterInterface
      serviceName: string
      /** Whether to initiate ("connect") or accept ("accept") the subduction
@@ -135,3 +313,113 @@ index 0d5510500c1e3a8e0d84b6f9b5f87f42096ee8e3..6b8376be24f932f21ab3ddc4b76bc81f
      }
      return false
    }
+diff --git a/src/subduction/source.ts b/src/subduction/source.ts
+index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..3781b56a19b5f55760502822e9492d0f4f856dae 100644
+--- a/src/subduction/source.ts
++++ b/src/subduction/source.ts
+@@ -53,6 +53,7 @@ const DEFAULT_SYNC_TIMEOUT_MS = 60_000
+  * unresponsive or half-torn-down peer.
+  */
+ const SHUTDOWN_SYNC_TIMEOUT_MS = 5_000
++const MAX_DETACH_SAVE_ROUNDS = 8
+ 
+ /**
+  * Deadline for draining in-flight storage-bridge operations at shutdown.
+@@ -160,6 +161,7 @@ interface SedimentreeEntry {
+    */
+   compactionInFlight: Promise<void> | null
+   flushSave: ThrottledFunction<() => void>
++  onHeadsChanged: () => void
+   /** Resolves when any in-progress `#save` completes. */
+   saveSettled: Promise<void>
+   /**
+@@ -766,6 +768,7 @@ export class SubductionSource implements DocumentSource {
+       if (!entry) return
+       void this.#save(entry)
+     }, 100)
++    const onHeadsChanged = () => throttledSave()
+ 
+     this.#entries.set(sidStr, {
+       syncState: "initializing",
+@@ -786,6 +789,7 @@ export class SubductionSource implements DocumentSource {
+       persistedFragmentHashes: new Set(),
+       compactionInFlight: null,
+       flushSave: throttledSave,
++      onHeadsChanged,
+       saveSettled,
+       saveInProgress: false,
+       saveDeltaPending: false,
+@@ -799,7 +803,7 @@ export class SubductionSource implements DocumentSource {
+ 
+     query.sourcePending("subduction")
+ 
+-    query.handle.on("heads-changed", () => throttledSave())
++    query.handle.on("heads-changed", onHeadsChanged)
+     throttledSave()
+ 
+     // Subscribe to ephemeral messages for this sedimentree
+@@ -851,6 +855,9 @@ export class SubductionSource implements DocumentSource {
+       }
+     })()
+ 
++    for (const key of this.#lastRemoteHeads.keys()) {
++      if (key.startsWith(`${sidStr}|`)) this.#lastRemoteHeads.delete(key)
++    }
+     // Replay the last-known remote heads for this sedimentree so the
+     // DocHandle reflects the last sync state immediately on (re)attach,
+     // before any network round-trip completes. Does not re-persist.
+@@ -877,7 +884,44 @@ export class SubductionSource implements DocumentSource {
+     this.#scheduleRecompute(this.#entries.get(sidStr))
+   }
+ 
+-  detach(_documentId: DocumentId): void {}
++  async detach(documentId: DocumentId): Promise<void> {
++    const sid = toSedimentreeId(documentId)
++    const sidStr = sid.toString()
++    const entry = this.#entries.get(sidStr)
++    if (!entry) return
++    this.#entries.delete(sidStr)
++    entry.handle.off("heads-changed", entry.onHeadsChanged)
++    await entry.saveSettled
++    for (let round = 0; round < MAX_DETACH_SAVE_ROUNDS; round++) {
++      await this.#save(entry)
++      if (!entry.saveDeltaPending) break
++    }
++    if (entry.lastSaveError !== null) {
++      this.#log.warn(
++        `detach ${sidStr.slice(0, 8)}: unsaved commits could not be persisted`,
++        entry.lastSaveError
++      )
++    }
++    await entry.syncSettled
++    if (entry.needsResync || this.#needsOutboundSync(entry)) {
++      await this.#doSync(entry, SHUTDOWN_SYNC_TIMEOUT_MS)
++    }
++    let subduction: Subduction | null
++    try {
++      subduction = await this.#subduction
++    } catch (e) {
++      this.#log.debug("subduction never initialized, skipping unsubscribe: %O", e)
++      subduction = null
++    }
++    if (this.#entries.has(sidStr)) return
++    this.#scheduler.resetHealState(sidStr)
++    if (!subduction) return
++    try {
++      await subduction.unsubscribeEphemeral([Topic.fromBytes(sid.toBytes())])
++    } catch (e) {
++      this.#log.debug("ephemeral unsubscribe failed: %O", e)
++    }
++  }
+ 
+   shareConfigChanged(): void {
+     for (const entry of this.#entries.values()) {
+@@ -1103,6 +1147,8 @@ export class SubductionSource implements DocumentSource {
+         timeoutMs !== undefined ? timeoutMs : this.#syncTimeout
+       )
+ 
++      if (this.#entries.get(sedimentreeId.toString()) !== entry) return
++
+       const results = peerResultMap.entries()
+       const anySuccess = results.some(r => r.success)
+       this.#log.debug(
