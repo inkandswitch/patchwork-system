@@ -8,7 +8,7 @@ const skip = new Set(["node_modules", "dist", "test", "tests"]);
 const extensions = /\.(?:[cm]?[jt]s|tsx|jsx)$/;
 
 const names = Object.keys(slim)
-  .map((name) => name.replace(/[/.]/g, "\\$&"))
+  .map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
   .join("|");
 const bare = new RegExp(
   `(?:\\bfrom\\s*|\\bimport\\s*\\(?\\s*)["'](${names})["']`,
