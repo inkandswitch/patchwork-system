@@ -16,7 +16,7 @@ import {
   withStall,
 } from "./bench.js";
 
-const MODES = (process.env.SCALE_MODES ?? "star,shared-worker,patchwork")
+const MODES = (process.env.SCALE_MODES ?? "patchwork,pertab-bus")
   .split(",")
   .map((mode) => mode.trim())
   .filter(Boolean) as Mode[];
