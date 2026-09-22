@@ -4,7 +4,7 @@
 //
 //   ?mode=patchwork      what patchwork does: createRepo() — the tab's own
 //                        subduction node with this origin's IndexedDB, its own
-//                        server socket and the siblings BroadcastChannel — plus
+//                        server socket and `subductionStorageChannel` — plus
 //                        the automerge worker that resolves URLs for the
 //                        service worker
 //   ?mode=pertab         the bare node: storage + socket, no siblings channel,
@@ -12,10 +12,16 @@
 //                        the database)
 //   ?mode=pertab-bc      pertab plus classic automerge sync between tabs over a
 //                        BroadcastChannel
-//   ?mode=pertab-mesh    pertab plus patchwork's siblings mesh (subduction over
+//   ?mode=pertab-mesh    pertab plus patchwork's old siblings mesh (subduction over
 //                        a BroadcastChannel), but each tab signing as itself:
-//                        the shipped topology minus the shared signer, the
+//                        the pre-bus topology minus the shared signer, the
 //                        service worker and the automerge worker
+//   ?mode=pertab-bus     pertab with the origin-wide signer, so every tab is
+//                        the same subduction peer on its own socket, and the
+//                        Repo's `subductionStorageChannel`: a tab announces
+//                        what it persists on a BroadcastChannel and the others
+//                        ingest those records from the shared IndexedDB. No
+//                        mesh, no classic network
 //   ?mode=tab-worker     the node in a dedicated Worker the tab spawns: storage,
 //                        socket and a mesh to the other tabs' workers live
 //                        there; the tab is a storageless Repo on a MessagePort
@@ -25,7 +31,7 @@
 // `?server=none` runs everything but patchwork with no socket, so tabs can only
 // meet through storage (and whatever local channel the mode has).
 // `?storage=worker` swaps in-thread IndexedDB for the IndexedDB worker adapter
-// in the bare per-tab modes; `?mesh=1` gives them patchwork's siblings mesh
+// in the bare per-tab modes; `?mesh=1` gives them patchwork's old siblings mesh
 // (subduction over a BroadcastChannel) and `?signer=shared` patchwork's
 // origin-wide signer, so the shipped topology can be taken apart one piece at
 // a time. `?serverPeer=` names the sync server's subduction peer id; without
@@ -33,9 +39,13 @@
 import {
   parseAutomergeUrl,
   Repo,
+  WebSocketTransport,
   type AutomergeUrl,
   type DocHandle,
+  type ManagedTransport,
   type PeerId,
+  type RepoConfig,
+  type WebSocketEndpointInterface,
 } from "@automerge/automerge-repo/slim";
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
@@ -54,6 +64,7 @@ type Mode =
   | "pertab"
   | "pertab-bc"
   | "pertab-mesh"
+  | "pertab-bus"
   | "tab-worker"
   | "shared-worker";
 type Storage = "worker" | "direct";
@@ -65,6 +76,7 @@ const serverUrl = params.get("server") ?? __SYNC_SERVER__.url;
 const serverPeer = params.get("serverPeer") ?? undefined;
 const stop = params.get("stop");
 const workerMode = mode === "tab-worker" || mode === "shared-worker";
+const bareTabMode = !workerMode && mode !== "patchwork";
 
 const marks: Record<string, number> = {};
 const mark = (name: string) => (marks[name] ??= performance.now());
@@ -84,15 +96,50 @@ const siblings = params.has("siblings")
 const mesh = params.has("mesh")
   ? params.get("mesh") === "1"
   : mode === "pertab-mesh";
+const sharedSigner = params.get("signer") === "shared" || mode === "pertab-bus";
+
+let serverBytes = 0;
+let storageWrites = 0;
+let storageSaves = 0;
+let syncRounds = 0;
+let saved: { commits: number; fragments: number } | null = null;
 
 function sameHeads(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((head) => b.includes(head));
 }
 
 function storageAdapter() {
-  return storage === "direct"
-    ? new IndexedDBStorageAdapter()
-    : new IndexedDBWorkerStorageAdapter();
+  const adapter =
+    storage === "direct"
+      ? new IndexedDBStorageAdapter()
+      : new IndexedDBWorkerStorageAdapter();
+  const saveBatch = adapter.saveBatch.bind(adapter);
+  const save = adapter.save.bind(adapter);
+  adapter.saveBatch = (entries) => {
+    storageWrites++;
+    return saveBatch(entries);
+  };
+  adapter.save = (key, binary) => {
+    storageSaves++;
+    return save(key, binary);
+  };
+  return adapter;
+}
+
+function countingEndpoint(url: string): WebSocketEndpointInterface {
+  return {
+    url,
+    async connect(): Promise<ManagedTransport> {
+      const transport = await WebSocketTransport.connect(url);
+      const recvBytes = transport.recvBytes.bind(transport);
+      transport.recvBytes = async () => {
+        const bytes = await recvBytes();
+        serverBytes += bytes.byteLength;
+        return bytes;
+      };
+      return transport;
+    },
+  };
 }
 
 // ── Tab modes: the node is this Repo ────────────────────────────────────
@@ -109,16 +156,16 @@ async function buildTabNode(): Promise<Repo> {
     ownPeerId = tab.signerIdentity!.peerId;
   } else {
     const storage = storageAdapter();
-    const signer =
-      params.get("signer") === "shared"
-        ? await loadOrCreateSigner(storage)
-        : new MemorySigner();
+    const signer = sharedSigner
+      ? await loadOrCreateSigner(storage)
+      : new MemorySigner();
     ownPeerId = signer.peerId().toString();
-    repo = new Repo({
+    const config: RepoConfig = {
       signer,
       storage,
       peerId: `bench-tab-${crypto.randomUUID()}` as PeerId,
-      subductionWebsocketEndpoints: serverUrl === "none" ? [] : [serverUrl],
+      subductionWebsocketEndpoints:
+        serverUrl === "none" ? [] : [countingEndpoint(serverUrl)],
       network:
         mode === "pertab-bc"
           ? [new BroadcastChannelNetworkAdapter({ channelName: "bench" })]
@@ -135,7 +182,10 @@ async function buildTabNode(): Promise<Repo> {
           ]
         : [],
       enableRemoteHeadsGossiping: true,
-    });
+      subductionStorageChannel:
+        mode === "pertab-bus" ? "bench-storage" : undefined,
+    };
+    repo = new Repo(config);
   }
   mark("repo");
 
@@ -289,7 +339,20 @@ async function build(): Promise<Repo | null> {
   await initWasm();
   mark("wasm");
   if (stop === "wasm") return null;
-  return workerMode ? buildWorkerNode() : buildTabNode();
+  const repo = await (workerMode ? buildWorkerNode() : buildTabNode());
+  const subduction = await repo.subduction;
+  const syncWithAllPeers = subduction.syncWithAllPeers.bind(subduction);
+  subduction.syncWithAllPeers = (...args) => {
+    syncRounds++;
+    return syncWithAllPeers(...args);
+  };
+  if (typeof subduction.storage?.on === "function") {
+    const counts = { commits: 0, fragments: 0 };
+    subduction.storage.on("commit-saved", () => counts.commits++);
+    subduction.storage.on("fragment-saved", () => counts.fragments++);
+    saved = counts;
+  }
+  return repo;
 }
 
 // `find` settles as unavailable when every source has said no, and a sibling
@@ -359,6 +422,11 @@ window.bench = {
   workerErrors: () => [...workerErrors],
   workerLog: () => [...workerLog],
   remoteHeadsSeen: () => [...remoteHeadsSeen],
+  serverBytes: () => (bareTabMode && serverUrl !== "none" ? serverBytes : null),
+  storageWrites: () => (bareTabMode ? storageWrites : null),
+  storageSaves: () => (bareTabMode ? storageSaves : null),
+  syncRounds: () => syncRounds,
+  commitSavedBySource: () => saved && { ...saved },
   // Resolves with the epoch time the server was seen holding exactly the heads
   // the document has right now. Polled: a few ms of slop is fine here.
   async serverConfirmed(url, timeoutMs = 30_000) {
@@ -441,6 +509,14 @@ declare global {
       workerErrors: () => string[];
       workerLog: () => string[];
       remoteHeadsSeen: () => unknown[];
+      serverBytes: () => number | null;
+      storageWrites: () => number | null;
+      storageSaves: () => number | null;
+      syncRounds: () => number;
+      commitSavedBySource: () => {
+        commits: number;
+        fragments: number;
+      } | null;
       serverConfirmed: (url: string, timeoutMs?: number) => Promise<number>;
       stallStart: () => void;
       stallStop: () => {

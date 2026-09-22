@@ -17,14 +17,15 @@ reused and serve its build, so the run refuses one instead.
 ## Modes
 
 The page at `/` builds one Repo and nothing else — no shell, no account, no
-package list — in one of six shapes, chosen by `?mode=`:
+package list — in one of seven shapes, chosen by `?mode=`:
 
 | mode | subduction node | storage | server socket | tabs meet via |
 | --- | --- | --- | --- | --- |
-| `patchwork` | in the tab | each tab, in-thread IndexedDB | one per tab | the siblings BroadcastChannel (subduction mesh), then the server |
+| `patchwork` | in the tab | each tab, in-thread IndexedDB | one per tab | the `subductionStorageChannel` bus, as `pertab-bus`, then the server |
 | `pertab` | in the tab | each tab, in-thread IndexedDB | one per tab | the server (or IndexedDB) |
 | `pertab-bc` | in the tab | each tab, in-thread IndexedDB | one per tab | classic automerge sync over a BroadcastChannel, then the server |
-| `pertab-mesh` | in the tab | each tab, in-thread IndexedDB | one per tab | patchwork's siblings mesh (subduction over a BroadcastChannel), each tab signing as itself |
+| `pertab-mesh` | in the tab | each tab, in-thread IndexedDB | one per tab | patchwork's old siblings mesh (subduction over a BroadcastChannel), each tab signing as itself |
+| `pertab-bus` | in the tab | each tab, in-thread IndexedDB | one per tab | the origin-wide signer, so one subduction peer on N sockets; the Repo's `subductionStorageChannel` announces what a tab persists and the others ingest it from IndexedDB |
 | `tab-worker` | a dedicated Worker per tab | the worker, in-thread IndexedDB | one per worker | a BroadcastChannel mesh between the workers, then the server |
 | `shared-worker` | one SharedWorker | the worker, in-thread IndexedDB | one | the worker |
 
@@ -53,22 +54,22 @@ ones.
 
 A closed tab's mesh peer lingers: the BroadcastChannel adapter only announces a
 departure from `disconnect()`, which a closing tab (or its terminated worker)
-never calls, so in `patchwork`, `pertab-mesh` and `tab-worker` the survivors
+never calls, so in `pertab-mesh` and `tab-worker` the survivors
 keep a phantom peer. `churn.spec` is where that would show.
 
 `?storage=worker` swaps in-thread IndexedDB for the IndexedDB worker adapter in
 the bare per-tab modes; `storage-adapter.spec` compares the two in `pertab`.
-`?mesh=1` and `?signer=shared` add patchwork's siblings mesh and its
+`?mesh=1` and `?signer=shared` add patchwork's old siblings mesh and its
 origin-wide signer (`@inkandswitch/patchwork-bootloader/signer`) to any bare
 mode, so the shipped topology can be taken apart one piece at a time
-(`pertab-mesh` is `pertab&mesh=1`; `pertab&mesh=1&signer=shared` is `patchwork`
+(`pertab-mesh` is `pertab&mesh=1`; `pertab-bus` is `patchwork`
 minus the service worker and the idle automerge worker).
 
-`patchwork` and `pertab-mesh` differ in the signer. With the origin-wide signer
+`pertab&mesh=1&signer=shared` and `pertab-mesh` differ in the signer. With the origin-wide signer
 every tab presents the same subduction peer id, and with three tabs open the
 third stops receiving a sibling's edits over the mesh and the server stops
-confirming that sibling's heads — every run, in `patchwork`, in
-`pertab&mesh=1&signer=shared`, and in a keyhive build of `patchwork`
+confirming that sibling's heads — every run, in the pre-bus `patchwork`, in
+`pertab&mesh=1&signer=shared`, and in a keyhive build of it
 (`keyhive: true` in vite.config.ts), whose signer ARK derives from the keypair
 every context shares. With per-tab signers (`pertab-mesh`) the same mesh
 converges. The mechanism is in subduction-core: connections are keyed by peer

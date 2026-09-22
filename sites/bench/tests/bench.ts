@@ -7,6 +7,7 @@ export type Mode =
   | "pertab"
   | "pertab-bc"
   | "pertab-mesh"
+  | "pertab-bus"
   | "tab-worker"
   | "shared-worker";
 export const MODES: Mode[] = [
@@ -14,6 +15,7 @@ export const MODES: Mode[] = [
   "pertab",
   "pertab-bc",
   "pertab-mesh",
+  "pertab-bus",
   "tab-worker",
   "shared-worker",
 ];
@@ -52,7 +54,7 @@ export function median(values: number[]): number {
 // worker-hosted node can't tell the server from the tabs it accepts any other
 // way; the tab modes can, but get it too so every mode measures the same peer.
 let serverPeer: Promise<string> | undefined;
-function probeServerPeer(browser: Browser): Promise<string> {
+export function probeServerPeer(browser: Browser): Promise<string> {
   return (serverPeer ??= (async () => {
     const context = await browser.newContext();
     try {

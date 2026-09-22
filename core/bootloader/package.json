@@ -26,10 +26,6 @@
       "import": "./dist/externals-list.js",
       "types": "./dist/externals-list.d.ts"
     },
-    "./siblings": {
-      "import": "./dist/siblings.js",
-      "types": "./dist/siblings.d.ts"
-    },
     "./signer": {
       "import": "./dist/signer.js",
       "types": "./dist/signer.d.ts"
