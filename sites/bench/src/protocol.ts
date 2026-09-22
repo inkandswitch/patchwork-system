@@ -23,8 +23,9 @@ export type NodeMessage =
   | { type: "port-ready"; id: number }
   | { type: "port-failed"; id: number; error: string }
   | { type: "connection"; connected: boolean }
-  | { type: "remote-heads"; documentId: string; heads: string[] }
-  | { type: "error"; message: string };
+  | { type: "remote-heads"; documentId: string; storageId: string; heads: string[] }
+  | { type: "error"; message: string }
+  | { type: "log"; message: string };
 
 export type ControlPort = {
   postMessage(message: unknown, transfer?: Transferable[]): void;
