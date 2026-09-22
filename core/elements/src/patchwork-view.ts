@@ -2,6 +2,7 @@ import type { AutomergeUrl, Repo } from "@automerge/automerge-repo";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import {
   getRegistry,
+  isKeyhiveDoc,
   isLoadablePlugin,
   type LoadablePlugin,
   type LoadedPlugin,
@@ -13,7 +14,6 @@ import {
 } from "@inkandswitch/patchwork-providers";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 import { LegacyImpl } from "./legacy-impl.js";
-import { docIdFromAutomergeUrl } from "@automerge/automerge-repo-keyhive";
 import debug from "debug";
 
 const log = debug("patchwork:elements:patchwork-view");
@@ -314,15 +314,10 @@ export function registerPatchworkViewElement(
         this.#state = State.initializing;
 
         if (params.hive && this.url) {
-          let isKeyhiveDoc = false;
-          try {
-            docIdFromAutomergeUrl(this.url);
-            isKeyhiveDoc = true;
-          } catch {
-            // Legacy (padded-zero) doc: skip keyhive gate
-          }
+          // Legacy (padded-zero) doc: skip keyhive gate
+          const keyhiveDoc = isKeyhiveDoc(this.url);
 
-          if (isKeyhiveDoc) {
+          if (keyhiveDoc) {
             const bestAccess = await params.hive.bestAccessForDoc(
               params.hive.active.individual.id,
               this.url
@@ -367,7 +362,7 @@ export function registerPatchworkViewElement(
             });
           }
 
-          if (isKeyhiveDoc) {
+          if (keyhiveDoc) {
             // Access is confirmed, but the doc's content may not have synced
             // yet.
             const progress = params.repo.findWithProgress(
@@ -512,7 +507,7 @@ export function registerPatchworkViewElement(
           let hasAccess = false;
           let accessCheckSucceeded = false;
           try {
-            docIdFromAutomergeUrl(this.url);
+            if (!isKeyhiveDoc(this.url)) return;
             const bestAccess = await params.hive.bestAccessForDoc(
               params.hive.active.individual.id,
               this.url

@@ -29,11 +29,9 @@ import { resolvePath } from "@inkandswitch/patchwork-filesystem";
 
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import { WebSocketWorkerClientAdapter } from "@automerge/automerge-repo-network-websocket";
-import {
-  initializeAutomergeRepoKeyhive,
-  initKeyhiveWasm,
-  type AutomergeRepoKeyhive,
-  type SyncServerSelection,
+import type {
+  AutomergeRepoKeyhive,
+  SyncServerSelection,
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
@@ -120,6 +118,8 @@ async function buildPlainRepo(): Promise<Repo> {
 async function buildKeyhiveRepo(
   keyhiveSyncServer: SyncServerSelection
 ): Promise<{ repo: Repo; hive: AutomergeRepoKeyhive }> {
+  const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
+    await import("@automerge/automerge-repo-keyhive");
   initKeyhiveWasm();
   const { hive, repo } = await initializeAutomergeRepoKeyhive({
     // ARK injects an `idFactory` deriving document ids from keyhive. A site

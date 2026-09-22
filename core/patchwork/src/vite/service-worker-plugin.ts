@@ -36,6 +36,16 @@ export function serviceworker(): Plugin {
   return {
     name: "@patchwork/service-worker",
     enforce: "pre",
+    config() {
+      return {
+        build: {
+          modulePreload: {
+            resolveDependencies: (_url, deps, { hostId }) =>
+              workers.some(({ fileName }) => fileName === hostId) ? [] : deps,
+          },
+        },
+      };
+    },
     configResolved(config) {
       serve = config.command === "serve";
     },
