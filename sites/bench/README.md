@@ -10,7 +10,9 @@ pnpm --filter patchwork-bench bench:headed
 
 Chromium only (`pnpm exec playwright install chromium` once). Talks to the
 real sync server named in the site build, so the server columns need network.
-Results land in `bench-results/results.md` and `results.jsonl`.
+Results land in `bench-results/results.md` and `results.jsonl`. Port 5199 has
+to be free: a `vite preview` left behind by another checkout would otherwise be
+reused and serve its build, so the run refuses one instead.
 
 ## Modes
 
@@ -63,13 +65,15 @@ mode, so the shipped topology can be taken apart one piece at a time
 minus the service worker and the idle automerge worker).
 
 `patchwork` and `pertab-mesh` differ in the signer. With the origin-wide signer
-every tab presents the same subduction peer id, and with three tabs open one of
-them can stop receiving a sibling's edits over the mesh, or the server can stop
-confirming a tab's heads; with per-tab signers the same mesh converges. How
-often depends on timing: `pertab&mesh=1&signer=shared` strands the third tab
-every run, `patchwork` (in-thread IndexedDB) mostly converges but the server
-confirmation row fails now and then, and `patchwork` with the IndexedDB worker
-adapter failed every run. Compare against `pertab&mesh=1`.
+every tab presents the same subduction peer id, and with three tabs open the
+third stops receiving a sibling's edits over the mesh and the server stops
+confirming that sibling's heads — every run, in `patchwork`, in
+`pertab&mesh=1&signer=shared`, and in a keyhive build of `patchwork`
+(`keyhive: true` in vite.config.ts), whose signer ARK derives from the keypair
+every context shares. With per-tab signers (`pertab-mesh`) the same mesh
+converges. The mechanism is in subduction-core: connections are keyed by peer
+id, a sync round stops at the first connection of a peer that answers, and
+relays exclude every connection of the sender's id.
 
 The sync server's subduction peer id is learned once per run from a bare tab
 in a throwaway context and passed to every page as `?serverPeer=`, so "the

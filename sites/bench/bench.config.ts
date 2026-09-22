@@ -27,7 +27,8 @@ export default defineConfig({
     command: "pnpm preview",
     url: `http://localhost:${PORT}`,
     timeout: 60_000,
-    reuseExistingServer: true,
+    // A preview left behind by another checkout would serve that build.
+    reuseExistingServer: false,
     env: { PORT: String(PORT) },
   },
 });
