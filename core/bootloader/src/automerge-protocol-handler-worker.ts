@@ -21,7 +21,9 @@ import {
   stringifyAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
+  type DocumentId,
   type PeerId,
+  type StorageId,
 } from "@automerge/automerge-repo/slim";
 import { resolvePath } from "@inkandswitch/patchwork-filesystem";
 
@@ -244,6 +246,40 @@ function waitForHeads(
   });
 }
 
+const CATCH_UP_MS = 3_000;
+
+async function caughtUpWithPeers(
+  repo: Repo,
+  handle: DocHandle<unknown>,
+  signal: AbortSignal
+): Promise<void> {
+  if (!repo.isSubductionConnected()) return;
+  const peers = (await repo.connectedSubductionPeerIds()) as StorageId[];
+  const caughtUp = () => {
+    const states = peers.map((peer) => handle.isCaughtUpWith(peer));
+    return (
+      states.some((state) => state !== undefined) && !states.includes(false)
+    );
+  };
+  if (caughtUp() || signal.aborted) return;
+  await new Promise<void>((resolve) => {
+    const done = () => {
+      clearTimeout(timer);
+      handle.off("remote-heads", check);
+      handle.off("heads-changed", check);
+      signal.removeEventListener("abort", done);
+      resolve();
+    };
+    const check = () => {
+      if (caughtUp()) done();
+    };
+    const timer = setTimeout(done, CATCH_UP_MS);
+    handle.on("remote-heads", check);
+    handle.on("heads-changed", check);
+    signal.addEventListener("abort", done);
+  });
+}
+
 /**
  * Thrown instead of returning a Response when the request should fail as a
  * network error rather than resolve to something the caller can memoize.
@@ -270,6 +306,7 @@ async function resolveAutomergeUrl(
   // the headless req
   if (!heads) {
     const folder = await repo.find(maybeAutomergeUrl, { signal });
+    await caughtUpWithPeers(repo, folder, signal);
     const url = stringifyAutomergeUrl({ documentId, heads: folder.heads() });
     const location = `/${encodeURIComponent(url)}${path.length ? `/${path.join("/")}` : ""}`;
     return Response.redirect(location, 307);
@@ -325,8 +362,38 @@ function impatience(limit: number) {
   );
 }
 
+const EVICT_IDLE_MS = 5_000;
+let handoffsInFlight = 0;
+let evictTimer: ReturnType<typeof setTimeout> | undefined;
+
+function handoffStarted() {
+  handoffsInFlight++;
+  clearTimeout(evictTimer);
+}
+
+function handoffFinished() {
+  if (--handoffsInFlight > 0) return;
+  clearTimeout(evictTimer);
+  evictTimer = setTimeout(() => {
+    evictLoaded().catch((error) => console.error("eviction failed", error));
+  }, EVICT_IDLE_MS);
+}
+
+async function evictLoaded() {
+  const repo = await repoPromise?.catch(() => null);
+  if (!repo) return;
+  const ids = Object.keys(repo.handles) as DocumentId[];
+  log(
+    `evicting ${ids.length} document(s) after ${EVICT_IDLE_MS}ms without a handoff`
+  );
+  for (const id of ids) {
+    if (handoffsInFlight > 0) return;
+    await repo.removeFromCache(id);
+  }
+}
+
 async function handleHandoffRequest(message: HandoffRequestMessage) {
-  const { id, cachename, request } = message;
+  const { id, request } = message;
 
   let handoff: URL;
   try {
@@ -349,6 +416,17 @@ async function handleHandoffRequest(message: HandoffRequestMessage) {
     );
     return;
   }
+
+  handoffStarted();
+  try {
+    await respondToHandoff(message, handoff);
+  } finally {
+    handoffFinished();
+  }
+}
+
+async function respondToHandoff(message: HandoffRequestMessage, handoff: URL) {
+  const { id, cachename, request } = message;
 
   let response: Response;
   try {
