@@ -4,7 +4,7 @@
 //
 //   ?mode=patchwork      what patchwork does: createRepo() — the tab's own
 //                        subduction node with this origin's IndexedDB, its own
-//                        server socket and `subductionStorageChannel` — plus
+//                        server socket and `headsChannel` — plus
 //                        the automerge worker that resolves URLs for the
 //                        service worker
 //   ?mode=pertab         the bare node: storage + socket, no siblings channel,
@@ -14,14 +14,14 @@
 //                        BroadcastChannel
 //   ?mode=pertab-mesh    pertab plus patchwork's old siblings mesh (subduction over
 //                        a BroadcastChannel), but each tab signing as itself:
-//                        the pre-bus topology minus the shared signer, the
+//                        the old topology minus the shared signer, the
 //                        service worker and the automerge worker
-//   ?mode=pertab-bus     pertab with the origin-wide signer, so every tab is
+//   ?mode=pertab-heads   pertab with the origin-wide signer, so every tab is
 //                        the same subduction peer on its own socket, and the
-//                        Repo's `subductionStorageChannel`: a tab announces
-//                        what it persists on a BroadcastChannel and the others
-//                        ingest those records from the shared IndexedDB. No
-//                        mesh, no classic network
+//                        Repo's `headsChannel`: a tab announces the heads it
+//                        just persisted on a BroadcastChannel and the others
+//                        reload the doc from the shared IndexedDB. No mesh,
+//                        no classic network
 //   ?mode=tab-worker     the node in a dedicated Worker the tab spawns: storage,
 //                        socket and a mesh to the other tabs' workers live
 //                        there; the tab is a storageless Repo on a MessagePort
@@ -64,7 +64,7 @@ type Mode =
   | "pertab"
   | "pertab-bc"
   | "pertab-mesh"
-  | "pertab-bus"
+  | "pertab-heads"
   | "tab-worker"
   | "shared-worker";
 type Storage = "worker" | "direct";
@@ -96,13 +96,11 @@ const siblings = params.has("siblings")
 const mesh = params.has("mesh")
   ? params.get("mesh") === "1"
   : mode === "pertab-mesh";
-const sharedSigner = params.get("signer") === "shared" || mode === "pertab-bus";
+const sharedSigner = params.get("signer") === "shared" || mode === "pertab-heads";
 
 let serverBytes = 0;
 let storageWrites = 0;
-let storageSaves = 0;
 let syncRounds = 0;
-let saved: { commits: number; fragments: number } | null = null;
 
 function sameHeads(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((head) => b.includes(head));
@@ -114,14 +112,9 @@ function storageAdapter() {
       ? new IndexedDBStorageAdapter()
       : new IndexedDBWorkerStorageAdapter();
   const saveBatch = adapter.saveBatch.bind(adapter);
-  const save = adapter.save.bind(adapter);
   adapter.saveBatch = (entries) => {
     storageWrites++;
     return saveBatch(entries);
-  };
-  adapter.save = (key, binary) => {
-    storageSaves++;
-    return save(key, binary);
   };
   return adapter;
 }
@@ -182,8 +175,7 @@ async function buildTabNode(): Promise<Repo> {
           ]
         : [],
       enableRemoteHeadsGossiping: true,
-      subductionStorageChannel:
-        mode === "pertab-bus" ? "bench-storage" : undefined,
+      headsChannel: mode === "pertab-heads" ? "bench-heads" : undefined,
     };
     repo = new Repo(config);
   }
@@ -346,12 +338,6 @@ async function build(): Promise<Repo | null> {
     syncRounds++;
     return syncWithAllPeers(...args);
   };
-  if (typeof subduction.storage?.on === "function") {
-    const counts = { commits: 0, fragments: 0 };
-    subduction.storage.on("commit-saved", () => counts.commits++);
-    subduction.storage.on("fragment-saved", () => counts.fragments++);
-    saved = counts;
-  }
   return repo;
 }
 
@@ -424,9 +410,7 @@ window.bench = {
   remoteHeadsSeen: () => [...remoteHeadsSeen],
   serverBytes: () => (bareTabMode && serverUrl !== "none" ? serverBytes : null),
   storageWrites: () => (bareTabMode ? storageWrites : null),
-  storageSaves: () => (bareTabMode ? storageSaves : null),
   syncRounds: () => syncRounds,
-  commitSavedBySource: () => saved && { ...saved },
   // Resolves with the epoch time the server was seen holding exactly the heads
   // the document has right now. Polled: a few ms of slop is fine here.
   async serverConfirmed(url, timeoutMs = 30_000) {
@@ -511,12 +495,7 @@ declare global {
       remoteHeadsSeen: () => unknown[];
       serverBytes: () => number | null;
       storageWrites: () => number | null;
-      storageSaves: () => number | null;
       syncRounds: () => number;
-      commitSavedBySource: () => {
-        commits: number;
-        fragments: number;
-      } | null;
       serverConfirmed: (url: string, timeoutMs?: number) => Promise<number>;
       stallStart: () => void;
       stallStop: () => {

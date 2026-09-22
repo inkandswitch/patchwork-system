@@ -7,7 +7,7 @@ export type Mode =
   | "pertab"
   | "pertab-bc"
   | "pertab-mesh"
-  | "pertab-bus"
+  | "pertab-heads"
   | "tab-worker"
   | "shared-worker";
 export const MODES: Mode[] = [
@@ -15,7 +15,7 @@ export const MODES: Mode[] = [
   "pertab",
   "pertab-bc",
   "pertab-mesh",
-  "pertab-bus",
+  "pertab-heads",
   "tab-worker",
   "shared-worker",
 ];

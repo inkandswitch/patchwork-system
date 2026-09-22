@@ -82,7 +82,7 @@ export async function createRepo(): Promise<TabRepo> {
       repo: {
         storage: new IndexedDBStorageAdapter(),
         subductionWebsocketEndpoints: [syncServer.url],
-        subductionStorageChannel: `${storagePrefix}-storage`,
+        headsChannel: `${storagePrefix}-heads`,
         enableRemoteHeadsGossiping: true,
       },
     });
@@ -101,7 +101,7 @@ export async function createRepo(): Promise<TabRepo> {
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
     subductionWebsocketEndpoints: [syncServer.url],
-    subductionStorageChannel: `${storagePrefix}-storage`,
+    headsChannel: `${storagePrefix}-heads`,
     enableRemoteHeadsGossiping: true,
   });
   const signerIdentity = {
