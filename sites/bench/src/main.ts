@@ -63,6 +63,7 @@ const mode = (params.get("mode") ?? "patchwork") as Mode;
 const storage = (params.get("storage") ?? "direct") as Storage;
 const serverUrl = params.get("server") ?? __SYNC_SERVER__.url;
 const serverPeer = params.get("serverPeer") ?? undefined;
+const stop = params.get("stop");
 const workerMode = mode === "tab-worker" || mode === "shared-worker";
 
 const marks: Record<string, number> = {};
@@ -282,10 +283,12 @@ async function buildWorkerNode(): Promise<Repo> {
   return repo;
 }
 
-async function build(): Promise<Repo> {
+async function build(): Promise<Repo | null> {
   mark("start");
+  if (stop === "js") return null;
   await initWasm();
   mark("wasm");
+  if (stop === "wasm") return null;
   return workerMode ? buildWorkerNode() : buildTabNode();
 }
 
@@ -417,7 +420,8 @@ window.bench = {
   },
 };
 
-window.repo = await build();
+const repo = await build();
+if (repo) window.repo = repo;
 mark("ready");
 document.body.textContent = `${mode}: ready in ${Math.round(marks.ready - marks.start)}ms`;
 
