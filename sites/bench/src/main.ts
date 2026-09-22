@@ -476,6 +476,7 @@ const repo = await build();
 if (repo) window.repo = repo;
 mark("ready");
 document.body.textContent = `${mode}: ready in ${Math.round(marks.ready - marks.start)}ms`;
+if (params.has("ui")) await import("./playground.js");
 
 declare global {
   interface Window {
