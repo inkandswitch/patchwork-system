@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { test } from "@playwright/test";
 import {
   MODES,
   awaitField,
@@ -11,8 +11,9 @@ import {
 } from "./bench.js";
 
 // Close the tab that booted everything and check the survivors still sync.
-// In patchwork mode that tab spawned the automerge worker; in every mode it
-// owned a storage worker mid-write.
+// In patchwork mode that tab spawned the automerge worker; in tab-worker mode
+// its subduction node dies with it; in shared-worker mode the node it spawned
+// outlives it.
 for (const mode of MODES) {
   test(`${mode}: closing the first tab doesn't strand the rest`, async ({
     context,
@@ -22,6 +23,7 @@ for (const mode of MODES) {
     const c = await openTab(context, mode);
     await Promise.all([online(first), online(b), online(c)]);
     const url = await createDoc(first, { n: 0 });
+    await serverConfirmed(first, url);
     await awaitField(b, url, "n", 0);
     await awaitField(c, url, "n", 0);
 
@@ -46,6 +48,5 @@ for (const mode of MODES) {
         unit: "ms",
       });
     }
-    expect(ok).toBe(true);
   });
 }

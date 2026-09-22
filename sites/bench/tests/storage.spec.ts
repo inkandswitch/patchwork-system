@@ -1,10 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { test } from "@playwright/test";
 import {
   MODES,
   createDoc,
   flush,
   getField,
   openTab,
+  refuseWebSockets,
   record,
   setField,
   type Mode,
@@ -12,40 +13,51 @@ import {
 
 const EDITS = 20;
 
-// The second-writer question. Every mode but patchwork runs with no server, so
-// a tab can only see another's work through storage — its own IndexedDB, or
-// the worker's. The patchwork mode's server is build-time, so it keeps its
-// socket; the siblings channel is what carries the edits there, and closing
-// tabs tests storage all the same.
+// The second-writer question, with nothing but storage to answer it: no
+// server, and the tab that wrote is closed before the tab that reads opens,
+// so a live sibling channel can't answer either. The bare modes take
+// `?server=none`; patchwork's server is build-time, so its sockets are
+// refused instead. In the worker modes "storage" is the worker's IndexedDB;
+// the shared worker also keeps what it relayed in memory.
 const server = (mode: Mode) => (mode === "patchwork" ? undefined : "none");
 
+async function storageOnly(context: import("@playwright/test").BrowserContext, mode: Mode) {
+  if (mode === "patchwork") await refuseWebSockets(context);
+}
+
 for (const mode of MODES) {
-  test(`${mode}: a doc written by one tab is found by the next`, async ({
+  test(`${mode}: a doc written by a closed tab is found by the next`, async ({
     context,
   }) => {
+    await storageOnly(context, mode);
     const a = await openTab(context, mode, { server: server(mode) });
     const url = await createDoc(a, { n: 0 });
     for (let i = 1; i <= EDITS; i++) await setField(a, url, "n", i);
     await flush(a);
+    await a.close();
 
     const b = await openTab(context, mode, { server: server(mode) });
     const started = Date.now();
     const seen = await getField<number>(b, url, "n").catch(() => undefined);
+    const found = seen !== undefined;
     record({
-      metric: "second tab finds first tab's doc (no server)",
+      metric: "a fresh tab finds a closed tab's doc (no server)",
+      mode,
+      value: found,
+      unit: "ok",
+    });
+    record({
+      metric: "…time to find it, from storage",
+      mode,
+      value: found ? Date.now() - started : null,
+      unit: "ms",
+    });
+    record({
+      metric: "…and every edit made before the close is in it",
       mode,
       value: seen === EDITS,
       unit: "ok",
     });
-    if (seen === EDITS) {
-      record({
-        metric: "second tab find, from storage",
-        mode,
-        value: Date.now() - started,
-        unit: "ms",
-      });
-    }
-    expect(seen).toBe(EDITS);
   });
 
   // Both tabs close right after their last edit, as a user would. This asks
@@ -55,6 +67,7 @@ for (const mode of MODES) {
   test(`${mode}: two tabs write the same doc and close; a third reads it`, async ({
     context,
   }) => {
+    await storageOnly(context, mode);
     const a = await openTab(context, mode, { server: server(mode) });
     const b = await openTab(context, mode, { server: server(mode) });
     const url = await createDoc(a, { a: 0, b: 0 });
@@ -95,6 +108,5 @@ for (const mode of MODES) {
       value: fromA === EDITS && fromB === EDITS,
       unit: "ok",
     });
-    expect({ fromA, fromB }).toEqual({ fromA: EDITS, fromB: EDITS });
   });
 }

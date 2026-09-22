@@ -3,14 +3,19 @@
 // other nodes on the origin. It never opens a document itself: tabs are
 // storageless Repos that reach it over MessagePorts and sync through it.
 import {
+  documentIdToBinary,
   initializeWasm,
   Repo,
   WebSocketTransport,
+  type DocumentId,
   type ManagedTransport,
   type PeerId,
   type WebSocketEndpointInterface,
 } from "@automerge/automerge-repo/slim";
-import { MemorySigner } from "@automerge/automerge-subduction/slim";
+import {
+  MemorySigner,
+  SedimentreeId,
+} from "@automerge/automerge-subduction/slim";
 // eslint-disable-next-line
 // @ts-ignore — initSync is a wasm-bindgen runtime helper not in the .d.ts
 import { initSync as initSubductionSync } from "@automerge/automerge-subduction/slim";
@@ -26,15 +31,24 @@ import type {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const RELAY_TIMEOUT_MS = 30_000;
+
+function toSedimentreeId(documentId: string): SedimentreeId {
+  const binary = documentIdToBinary(documentId as DocumentId);
+  if (!binary) throw new Error(`not a document id: ${documentId}`);
+  const bytes = new Uint8Array(32);
+  bytes.set(binary);
+  return SedimentreeId.fromBytes(bytes);
+}
+
 /**
  * The server socket, observable and switchable. automerge-repo's reconnect
- * loop calls `connect()`; while offline it waits there, so nothing reconnects
- * until told to.
+ * loop calls `connect()`; while offline that fails like a dead network would,
+ * so the loop backs off exactly as a tab's does.
  */
 class ServerEndpoint implements WebSocketEndpointInterface {
   #live: WebSocketTransport | null = null;
   #offline = false;
-  #wake: (() => void) | null = null;
 
   constructor(
     readonly url: string,
@@ -42,10 +56,12 @@ class ServerEndpoint implements WebSocketEndpointInterface {
   ) {}
 
   async connect(): Promise<ManagedTransport> {
-    while (this.#offline) {
-      await new Promise<void>((resolve) => (this.#wake = resolve));
-    }
+    if (this.#offline) throw new Error("offline");
     const transport = await WebSocketTransport.connect(this.url);
+    if (this.#offline) {
+      void transport.disconnect();
+      throw new Error("offline");
+    }
     this.#live = transport;
     this.events.onOpen();
     void transport.closed().then(() => {
@@ -58,10 +74,6 @@ class ServerEndpoint implements WebSocketEndpointInterface {
   setOffline(offline: boolean): void {
     this.#offline = offline;
     if (offline) void this.#live?.disconnect();
-    else {
-      this.#wake?.();
-      this.#wake = null;
-    }
   }
 }
 
@@ -70,22 +82,27 @@ type Node = {
   accept(port: MessagePort): void;
   setOffline(offline: boolean): void;
   connected(): boolean;
-  serverHeads(): Map<string, string[]>;
+  remoteHeads(): Map<string, Map<string, string[]>>;
 };
 
 async function build(
   config: NodeConfig,
   broadcast: (message: NodeMessage) => void
 ): Promise<Node> {
+  if (config.server !== "none" && !config.serverPeer) {
+    throw new Error(
+      "a worker node needs the server's peer id (?serverPeer=) to tell it from the tabs"
+    );
+  }
   const [automergeWasm, subductionWasm] = await Promise.all([
     fetch("/automerge.wasm").then((r) => r.bytes()),
     fetch("/subduction.wasm").then((r) => r.bytes()),
   ]);
   await initializeWasm(automergeWasm);
-  initSubductionSync(subductionWasm);
+  initSubductionSync({ module: subductionWasm });
 
   const signer = new MemorySigner();
-  const serverHeads = new Map<string, string[]>();
+  const remoteHeads = new Map<string, Map<string, string[]>>();
   let socketOpen = false;
   let connected = false;
   const setConnected = (value: boolean) => {
@@ -93,16 +110,20 @@ async function build(
     connected = value;
     broadcast({ type: "connection", connected });
   };
+  const log = (message: string) =>
+    broadcast({ type: "log", message: `${Math.round(performance.now())}ms ${message}` });
 
   const endpoint =
     config.server === "none"
       ? null
       : new ServerEndpoint(config.server, {
           onOpen() {
+            log("server socket open");
             socketOpen = true;
             void awaitHandshake();
           },
           onClosed() {
+            log("server socket closed");
             socketOpen = false;
             setConnected(false);
           },
@@ -127,10 +148,42 @@ async function build(
     enableRemoteHeadsGossiping: true,
   });
 
+  // A node that never opens a document has nothing driving sync rounds: it
+  // stores what a tab pushes and answers what a peer asks, but doesn't carry
+  // one peer's commits to another on its own. So when a tab (or a mesh peer)
+  // announces heads, run a round for that document with every peer, which
+  // pushes the commits to the server and to the other tabs and subscribes to
+  // updates. One round in flight per document; announcements during it run
+  // one more.
+  const relaying = new Map<string, boolean>();
+  async function relay(documentId: string) {
+    if (relaying.has(documentId)) {
+      relaying.set(documentId, true);
+      return;
+    }
+    const subduction = await repo.subduction;
+    do {
+      relaying.set(documentId, false);
+      try {
+        await subduction.syncWithAllPeers(
+          toSedimentreeId(documentId),
+          true,
+          RELAY_TIMEOUT_MS
+        );
+      } catch (error) {
+        log(`relay of ${documentId.slice(0, 8)} failed: ${error}`);
+      }
+    } while (relaying.get(documentId));
+    relaying.delete(documentId);
+  }
+
+  // Every peer's heads go to the tabs, which know which peer is the server.
   repo.on("subduction-remote-heads", ({ documentId, storageId, heads }) => {
-    if (storageId !== config.serverPeer) return;
-    serverHeads.set(documentId, [...heads]);
-    broadcast({ type: "remote-heads", documentId, heads: [...heads] });
+    let byPeer = remoteHeads.get(documentId);
+    if (!byPeer) remoteHeads.set(documentId, (byPeer = new Map()));
+    byPeer.set(storageId, [...heads]);
+    broadcast({ type: "remote-heads", documentId, storageId, heads: [...heads] });
+    if (storageId !== config.serverPeer) void relay(documentId);
   });
 
   // The socket being open is not the handshake being done; the server counts
@@ -139,7 +192,10 @@ async function build(
     while (socketOpen && !connected) {
       const peers = await repo.connectedSubductionPeerIds();
       if (config.serverPeer && peers.includes(config.serverPeer)) {
+        log(`server handshake done; peers: ${peers.length}`);
         setConnected(true);
+        // Whatever the tabs did while the server was away goes up now.
+        for (const documentId of remoteHeads.keys()) void relay(documentId);
         return;
       }
       await sleep(10);
@@ -160,13 +216,15 @@ async function build(
           new MessagePortTransport(port),
           WORKER_SUBDUCTION_SERVICE
         )
-        .catch((error) =>
-          broadcast({ type: "error", message: `accept failed: ${error}` })
+        .then(
+          (peerId) => log(`accepted tab ${peerId.toString().slice(0, 8)}`),
+          (error) =>
+            broadcast({ type: "error", message: `accept failed: ${error}` })
         );
     },
     setOffline: (offline) => endpoint?.setOffline(offline),
     connected: () => connected,
-    serverHeads: () => serverHeads,
+    remoteHeads: () => remoteHeads,
   };
 }
 
@@ -220,8 +278,10 @@ export function startNode(): { attach(port: ControlPort): void } {
       case "status": {
         const built = await node!;
         post(port, { type: "connection", connected: built.connected() });
-        for (const [documentId, heads] of built.serverHeads()) {
-          post(port, { type: "remote-heads", documentId, heads });
+        for (const [documentId, byPeer] of built.remoteHeads()) {
+          for (const [storageId, heads] of byPeer) {
+            post(port, { type: "remote-heads", documentId, storageId, heads });
+          }
         }
         return;
       }

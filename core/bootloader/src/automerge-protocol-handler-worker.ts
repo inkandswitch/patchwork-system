@@ -25,7 +25,7 @@ import {
 } from "@automerge/automerge-repo/slim";
 import { resolvePath } from "@inkandswitch/patchwork-filesystem";
 
-import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
+import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import { WebSocketWorkerClientAdapter } from "@automerge/automerge-repo-network-websocket";
 import {
   initializeAutomergeRepoKeyhive,
@@ -104,7 +104,7 @@ async function buildRepo(): Promise<Repo> {
 }
 
 async function buildPlainRepo(): Promise<Repo> {
-  const storage = new IndexedDBWorkerStorageAdapter();
+  const storage = new IndexedDBStorageAdapter();
   return new Repo({
     signer: await loadOrCreateSigner(storage),
     storage,
@@ -127,7 +127,7 @@ async function buildKeyhiveRepo(
       new Repo(
         syncServer.useIdFactory === false ? config : { ...config, idFactory }
       ),
-    storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
+    storage: new IndexedDBStorageAdapter(keyhiveStorageName),
     peerIdSuffix:
       `${storagePrefix}-resolver` + Math.random().toString(36).slice(2),
     automaticArchiveIngestion: true,
@@ -136,7 +136,7 @@ async function buildKeyhiveRepo(
     // the matching peer id. Omitting it defaults to "subduction".
     syncServer: keyhiveSyncServer,
     repo: {
-      storage: new IndexedDBWorkerStorageAdapter(),
+      storage: new IndexedDBStorageAdapter(),
       subductionWebsocketEndpoints: [syncServer.url],
       subductionAdapters: siblingAdapters(),
       enableRemoteHeadsGossiping: true,

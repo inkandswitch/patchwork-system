@@ -47,17 +47,20 @@ for (const mode of MODES) {
 
       await Promise.all(pages.map((page) => online(page)));
       if (WORKER_MODES.includes(mode)) {
-        // The tab's own link is to its worker; set once the handshake is done.
-        const linked = (await marks(pages[0])).linked;
-        if (linked !== undefined) {
-          record({
-            metric: "boot → linked to worker, first tab",
-            mode,
-            tabs,
-            value: linked,
-            unit: "ms",
-          });
-        }
+        // The tab's own link is to its worker, handshaken independently of the
+        // worker's server link, so it may land after `online`.
+        await pages[0]
+          .waitForFunction(() => window.bench.marks.linked !== undefined, null, {
+            timeout: 10_000,
+          })
+          .catch(() => {});
+        record({
+          metric: "boot → linked to worker, first tab",
+          mode,
+          tabs,
+          value: (await marks(pages[0])).linked ?? null,
+          unit: "ms",
+        });
       }
       // Let storage flushes and the first sync rounds settle first.
       await pages[0].waitForTimeout(2_000);

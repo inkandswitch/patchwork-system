@@ -4,6 +4,9 @@ import { MODES, RESULTS, STORAGES, type Result } from "./bench.js";
 const STORAGE_LABELS = { worker: "idb worker", direct: "idb in-thread" };
 
 function cell({ value, unit }: Result): string {
+  if (value === null || (typeof value === "number" && !Number.isFinite(value))) {
+    return "–";
+  }
   if (unit === "ok") return value ? "ok" : "FAIL";
   if (unit === "n") return String(value);
   return `${Math.round(Number(value))} ${unit}`;

@@ -1,5 +1,5 @@
 import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
-import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb/IndexedDBWorkerStorageAdapter";
+import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import { siblingAdapters } from "@inkandswitch/patchwork-bootloader/siblings";
 import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
@@ -56,9 +56,10 @@ export type TabRepo = {
 };
 
 /**
- * The tab's own node: this origin's IndexedDB, a socket to the sync server,
- * and the siblings channel to every other Repo on the origin. Nothing is
- * shared with other tabs except the database underneath.
+ * The tab's own node: this origin's IndexedDB, opened on this thread, a socket
+ * to the sync server, and the siblings channel to every other Repo on the
+ * origin. Nothing is shared with other tabs except the database underneath
+ * and the identity every node on the origin signs with.
  */
 export async function createRepo(): Promise<TabRepo> {
   if (syncServer.keyhive) {
@@ -73,14 +74,14 @@ export async function createRepo(): Promise<TabRepo> {
             ? repoConfig
             : { ...repoConfig, idFactory }
         ),
-      storage: new IndexedDBWorkerStorageAdapter(keyhiveStorageName),
+      storage: new IndexedDBStorageAdapter(keyhiveStorageName),
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
       // ARK selects the relay via `syncServer`, defaulting to "subduction".
       syncServer: syncServer.keyhive,
       repo: {
-        storage: new IndexedDBWorkerStorageAdapter(),
+        storage: new IndexedDBStorageAdapter(),
         subductionWebsocketEndpoints: [syncServer.url],
         subductionAdapters: siblingAdapters(),
         enableRemoteHeadsGossiping: true,
@@ -93,7 +94,7 @@ export async function createRepo(): Promise<TabRepo> {
   // The signer is explicit rather than the Repo's internal default so that
   // every tab on this origin signs as the same peer, and so the identity the
   // tab presents to the server can be shown on window.patchwork.
-  const storage = new IndexedDBWorkerStorageAdapter();
+  const storage = new IndexedDBStorageAdapter();
   const signer = await loadOrCreateSigner(storage);
   const repo = new Repo({
     signer,

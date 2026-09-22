@@ -6,12 +6,14 @@ export type Mode =
   | "patchwork"
   | "pertab"
   | "pertab-bc"
+  | "pertab-mesh"
   | "tab-worker"
   | "shared-worker";
 export const MODES: Mode[] = [
   "patchwork",
   "pertab",
   "pertab-bc",
+  "pertab-mesh",
   "tab-worker",
   "shared-worker",
 ];
@@ -28,7 +30,8 @@ export type Result = {
   /** Set for the storage-adapter comparison, which is its own table. */
   storage?: Storage;
   tabs?: number;
-  value: number | boolean;
+  /** null: no measurement, printed as – */
+  value: number | boolean | null;
   unit: "ms" | "MB" | "n" | "ok";
 };
 
@@ -100,21 +103,72 @@ export function isOnline(page: Page): Promise<boolean> {
   return page.evaluate(() => window.bench.isOnline());
 }
 
+export type OfflineSwitch = {
+  /** Cut or restore the link to the sync server in every tab. */
+  set(pages: Page[], offline: boolean): Promise<void>;
+};
+
 /**
- * Cut the link to the sync server. Playwright's offline emulation reaches a
- * page's own socket but not a worker's (it skips worker sessions), so the
- * worker modes are also told to drop theirs and hold off reconnecting.
+ * A real offline switch. Playwright's `setOffline` makes new connections fail
+ * the way a dead network does but doesn't close a WebSocket that is already
+ * open, so every WebSocket a page opens is also proxied here, purely so the
+ * live ones can be closed. (Refusing inside the proxy instead would close the
+ * page's socket without an `error` event, which automerge-repo's connect never
+ * recovers from — a shape no real network produces.) A worker's socket is out
+ * of reach of both, so the worker modes are told to drop theirs and fail
+ * reconnects while offline. Install before opening any tab.
  */
-export async function setOffline(
-  context: BrowserContext,
-  pages: Page[],
-  offline: boolean
-): Promise<void> {
-  await context.setOffline(offline);
-  await Promise.all(
-    pages.map((page) =>
-      page.evaluate((offline) => window.bench.setOffline(offline), offline)
-    )
+export async function offlineSwitch(
+  context: BrowserContext
+): Promise<OfflineSwitch> {
+  const live = new Set<{ close(): void }>();
+  await context.routeWebSocket(
+    (url) => url.protocol === "wss:" || url.protocol === "ws:",
+    (ws) => {
+      const server = ws.connectToServer();
+      const link = {
+        close() {
+          live.delete(link);
+          server.close({ code: 1012, reason: "offline" });
+          ws.close({ code: 1012, reason: "offline" });
+        },
+      };
+      live.add(link);
+      ws.onMessage((message) => server.send(message));
+      server.onMessage((message) => ws.send(message));
+      ws.onClose((code, reason) => {
+        live.delete(link);
+        server.close({ code, reason });
+      });
+      server.onClose((code, reason) => {
+        live.delete(link);
+        ws.close({ code, reason });
+      });
+    }
+  );
+  return {
+    async set(pages, offline) {
+      await context.setOffline(offline);
+      if (offline) for (const link of [...live]) link.close();
+      await Promise.all(
+        pages.map((page) =>
+          page.evaluate((offline) => window.bench.setOffline(offline), offline)
+        )
+      );
+    },
+  };
+}
+
+/**
+ * No sync server at all, for a build whose server url is baked in: every
+ * WebSocket a page opens is closed unopened. The connect attempt hangs rather
+ * than errors (see offlineSwitch), which here is the point — nothing but
+ * storage can answer.
+ */
+export function refuseWebSockets(context: BrowserContext): Promise<void> {
+  return context.routeWebSocket(
+    (url) => url.protocol === "wss:" || url.protocol === "ws:",
+    (ws) => ws.close({ code: 1012, reason: "no server" })
   );
 }
 
@@ -146,13 +200,17 @@ export function createDoc(page: Page, value: object): Promise<string> {
  */
 export function timeFind(
   page: Page,
-  url: string
+  url: string,
+  timeoutMs = 30_000
 ): Promise<{ ms: number; attempts: number }> {
-  return page.evaluate(async (url) => {
-    const started = performance.now();
-    const { attempts } = await window.bench.find(url);
-    return { ms: performance.now() - started, attempts };
-  }, url);
+  return page.evaluate(
+    async ([url, timeoutMs]) => {
+      const started = performance.now();
+      const { attempts } = await window.bench.find(url, timeoutMs);
+      return { ms: performance.now() - started, attempts };
+    },
+    [url, timeoutMs] as const
+  );
 }
 
 // Cross-page timings use epoch ms: performance.now() counts from each page's
@@ -209,8 +267,15 @@ export function awaitField(
   );
 }
 
-export function serverConfirmed(page: Page, url: string): Promise<number> {
-  return page.evaluate((url) => window.bench.serverConfirmed(url), url);
+export function serverConfirmed(
+  page: Page,
+  url: string,
+  timeoutMs = 30_000
+): Promise<number> {
+  return page.evaluate(
+    ([url, timeoutMs]) => window.bench.serverConfirmed(url, timeoutMs),
+    [url, timeoutMs] as const
+  );
 }
 
 export function getField<T>(page: Page, url: string, field: string): Promise<T> {
@@ -221,6 +286,37 @@ export function getField<T>(page: Page, url: string, field: string): Promise<T> 
     },
     [url, field] as const
   );
+}
+
+/**
+ * The doc as a client that shares nothing with these tabs sees it — a fresh
+ * browser context, bare per-tab mode, only the server to ask. undefined if it
+ * can't get the doc at all.
+ */
+export async function strangerSees(
+  browser: Browser,
+  url: string,
+  timeoutMs = 10_000
+): Promise<Record<string, unknown> | undefined> {
+  const context = await browser.newContext();
+  try {
+    const page = await openTab(context, "pertab");
+    await online(page);
+    return await page
+      .evaluate(
+        async ([url, timeoutMs]) => {
+          const { handle } = await window.bench.find(url, timeoutMs);
+          return JSON.parse(JSON.stringify(handle.doc())) as Record<
+            string,
+            unknown
+          >;
+        },
+        [url, timeoutMs] as const
+      )
+      .catch(() => undefined);
+  } finally {
+    await context.close();
+  }
 }
 
 export function flush(page: Page): Promise<void> {

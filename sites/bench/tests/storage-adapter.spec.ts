@@ -39,8 +39,11 @@ for (const storage of STORAGES) {
       unit: "ms",
     });
 
-    // Seed: many docs, each with a run of edits, then one flush for the lot.
-    // The stall probe says how much of that the main thread felt.
+    // Seed: many docs, each with a run of edits, yielding between docs so the
+    // saves those edits trigger interleave with the loop as they would in an
+    // app, then one flush for the lot. The stall probe says how much of that
+    // the main thread felt; the changes themselves are the same work under
+    // either adapter, so the flush is also timed and probed on its own.
     const { result: seeded, stall: seedStall } = await withStall(a, () =>
       a.evaluate(
         async ([docs, edits]) => {
@@ -66,9 +69,17 @@ for (const storage of STORAGES) {
               });
             }
             urls.push(handle.url);
+            await new Promise((resolve) => setTimeout(resolve));
           }
+          const changed = performance.now() - started;
+          window.bench.stallStop();
+          window.bench.stallStart();
           await window.repo.flush();
-          return { ms: performance.now() - started, urls };
+          return {
+            ms: performance.now() - started,
+            flushMs: performance.now() - started - changed,
+            urls,
+          };
         },
         [DOCS, EDITS_PER_DOC] as const
       )
@@ -81,14 +92,21 @@ for (const storage of STORAGES) {
       unit: "ms",
     });
     record({
-      metric: "…longest main-thread stall during that",
+      metric: "…of which the final flush",
+      mode,
+      storage,
+      value: seeded.flushMs,
+      unit: "ms",
+    });
+    record({
+      metric: "…longest main-thread stall during the flush",
       mode,
       storage,
       value: seedStall.maxMs,
       unit: "ms",
     });
     record({
-      metric: "…main-thread time in long tasks during that",
+      metric: "…main-thread time in long tasks during the flush",
       mode,
       storage,
       value: seedStall.longTaskMs,
@@ -123,7 +141,7 @@ for (const storage of STORAGES) {
       unit: "ms",
     });
     record({
-      metric: "…longest main-thread stall during that",
+      metric: "…longest main-thread stall over those rounds",
       mode,
       storage,
       value: flushStall.maxMs,
@@ -161,18 +179,24 @@ for (const storage of STORAGES) {
       unit: "ms",
     });
     record({
-      metric: "…longest main-thread stall during that",
+      metric: "…longest main-thread stall during the load",
       mode,
       storage,
       value: loadStall.maxMs,
       unit: "ms",
     });
 
-    // Several tabs flushing to the same database at once.
+    // Several tabs flushing to the same database at once. Each has its doc
+    // open before the clock starts, so a cold load isn't counted.
     const writers = [a, b];
     while (writers.length < WRITERS) {
       writers.push(await openTab(context, mode, opts));
     }
+    await Promise.all(
+      writers.map((page, i) =>
+        page.evaluate((url) => window.bench.find(url), seeded.urls[i + 1])
+      )
+    );
     const started = Date.now();
     await Promise.all(
       writers.map((page, i) =>
@@ -224,6 +248,7 @@ for (const storage of STORAGES) {
     const b = await openTab(context, mode, { storage });
     await Promise.all([online(a), online(b)]);
     const url = await createDoc(a, { counter: 0 });
+    await serverConfirmed(a, url);
     await awaitField(b, url, "counter", 0);
 
     const propagation: number[] = [];

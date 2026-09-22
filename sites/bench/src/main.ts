@@ -12,6 +12,10 @@
 //                        the database)
 //   ?mode=pertab-bc      pertab plus classic automerge sync between tabs over a
 //                        BroadcastChannel
+//   ?mode=pertab-mesh    pertab plus patchwork's siblings mesh (subduction over
+//                        a BroadcastChannel), but each tab signing as itself:
+//                        the shipped topology minus the shared signer, the
+//                        service worker and the automerge worker
 //   ?mode=tab-worker     the node in a dedicated Worker the tab spawns: storage,
 //                        socket and a mesh to the other tabs' workers live
 //                        there; the tab is a storageless Repo on a MessagePort
@@ -20,10 +24,14 @@
 //
 // `?server=none` runs everything but patchwork with no socket, so tabs can only
 // meet through storage (and whatever local channel the mode has).
-// `?storage=direct` swaps the IndexedDB worker adapter for in-thread IndexedDB
-// in the bare per-tab modes. `?serverPeer=` names the sync server's subduction
-// peer id; without it the server is whichever peer isn't this tab.
+// `?storage=worker` swaps in-thread IndexedDB for the IndexedDB worker adapter
+// in the bare per-tab modes; `?mesh=1` gives them patchwork's siblings mesh
+// (subduction over a BroadcastChannel) and `?signer=shared` patchwork's
+// origin-wide signer, so the shipped topology can be taken apart one piece at
+// a time. `?serverPeer=` names the sync server's subduction peer id; without
+// it the server is whichever peer isn't this tab.
 import {
+  parseAutomergeUrl,
   Repo,
   type AutomergeUrl,
   type DocHandle,
@@ -35,6 +43,7 @@ import { BroadcastChannelNetworkAdapter } from "@automerge/automerge-repo-networ
 import { MemorySigner } from "@automerge/automerge-subduction/slim";
 import { createRepo, initWasm } from "@inkandswitch/patchwork";
 import setupServiceWorker from "@inkandswitch/patchwork-bootloader";
+import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
 import { WorkerSubductionEndpoint } from "./worker-link.js";
 import type { ControlPort, NodeMessage, TabMessage } from "./protocol.js";
 
@@ -44,13 +53,14 @@ type Mode =
   | "patchwork"
   | "pertab"
   | "pertab-bc"
+  | "pertab-mesh"
   | "tab-worker"
   | "shared-worker";
 type Storage = "worker" | "direct";
 
 const params = new URLSearchParams(location.search);
 const mode = (params.get("mode") ?? "patchwork") as Mode;
-const storage = (params.get("storage") ?? "worker") as Storage;
+const storage = (params.get("storage") ?? "direct") as Storage;
 const serverUrl = params.get("server") ?? __SYNC_SERVER__.url;
 const serverPeer = params.get("serverPeer") ?? undefined;
 const workerMode = mode === "tab-worker" || mode === "shared-worker";
@@ -65,6 +75,14 @@ const online = Promise.withResolvers<number>();
 let isOnline: () => Promise<boolean> = async () => false;
 let setOffline: (offline: boolean) => void = () => {};
 const workerErrors: string[] = [];
+const workerLog: string[] = [];
+const remoteHeadsSeen: unknown[] = [];
+const siblings = params.has("siblings")
+  ? params.get("siblings") === "1"
+  : mode === "tab-worker";
+const mesh = params.has("mesh")
+  ? params.get("mesh") === "1"
+  : mode === "pertab-mesh";
 
 function sameHeads(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((head) => b.includes(head));
@@ -89,17 +107,32 @@ async function buildTabNode(): Promise<Repo> {
     repo = tab.repo;
     ownPeerId = tab.signerIdentity!.peerId;
   } else {
-    const signer = new MemorySigner();
+    const storage = storageAdapter();
+    const signer =
+      params.get("signer") === "shared"
+        ? await loadOrCreateSigner(storage)
+        : new MemorySigner();
     ownPeerId = signer.peerId().toString();
     repo = new Repo({
       signer,
-      storage: storageAdapter(),
+      storage,
       peerId: `bench-tab-${crypto.randomUUID()}` as PeerId,
       subductionWebsocketEndpoints: serverUrl === "none" ? [] : [serverUrl],
       network:
         mode === "pertab-bc"
           ? [new BroadcastChannelNetworkAdapter({ channelName: "bench" })]
           : [],
+      subductionAdapters: mesh
+        ? [
+            {
+              adapter: new BroadcastChannelNetworkAdapter({
+                channelName: "bench-mesh",
+              }),
+              serviceName: "bench-mesh",
+              role: "mesh",
+            },
+          ]
+        : [],
       enableRemoteHeadsGossiping: true,
     });
   }
@@ -107,7 +140,11 @@ async function buildTabNode(): Promise<Repo> {
 
   // Every other node on this origin (siblings, the automerge worker) signs as
   // this tab does in patchwork mode, and doesn't exist in the bare modes, so
-  // without a known server peer the server is whoever isn't us.
+  // without a known server peer the server is whoever isn't us. A mesh with
+  // distinct signers has no such tell, so it insists on the probe.
+  if (!serverPeer && serverUrl !== "none" && mesh) {
+    throw new Error("?serverPeer= is required for a mesh of distinct signers");
+  }
   const isServer = (id: string) =>
     serverPeer ? id === serverPeer : id !== ownPeerId;
   const connectedServers = async () =>
@@ -142,24 +179,33 @@ async function buildTabNode(): Promise<Repo> {
 
 // ── Worker modes: the node is in a worker, this Repo is storageless ─────
 
-function spawnControl(): ControlPort {
+const PORT_TIMEOUT_MS = 10_000;
+
+function spawnControl(): { control: ControlPort; errors: EventTarget } {
   if (mode === "tab-worker") {
-    return new Worker(new URL("./subduction-worker.ts", import.meta.url), {
-      type: "module",
-    });
+    const worker = new Worker(
+      new URL("./subduction-worker.ts", import.meta.url),
+      { type: "module" }
+    );
+    return { control: worker, errors: worker };
   }
   const shared = new SharedWorker(
     new URL("./subduction-shared-worker.ts", import.meta.url),
     { type: "module", name: "bench-subduction" }
   );
-  return shared.port;
+  return { control: shared.port, errors: shared };
 }
 
 async function buildWorkerNode(): Promise<Repo> {
-  const control = spawnControl();
+  const { control, errors } = spawnControl();
   const send = (message: TabMessage, transfer?: Transferable[]) =>
     control.postMessage(message, transfer);
   let connected = false;
+  errors.addEventListener("error", (event) => {
+    const message = (event as ErrorEvent).message ?? "worker failed to load";
+    workerErrors.push(message);
+    console.error("[subduction worker]", message);
+  });
 
   control.addEventListener("message", (event) => {
     const message = event.data as NodeMessage;
@@ -169,6 +215,8 @@ async function buildWorkerNode(): Promise<Repo> {
         if (connected) online.resolve(performance.now());
         return;
       case "remote-heads":
+        remoteHeadsSeen.push(message);
+        if (message.storageId !== serverPeer) return;
         serverHeads.set(message.documentId, message.heads);
         return;
       case "ready":
@@ -179,23 +227,33 @@ async function buildWorkerNode(): Promise<Repo> {
         workerErrors.push(message.message);
         console.error("[subduction worker]", message.message);
         return;
+      case "log":
+        workerLog.push(message.message);
+        return;
     }
   });
   control.start?.();
   send({
     type: "config",
-    config: { server: serverUrl, serverPeer, siblings: mode === "tab-worker" },
+    config: { server: serverUrl, serverPeer, siblings },
   });
   send({ type: "status" });
 
+  // Bounded so a worker that never answers feeds automerge-repo's reconnect
+  // loop instead of hanging it.
   let nextPortId = 0;
   const openPort = () =>
     new Promise<MessagePort>((resolve, reject) => {
       const id = ++nextPortId;
       const { port1, port2 } = new MessageChannel();
+      const timer = setTimeout(() => {
+        control.removeEventListener("message", listener);
+        reject(new Error(`worker didn't accept a port within ${PORT_TIMEOUT_MS}ms`));
+      }, PORT_TIMEOUT_MS);
       const listener = (event: MessageEvent) => {
         const message = event.data as NodeMessage;
         if (!("id" in message) || message.id !== id) return;
+        clearTimeout(timer);
         control.removeEventListener("message", listener);
         if (message.type === "port-ready") resolve(port1);
         else reject(new Error(`worker refused the port: ${message.error}`));
@@ -232,27 +290,38 @@ async function build(): Promise<Repo> {
 }
 
 // `find` settles as unavailable when every source has said no, and a sibling
-// tab's brand-new doc may not have reached those sources yet. Retrying is what
-// an app would have to do; the attempt count is reported so the benches can
-// say how often it was needed.
+// tab's brand-new doc may not have reached those sources yet. A plain second
+// `find` returns the same settled query, so each retry asks the Repo for a
+// real re-sync first, which is what an app would have to do; the attempt count
+// is reported so the benches can say how often it was needed. The deadline
+// also bounds a find that stays pending.
 async function find(
   url: string,
   timeoutMs = 30_000
 ): Promise<{ handle: DocHandle<Record<string, unknown>>; attempts: number }> {
   const deadline = performance.now() + timeoutMs;
+  const { documentId } = parseAutomergeUrl(url as AutomergeUrl);
   for (let attempts = 1; ; attempts++) {
+    const remaining = deadline - performance.now();
+    if (remaining <= 0) {
+      throw new Error(`${url} not found within ${timeoutMs}ms (${attempts - 1} retries)`);
+    }
     try {
       const handle = await window.repo.find<Record<string, unknown>>(
-        url as AutomergeUrl
+        url as AutomergeUrl,
+        { signal: AbortSignal.timeout(remaining) }
       );
       await handle.whenReady();
       return { handle, attempts };
     } catch (error) {
       if (performance.now() > deadline) throw error;
+      window.repo.resyncSubduction(documentId);
       await sleep(50);
     }
   }
 }
+
+const ONLINE_TIMEOUT_MS = 60_000;
 
 // How long the main thread was unavailable: a short timer's lateness, plus
 // whatever the browser reports as long tasks.
@@ -273,12 +342,20 @@ window.bench = {
   storage,
   marks,
   find,
-  online: () => online.promise,
+  online: (timeoutMs = ONLINE_TIMEOUT_MS) =>
+    Promise.race([
+      online.promise,
+      sleep(timeoutMs).then(() => {
+        throw new Error(`server not connected within ${timeoutMs}ms`);
+      }),
+    ]),
   isOnline: () => isOnline(),
   setOffline: (offline) => setOffline(offline),
   serverPeerIds: () => [...serverPeerIds],
   serverHeads: (documentId) => serverHeads.get(documentId),
   workerErrors: () => [...workerErrors],
+  workerLog: () => [...workerLog],
+  remoteHeadsSeen: () => [...remoteHeadsSeen],
   // Resolves with the epoch time the server was seen holding exactly the heads
   // the document has right now. Polled: a few ms of slop is fine here.
   async serverConfirmed(url, timeoutMs = 30_000) {
@@ -327,8 +404,12 @@ window.bench = {
     stall = state;
   },
   stallStop() {
-    if (!stall) throw new Error("stall probe not running");
+    if (!stall) return { maxMs: 0, totalMs: 0, longTasks: 0, longTaskMs: 0 };
     clearInterval(stall.timer);
+    for (const entry of stall.observer?.takeRecords() ?? []) {
+      stall.longTasks++;
+      stall.longTaskMs += entry.duration;
+    }
     stall.observer?.disconnect();
     const { maxMs, totalMs, longTasks, longTaskMs } = stall;
     stall = null;
@@ -348,12 +429,14 @@ declare global {
       storage: Storage;
       marks: Record<string, number>;
       find: typeof find;
-      online: () => Promise<number>;
+      online: (timeoutMs?: number) => Promise<number>;
       isOnline: () => Promise<boolean>;
       setOffline: (offline: boolean) => void;
       serverPeerIds: () => string[];
       serverHeads: (documentId: string) => string[] | undefined;
       workerErrors: () => string[];
+      workerLog: () => string[];
+      remoteHeadsSeen: () => unknown[];
       serverConfirmed: (url: string, timeoutMs?: number) => Promise<number>;
       stallStart: () => void;
       stallStop: () => {
