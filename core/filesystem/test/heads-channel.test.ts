@@ -114,6 +114,7 @@ const sidOf = (storage: SharedMemoryAdapter) =>
   storage.writes.find((k) => k.startsWith("subduction/commits/"))!.split("/")[2];
 
 const SERVER = "server" as StorageId;
+const MAX_BACKSTOP_SYNCS = 3;
 
 const bogusHead = () =>
   [...crypto.getRandomValues(new Uint8Array(32))]
@@ -486,16 +487,22 @@ describe("subduction heads channel", () => {
     });
     await until(() => a.doc().text === "from b", 5000, "A sees B's change");
 
-    for (let i = 0; i < 10; i++) {
+    const opened = () => syncA.mock.calls.length - mark;
+    const deadline = Date.now() + 15_000;
+    while (opened() < MAX_BACKSTOP_SYNCS && Date.now() < deadline) {
       nudge();
       await pause(150);
     }
-    const opened = syncA.mock.calls.length - mark;
+    expect(opened()).toBe(MAX_BACKSTOP_SYNCS);
+
+    for (let i = 0; i < 6; i++) {
+      nudge();
+      await pause(150);
+    }
     await pause(600);
     announcer.close();
 
-    expect(opened).toBe(3);
-    expect(syncA.mock.calls.length - mark).toBe(opened);
+    expect(opened()).toBe(MAX_BACKSTOP_SYNCS);
   });
 
   it("a sibling's word about the server keeps the backstop quiet", async () => {
