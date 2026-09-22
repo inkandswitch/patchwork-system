@@ -4,6 +4,7 @@ import {
   type DocHandleChangePayload,
   type Repo,
 } from "@automerge/automerge-repo";
+import { parseAutomergeUrl } from "@automerge/automerge-repo/slim";
 import {
   getSuggestedImportUrl,
   getType,
@@ -13,6 +14,7 @@ import {
 import {
   getFallbackTool,
   getRegistry,
+  isKeyhiveDoc,
   isLoadablePlugin,
   registerPlugins,
   type LoadedTool,
@@ -20,10 +22,7 @@ import {
   type ToolElement,
 } from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
-import {
-  docIdFromAutomergeUrl,
-  type AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive,
-} from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 
 const log = debug("patchwork:elements:legacy");
@@ -322,15 +321,8 @@ export class LegacyImpl {
     this.#state = State.initializing;
 
     if (this.#element.hive && this.#docUrl) {
-      let isKeyhiveDoc = false;
-      try {
-        docIdFromAutomergeUrl(this.#docUrl);
-        isKeyhiveDoc = true;
-      } catch {
-        // Legacy (padded-zero) doc: skip keyhive gate
-      }
-
-      if (isKeyhiveDoc) {
+      // Legacy (padded-zero) doc: skip keyhive gate
+      if (isKeyhiveDoc(this.#docUrl)) {
         const bestAccess = await this.#element.hive.bestAccessForDoc(
           this.#element.hive.active.individual.id,
           this.#docUrl
@@ -541,7 +533,7 @@ export class LegacyImpl {
 
     retryingDocs.add(this.#docUrl);
     try {
-      const documentId = String(docIdFromAutomergeUrl(this.#docUrl));
+      const { documentId } = parseAutomergeUrl(this.#docUrl);
       const handle = (this.#element.repo.handles as any)[documentId];
       if (handle && handle.state === "unavailable") {
         this.#element.repo.delete(this.#docUrl);
@@ -566,7 +558,7 @@ export class LegacyImpl {
       let hasAccess = false;
       let accessCheckSucceeded = false;
       try {
-        docIdFromAutomergeUrl(this.#docUrl);
+        if (!isKeyhiveDoc(this.#docUrl)) return;
         const bestAccess = await this.#element.hive.bestAccessForDoc(
           this.#element.hive.active.individual.id,
           this.#docUrl

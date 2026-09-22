@@ -2,11 +2,9 @@ import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
-import {
-  initKeyhiveWasm,
-  initializeAutomergeRepoKeyhive,
-  type AutomergeRepoKeyhive,
-  type SyncServerSelection,
+import type {
+  AutomergeRepoKeyhive,
+  SyncServerSelection,
 } from "@automerge/automerge-repo-keyhive";
 // eslint-disable-next-line
 // @ts-ignore — initSync is a wasm-bindgen runtime helper not in the .d.ts
@@ -63,6 +61,8 @@ export type TabRepo = {
 export async function createRepo(): Promise<TabRepo> {
   if (syncServer.keyhive) {
     log("setting up keyhive");
+    const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
+      await import("@automerge/automerge-repo-keyhive");
     initKeyhiveWasm();
     const { hive, repo } = await initializeAutomergeRepoKeyhive({
       // ARK injects an `idFactory` deriving document ids from keyhive. A site
