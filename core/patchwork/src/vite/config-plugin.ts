@@ -1,5 +1,6 @@
 import type { Plugin } from "vite";
 import wasm from "vite-plugin-wasm";
+import { patches } from "./patches-plugin.js";
 import { DEFAULT_STORAGE_PREFIX } from "@inkandswitch/patchwork-bootloader/storage";
 import { DEFAULT_TITLE } from "../site-kit/options.js";
 import type { PatchworkVitePluginOptions } from "./patchwork-plugin.js";
@@ -75,7 +76,7 @@ export function config(options: PatchworkVitePluginOptions = {}): Plugin {
             ? undefined
             : {
                 format: options.worker?.format ?? "es",
-                plugins: () => [wasm()],
+                plugins: () => [wasm(), patches({ complete: false })],
               },
         build: {
           target: "firefox150",

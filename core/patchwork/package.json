@@ -94,7 +94,7 @@
     "vite": "^7.3.5"
   },
   "scripts": {
-    "build": "tsc && node build-head.js && cp src/global.css dist/global.css && cp src/client.d.ts dist/client.d.ts",
+    "build": "tsc && node build-head.js && cp src/global.css dist/global.css && cp src/client.d.ts dist/client.d.ts && rm -rf dist/patches && mkdir -p dist/patches && cp ../../patches/@automerge__automerge-repo@*.patch dist/patches/",
     "dev": "tsc -w --preserveWatchOutput"
   }
 }
