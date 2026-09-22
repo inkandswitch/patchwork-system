@@ -110,7 +110,7 @@ async function buildPlainRepo(): Promise<Repo> {
     peerId:
       `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
     subductionWebsocketEndpoints: [syncServer.url],
-    subductionStorageChannel: `${storagePrefix}-storage`,
+    headsChannel: `${storagePrefix}-heads`,
     enableRemoteHeadsGossiping: true,
   });
 }
@@ -139,7 +139,7 @@ async function buildKeyhiveRepo(
     repo: {
       storage: new IndexedDBStorageAdapter(),
       subductionWebsocketEndpoints: [syncServer.url],
-      subductionStorageChannel: `${storagePrefix}-storage`,
+      headsChannel: `${storagePrefix}-heads`,
       enableRemoteHeadsGossiping: true,
     },
   });

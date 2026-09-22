@@ -16,11 +16,12 @@ import {
   withStall,
 } from "./bench.js";
 
-const MODES = (process.env.SCALE_MODES ?? "patchwork,pertab-bus")
+const MODES = (process.env.SCALE_MODES ?? "patchwork,pertab-heads")
   .split(",")
   .map((mode) => mode.trim())
   .filter(Boolean) as Mode[];
 const TABS = Number(process.env.SCALE_TABS ?? 40);
+const DOC_KB = Number(process.env.SCALE_DOC_KB ?? 0);
 const ROUNDS = 5;
 const FIND_TIMEOUT_MS = 5_000;
 const EDIT_TIMEOUT_MS = 5_000;
@@ -100,7 +101,10 @@ for (const mode of MODES) {
       boot[name] === undefined ? null : boot[name] - boot.start;
 
     const [creator, ...others] = pages;
-    const url = await createDoc(creator, { title: "scale" });
+    const url = await createDoc(creator, {
+      title: "scale",
+      ...(DOC_KB ? { text: "x".repeat(DOC_KB * 1024) } : {}),
+    });
     const finds = await Promise.all(
       others.map((page) =>
         timeFind(page, url, FIND_TIMEOUT_MS).then(

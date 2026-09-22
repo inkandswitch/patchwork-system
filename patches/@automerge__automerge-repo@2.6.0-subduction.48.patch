@@ -12,7 +12,7 @@ index 08d36a6efcf9b93ba170dfe8a6a54e51a1b8f92d..fafdbda628f968bb266588d5a45192f5
      /**
       * Optional: drain any pending writes for the given documents (or all
 diff --git a/dist/Repo.d.ts b/dist/Repo.d.ts
-index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..a315cef0f6cfcde827401a5d7b08457dd3e7578b 100644
+index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..656c8061a9e657ea2677a7308b2bce87d96e8d32 100644
 --- a/dist/Repo.d.ts
 +++ b/dist/Repo.d.ts
 @@ -36,7 +36,7 @@ export declare class Repo extends EventEmitter<RepoEvents> {
@@ -20,7 +20,7 @@ index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..a315cef0f6cfcde827401a5d7b08457d
      /** @hidden */
      peerMetadataByPeerId: Record<PeerId, PeerMetadata>;
 -    constructor({ storage, network, peerId, sharePolicy, shareConfig, isEphemeral, enableRemoteHeadsGossiping, denylist, saveDebounceRate, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, }?: RepoConfig);
-+    constructor({ storage, network, peerId, sharePolicy, shareConfig, isEphemeral, enableRemoteHeadsGossiping, denylist, saveDebounceRate, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, subductionStorageChannel, }?: RepoConfig);
++    constructor({ storage, network, peerId, sharePolicy, shareConfig, isEphemeral, enableRemoteHeadsGossiping, denylist, saveDebounceRate, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, headsChannel, }?: RepoConfig);
      /** Returns all the handles we have cached. */
      get handles(): Record<DocumentId, DocHandle<any>>;
      /** Returns a list of all connected peer ids */
@@ -38,22 +38,16 @@ index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..a315cef0f6cfcde827401a5d7b08457d
      }[];
      /**
       * Tunable timeouts for the Subduction sync engine and its
-@@ -284,6 +287,13 @@ export interface RepoConfig {
+@@ -284,6 +287,7 @@ export interface RepoConfig {
       * `storage` when only one of the two Repos runs the interceptor.
       */
      subductionBlobInterceptor?: BlobInterceptor;
-+    /**
-+     * Name of a BroadcastChannel over which Repos on one origin that share
-+     * `storage` announce the subduction records they persist. Each Repo
-+     * ingests the records its siblings wrote straight from the shared
-+     * storage, so their documents converge without a network hop.
-+     */
-+    subductionStorageChannel?: string;
++    headsChannel?: string;
  }
  /** A function that determines whether we should share a document with a peer
   *
 diff --git a/dist/Repo.js b/dist/Repo.js
-index adfddd9b3926510604274217c42f97f104e119a3..89986dc2475f1c15b3bebae93702f0ddfe18d491 100644
+index adfddd9b3926510604274217c42f97f104e119a3..151de25da17d3579a2befa796893898c61ed5f06 100644
 --- a/dist/Repo.js
 +++ b/dist/Repo.js
 @@ -57,7 +57,7 @@ export class Repo extends EventEmitter {
@@ -61,20 +55,19 @@ index adfddd9b3926510604274217c42f97f104e119a3..89986dc2475f1c15b3bebae93702f0dd
      #idFactory;
      #peerId;
 -    constructor({ storage, network = [], peerId = randomPeerId(), sharePolicy, shareConfig, isEphemeral = storage === undefined, enableRemoteHeadsGossiping = false, denylist = [], saveDebounceRate = 100, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, } = {}) {
-+    constructor({ storage, network = [], peerId = randomPeerId(), sharePolicy, shareConfig, isEphemeral = storage === undefined, enableRemoteHeadsGossiping = false, denylist = [], saveDebounceRate = 100, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, subductionStorageChannel, } = {}) {
++    constructor({ storage, network = [], peerId = randomPeerId(), sharePolicy, shareConfig, isEphemeral = storage === undefined, enableRemoteHeadsGossiping = false, denylist = [], saveDebounceRate = 100, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, headsChannel, } = {}) {
          super();
          this.#peerId = peerId;
          this.#remoteHeadsGossipingEnabled = enableRemoteHeadsGossiping;
-@@ -104,7 +104,7 @@ export class Repo extends EventEmitter {
-         // CommitId would collide at the same key and clobber each other.
-         let subductionStorage;
-         if (storage) {
--            subductionStorage = new SubductionStorageBridge(storage, subductionBlobInterceptor ? INTERCEPTOR_PREFIX : undefined);
-+            subductionStorage = new SubductionStorageBridge(storage, subductionBlobInterceptor ? INTERCEPTOR_PREFIX : undefined, subductionStorageChannel);
-         }
-         else {
-             subductionStorage = new SubductionStorageBridge(new DummyStorageAdapter());
-@@ -702,11 +702,10 @@ export class Repo extends EventEmitter {
+@@ -119,6 +119,7 @@ export class Repo extends EventEmitter {
+             timeouts: subductionTimeouts,
+             compactionDeleteConcurrency: subductionCompactionDeleteConcurrency,
+             blobInterceptor: subductionBlobInterceptor,
++            headsChannel,
+             onRemoteHeadsChanged: (documentId, storageId, heads, timestamp) => {
+                 const handle = this.#queries[documentId]?.handle;
+                 if (handle) {
+@@ -702,11 +703,10 @@ export class Repo extends EventEmitter {
       * @param documentId - documentId of the DocHandle to remove from handleCache, if present in cache.
       */
      async removeFromCache(documentId) {
@@ -137,10 +130,21 @@ index 4760a1899a8c0127db4840d5de090f6825211d97..5b9d19d4dd1cfb0cb242f140d5401af5
          }
          return false;
 diff --git a/dist/subduction/source.d.ts b/dist/subduction/source.d.ts
-index c1f722a51f7e273ee8161e4569b1602c2e3c3d11..4b03ccf5cd3905946e9b92e577b9d6ddaf062f34 100644
+index c1f722a51f7e273ee8161e4569b1602c2e3c3d11..799f9ebffae9d4bac393f62de760affcff062339 100644
 --- a/dist/subduction/source.d.ts
 +++ b/dist/subduction/source.d.ts
-@@ -128,7 +128,7 @@ export declare class SubductionSource implements DocumentSource {
+@@ -119,16 +119,17 @@ export interface SubductionSourceOptions {
+      */
+     compactionDeleteConcurrency?: number;
+     blobInterceptor?: BlobInterceptor;
++    headsChannel?: string;
+ }
+ export declare class SubductionSource implements DocumentSource {
+     #private;
+     readonly priority: SourcePriority;
+-    constructor({ peerId, storage, signer, websocketEndpoints, adapters, onRemoteHeadsChanged, onEphemeral, onHealExhausted, onConnectionChanged, priority, policy, timeouts, compactionDeleteConcurrency, blobInterceptor, }: SubductionSourceOptions);
++    constructor({ peerId, storage, signer, websocketEndpoints, adapters, onRemoteHeadsChanged, onEphemeral, onHealExhausted, onConnectionChanged, priority, policy, timeouts, compactionDeleteConcurrency, blobInterceptor, headsChannel, }: SubductionSourceOptions);
+     /** True if any connection manager has an established connection. */
      isConnected(): boolean;
      getSubduction(): Promise<Subduction>;
      attach(query: DocumentQuery<unknown>): void;
@@ -150,26 +154,210 @@ index c1f722a51f7e273ee8161e4569b1602c2e3c3d11..4b03ccf5cd3905946e9b92e577b9d6dd
      /** Check whether a sedimentree is currently in heal-backoff. */
      isHealing(sedimentreeId: SedimentreeId): boolean;
 diff --git a/dist/subduction/source.js b/dist/subduction/source.js
-index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a51102085f 100644
+index 4692619444edfae0ef5f111cef6ce29499507afa..7494e3df5893cb2292577008989c7e8a561164ad 100644
 --- a/dist/subduction/source.js
 +++ b/dist/subduction/source.js
-@@ -27,6 +27,7 @@ const DEFAULT_SYNC_TIMEOUT_MS = 60_000;
+@@ -1,7 +1,7 @@
+ import * as Automerge from "@automerge/automerge/slim";
+ import { BlobMeta, CommitId, CommitInput, Fragment, FragmentInput, LooseCommit, Subduction, Topic, setSubductionLogLevel, } from "@automerge/automerge-subduction/slim";
+ import { toSedimentreeId, toDocumentId } from "./helpers.js";
+-import { encodeHeads } from "../AutomergeUrl.js";
++import { encodeHeads, decodeHeads } from "../AutomergeUrl.js";
+ import { mergeArrays } from "../helpers/mergeArrays.js";
+ import { semaphore } from "../helpers/semaphore.js";
+ import { throttle } from "../helpers/throttle.js";
+@@ -27,6 +27,34 @@ const DEFAULT_SYNC_TIMEOUT_MS = 60_000;
   * unresponsive or half-torn-down peer.
   */
  const SHUTDOWN_SYNC_TIMEOUT_MS = 5_000;
 +const MAX_DETACH_SAVE_ROUNDS = 8;
++const MAX_LOCAL_LOAD_RETRIES = 3;
++/**
++ * Cap on how many heal rounds the containment backstop may open for a
++ * single entry before some peer has been seen holding everything the
++ * handle holds.
++ *
++ * A handle can hold a commit this node is structurally unable to push:
++ * a sibling's write, read back out of shared storage, lands in
++ * `knownHashes`, and `#saveNewCommits` filters every future push against
++ * that same set. Containment is then unsatisfiable no matter how many
++ * rounds run, so the backstop has to be counted, not just conditioned.
++ * The counter resets when containment is observed, and on `resync()`.
++ */
++const MAX_BACKSTOP_SYNCS = 3;
++/**
++ * How long an entry must look diverged before the backstop believes it.
++ *
++ * A sibling's write reaches this handle out of the shared database well
++ * before the tab that made it has finished its own round and said what
++ * the server now holds, so a moment of apparent divergence is the normal
++ * shape of a healthy origin. Waiting, and looking again, is what keeps
++ * the backstop from costing a round every time a sibling types.
++ *
++ * Shares the healer's `healInitialDelayMs` knob and default: both answer
++ * "how long before this is worth a round".
++ */
++const DEFAULT_BACKSTOP_DELAY_MS = 2_000;
  /**
   * Deadline for draining in-flight storage-bridge operations at shutdown.
   * An adapter promise that never settles (e.g. IndexedDB in a frozen or
-@@ -128,6 +129,7 @@ export class SubductionSource {
+@@ -44,6 +72,7 @@ const DEFAULT_COMPACTION_DELETE_CONCURRENCY = 16;
+ export class SubductionSource {
+     #subduction;
+     #storage;
++    #headsChannel = null;
+     #entries = new Map();
+     #log;
+     #connectionManagers = [];
+@@ -52,6 +81,7 @@ export class SubductionSource {
+     #scheduler;
+     #syncTimeoutMs;
+     #syncTimeout;
++    #backstopDelayMs;
+     #compactionDeleteConcurrency;
+     #blobInterceptor;
+     #onRemoteHeadsChanged;
+@@ -59,8 +89,13 @@ export class SubductionSource {
+     /** Last reported aggregate connectedness, to fire onConnectionChanged only
+      *  on transitions. */
+     #lastConnected = false;
+-    /** Last surfaced remote heads per `sid|storageId`, to dedupe repeated
+-     *  notifications (avoids redundant handle events and storage writes). */
++    /**
++     * Last surfaced remote heads per sedimentree, keyed inside by peer.
++     * Dedupes repeated notifications (avoids redundant handle events and
++     * storage writes), carries the observation timestamp so a sibling
++     * relaying older news cannot walk this node's view backwards, and
++     * keeps the hashes that `#serverHasAllHeads` compares against.
++     */
+     #lastRemoteHeads = new Map();
+     /**
+      * Set at the top of `shutdown()`. Makes `#scheduleRecompute` a
+@@ -70,12 +105,14 @@ export class SubductionSource {
+      */
+     #shuttingDown = false;
+     priority;
+-    constructor({ peerId, storage, signer, websocketEndpoints, adapters, onRemoteHeadsChanged, onEphemeral, onHealExhausted, onConnectionChanged, priority = 2, policy, timeouts, compactionDeleteConcurrency = DEFAULT_COMPACTION_DELETE_CONCURRENCY, blobInterceptor, }) {
++    constructor({ peerId, storage, signer, websocketEndpoints, adapters, onRemoteHeadsChanged, onEphemeral, onHealExhausted, onConnectionChanged, priority = 2, policy, timeouts, compactionDeleteConcurrency = DEFAULT_COMPACTION_DELETE_CONCURRENCY, blobInterceptor, headsChannel, }) {
+         this.#blobInterceptor = blobInterceptor;
+         this.#onConnectionChanged = onConnectionChanged;
+         this.priority = priority;
+         this.#syncTimeoutMs = timeouts?.syncMs ?? DEFAULT_SYNC_TIMEOUT_MS;
+         this.#syncTimeout = this.#syncTimeoutMs;
++        this.#backstopDelayMs =
++            timeouts?.healInitialDelayMs ?? DEFAULT_BACKSTOP_DELAY_MS;
+         this.#compactionDeleteConcurrency = compactionDeleteConcurrency;
+         // Default roundtrip deadline forwarded to the Subduction constructor.
+         // The field must be *omitted* (not passed as `undefined`) to get the
+@@ -113,7 +150,20 @@ export class SubductionSource {
+             // raw subduction CommitId hex would never compare equal to a doc's
+             // own heads).
+             const urlHeads = encodeHeads(heads.map(h => h.toHexString()));
+-            this.#surfaceRemoteHeads(sedimentreeId, storageId, urlHeads, Date.now(), true);
++            const timestamp = Date.now();
++            // Only announce what actually surfaced: the wasm fires repeatedly
++            // with the same heads during a sync burst, and relaying each one
++            // would multiply that burst by the number of tabs on the origin.
++            if (!this.#surfaceRemoteHeads(sedimentreeId, storageId, urlHeads, timestamp, true)) {
++                return;
++            }
++            this.#headsChannel?.postMessage({
++                kind: "remote",
++                sid: sedimentreeId.toString(),
++                storageId,
++                heads: urlHeads,
++                timestamp,
++            });
+         };
+         // Construct without hydrating: skip preloading persisted sedimentrees
+         // from storage at startup. State is loaded lazily on demand instead,
+@@ -128,6 +178,27 @@ export class SubductionSource {
              onEphemeral,
              ...defaultTimeoutOption,
          }));
-+        storage.subduction = this.#subduction;
++        if (headsChannel && typeof BroadcastChannel !== "undefined") {
++            this.#headsChannel = new BroadcastChannel(headsChannel);
++            this.#headsChannel.unref?.();
++            this.#headsChannel.onmessage = ({ data, }) => {
++                const entry = this.#entries.get(data.sid);
++                if (!entry)
++                    return;
++                if (data.kind === "remote") {
++                    // Never re-announce: the observing tab already told everyone.
++                    this.#surfaceRemoteHeads(entry.sedimentreeId, data.storageId, data.heads, data.timestamp, false);
++                    return;
++                }
++                if (data.kind !== "saved")
++                    return;
++                if (data.heads.every(h => entry.knownHashes.has(h)))
++                    return;
++                entry.localLoadPending = true;
++                entry.siblingLoadPending = true;
++                this.#scheduleRecompute(entry);
++            };
++        }
          // ── Connection managers ─────────────────────────────────────────
          // Endpoints own *where* their socket lives (in-thread, Worker, ...);
          // the shared manager owns the reconnect/backoff loop. Plain URL
-@@ -244,6 +246,7 @@ export class SubductionSource {
+@@ -184,16 +255,28 @@ export class SubductionSource {
+      * when `persist` is set, durably store it so the last-known sync state
+      * survives reload and replays on the next attach. `heads` must already be
+      * in automerge-repo `UrlHeads` (bs58check) form.
++     *
++     * Returns whether this was news: `false` means the observation was a
++     * repeat, or older than what is already held for that peer.
+      */
+     #surfaceRemoteHeads(sedimentreeId, storageId, heads, timestamp, persist) {
+-        // Dedupe: skip if this peer's heads for this sedimentree are unchanged
+-        // since we last surfaced them (the wasm can fire repeatedly with the
+-        // same heads during a sync burst).
+-        const dedupeKey = `${sedimentreeId.toString()}|${storageId}`;
++        const sidStr = sedimentreeId.toString();
+         const joined = [...heads].sort().join(",");
+-        if (this.#lastRemoteHeads.get(dedupeKey) === joined)
+-            return;
+-        this.#lastRemoteHeads.set(dedupeKey, joined);
++        const byPeer = this.#lastRemoteHeads.get(sidStr);
++        const previous = byPeer?.get(storageId);
++        // Skip a repeat (the wasm fires repeatedly with the same heads during
++        // a sync burst), and skip stale news: heads carry no order of their
++        // own, so an older observation relayed by a sibling would otherwise
++        // replace a newer one and walk this node's view of the peer back.
++        if (previous !== undefined &&
++            (previous.joined === joined || timestamp < previous.timestamp)) {
++            return false;
++        }
++        const surfaced = { joined, timestamp, hashes: decodeHeads(heads) };
++        if (byPeer)
++            byPeer.set(storageId, surfaced);
++        else
++            this.#lastRemoteHeads.set(sidStr, new Map([[storageId, surfaced]]));
+         const documentId = toDocumentId(sedimentreeId);
+         this.#onRemoteHeadsChanged?.(documentId, storageId, heads, timestamp);
+         if (persist) {
+@@ -201,6 +284,21 @@ export class SubductionSource {
+                 .saveRemoteHeads(sedimentreeId, storageId, heads, timestamp)
+                 .catch(e => this.#log.debug("saveRemoteHeads failed: %O", e));
+         }
++        return true;
++    }
++    /**
++     * Close the heads channel and forget it.
++     *
++     * Forgetting is the point. `shutdown()` closes the channel after its
++     * flush-then-final-sync pass, but the 100 ms save throttle can still
++     * fire after that, and `postMessage` on a closed BroadcastChannel
++     * throws `InvalidStateError`. `#save` is called as `void this.#save(…)`
++     * with no catch, so the throw would surface as an unhandled rejection
++     * and skip the rest of that save.
++     */
++    #closeHeadsChannel() {
++        this.#headsChannel?.close();
++        this.#headsChannel = null;
+     }
+     #anyConnectionManagerConnecting() {
+         return this.#connectionManagers.some(mgr => mgr.isConnecting());
+@@ -244,6 +342,7 @@ export class SubductionSource {
          // — recomputes are targeted, so other entries' completions no
          // longer walk this one. Mark it dirty so the walk retries the load.
          if (entry.syncState === "initializing") {
@@ -177,24 +365,31 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
              this.#scheduleRecompute(entry);
              return;
          }
-@@ -364,6 +367,8 @@ export class SubductionSource {
+@@ -364,6 +463,7 @@ export class SubductionSource {
                  return;
              void this.#save(entry);
          }, 100);
 +        const onHeadsChanged = () => throttledSave();
-+        this.#storage.tracked.add(sidStr);
          this.#entries.set(sidStr, {
              syncState: "initializing",
              query,
-@@ -375,6 +380,7 @@ export class SubductionSource {
+@@ -372,17 +472,23 @@ export class SubductionSource {
+             syncInFlight: false,
+             lastSyncResult: null,
+             lastSyncGeneration: -1,
++            backstopSyncs: 0,
++            backstopTimer: null,
              blobLoadInFlight: false,
              blobRetries: 0,
              needsResync: false,
 +            localLoadPending: true,
++            siblingLoadPending: false,
              syncSettled: Promise.resolve(),
              lastSavedHeads: new Set(),
              knownHashes: new Set(),
-@@ -383,6 +389,7 @@ export class SubductionSource {
++            strandedHashes: new Set(),
+             persistedCommitHashes: new Set(),
+             untransformedHashes: new Set(),
              persistedFragmentHashes: new Set(),
              compactionInFlight: null,
              flushSave: throttledSave,
@@ -202,7 +397,7 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
              saveSettled,
              saveInProgress: false,
              saveDeltaPending: false,
-@@ -394,7 +401,7 @@ export class SubductionSource {
+@@ -394,7 +500,7 @@ export class SubductionSource {
              transformRetryScheduled: false,
          });
          query.sourcePending("subduction");
@@ -211,18 +406,15 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
          throttledSave();
          // Subscribe to ephemeral messages for this sedimentree
          void (async () => {
-@@ -441,6 +448,10 @@ export class SubductionSource {
+@@ -441,6 +547,7 @@ export class SubductionSource {
                  this.#log.debug(`failed to seed persistedHashes for ${sidStr.slice(0, 8)}: %O`, e);
              }
          })();
-+        for (const key of this.#lastRemoteHeads.keys()) {
-+            if (key.startsWith(`${sidStr}|`))
-+                this.#lastRemoteHeads.delete(key);
-+        }
++        this.#lastRemoteHeads.delete(sidStr);
          // Replay the last-known remote heads for this sedimentree so the
          // DocHandle reflects the last sync state immediately on (re)attach,
          // before any network round-trip completes. Does not re-persist.
-@@ -457,7 +468,48 @@ export class SubductionSource {
+@@ -457,7 +564,49 @@ export class SubductionSource {
          })();
          this.#scheduleRecompute(this.#entries.get(sidStr));
      }
@@ -234,7 +426,8 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
 +        if (!entry)
 +            return;
 +        this.#entries.delete(sidStr);
-+        this.#storage.tracked.delete(sidStr);
++        if (entry.backstopTimer !== null)
++            clearTimeout(entry.backstopTimer);
 +        entry.handle.off("heads-changed", entry.onHeadsChanged);
 +        await entry.saveSettled;
 +        for (let round = 0; round < MAX_DETACH_SAVE_ROUNDS; round++) {
@@ -272,7 +465,216 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
      shareConfigChanged() {
          for (const entry of this.#entries.values()) {
              // A share-config change can flip a previously-denied fetch to
-@@ -625,6 +677,10 @@ export class SubductionSource {
+@@ -598,6 +747,208 @@ export class SubductionSource {
+             entry.lastSyncResult === "no-peers") &&
+             entry.lastSyncGeneration !== this.#connectionGeneration());
+     }
++    /**
++     * True when some peer has been seen holding every head this entry's
++     * handle holds — there is nothing left for this node to get across.
++     * Vacuously true for a handle with nothing in it.
++     */
++    #serverHasAllHeads(entry) {
++        const doc = entry.handle.doc();
++        if (!doc)
++            return true;
++        const heads = Automerge.getHeads(doc);
++        if (heads.length === 0)
++            return true;
++        const byPeer = this.#lastRemoteHeads.get(entry.sedimentreeId.toString());
++        if (byPeer === undefined)
++            return false;
++        for (const { hashes } of byPeer.values()) {
++            if (heads.every(h => hashes.includes(h)))
++                return true;
++        }
++        return false;
++    }
++    /**
++     * Backstop for the sync predicate. `#needsOutboundSync` knows only
++     * whether this entry synced since the connection generation moved; it
++     * cannot tell "synced and caught up" from "synced, and the handle has
++     * since advanced by a path that stored nothing" — a sibling's write
++     * read back out of shared storage, say. That entry would otherwise sit
++     * diverged with nothing scheduled to notice.
++     *
++     * Counted, not merely conditioned. See {@link MAX_BACKSTOP_SYNCS}: the
++     * divergence can be permanent, and a bare "sync while not contained"
++     * predicate would then round-trip for the life of the tab. Routed
++     * through the healer so the rounds it does open inherit the healer's
++     * backoff and attempt cap, and left to the healer entirely once a real
++     * failure is being retried.
++     */
++    #maybeBackstopSync(entry) {
++        if (this.#serverHasAllHeads(entry)) {
++            entry.backstopSyncs = 0;
++            // A peer holding every head holds every ancestor, so nothing the
++            // handle carries is stranded any more.
++            entry.strandedHashes.clear();
++            return;
++        }
++        if (entry.backstopTimer !== null || this.#backstopBlocked(entry))
++            return;
++        entry.backstopTimer = setTimeout(() => this.#backstopExpired(entry), this.#backstopDelayMs);
++    }
++    #backstopBlocked(entry) {
++        if (entry.lastSyncResult === "all-failed")
++            return true;
++        // Disconnected there is no round to open, but a stranded commit has
++        // to reach the resident tree *before* the reconnect round reads it,
++        // or that round pushes around it. So the timer still arms offline —
++        // for the re-ingest alone, and only while something is stranded.
++        if (!this.isConnected())
++            return entry.strandedHashes.size === 0;
++        // The cap counts rounds, not writes: a stranded commit still needs
++        // its one duplicate write after the round budget is spent.
++        if (entry.backstopSyncs >= MAX_BACKSTOP_SYNCS)
++            return entry.strandedHashes.size === 0;
++        return false;
++    }
++    /** Look again once {@link DEFAULT_BACKSTOP_DELAY_MS} is up. */
++    #backstopExpired(entry) {
++        entry.backstopTimer = null;
++        if (this.#shuttingDown)
++            return;
++        if (this.#serverHasAllHeads(entry)) {
++            entry.backstopSyncs = 0;
++            entry.strandedHashes.clear();
++            return;
++        }
++        if (this.#backstopBlocked(entry))
++            return;
++        // Settled, and still diverged: this is the moment the entry has
++        // earned a duplicate write. Offline that is the whole of it — there
++        // is no round to open, and the next reconnect round will find the
++        // tree already holding the sibling's commits.
++        const reingested = this.#reingestStranded(entry);
++        if (!this.isConnected())
++            return;
++        // The write above is owed to the commit; the round is not. A spent
++        // budget, or a heal chain already retrying this entry, gates the
++        // round alone.
++        if (entry.backstopSyncs >= MAX_BACKSTOP_SYNCS ||
++            this.#scheduler.isHealing(entry.sedimentreeId)) {
++            return;
++        }
++        entry.backstopSyncs++;
++        this.#log.debug(`backstop sync ${entry.sedimentreeId.toString().slice(0, 8)} ` +
++            `(${entry.backstopSyncs}/${MAX_BACKSTOP_SYNCS})`);
++        const heal = () => {
++            // The re-ingest can outlive the entry: `detach()` resets this
++            // sedimentree's heal state, and a round for an evicted document is
++            // noise the protocol handler worker pays for in bursts.
++            if (this.#shuttingDown)
++                return;
++            if (this.#entries.get(entry.sedimentreeId.toString()) !== entry)
++                return;
++            this.#scheduler.scheduleHealSync(entry.sedimentreeId);
++        };
++        // The round has to read a tree that already holds the re-ingested
++        // commits, or it pushes exactly what the last one did.
++        if (reingested)
++            void reingested.then(heal);
++        else
++            heal();
++    }
++    /**
++     * Hand the next save back the commits this node holds only because it
++     * read a sibling's write out of the shared database.
++     *
++     * Dropping them from `knownHashes` un-filters them in
++     * `#saveNewCommits`, and clearing the save baseline gets them past
++     * `#save`'s heads fast path, which the channel-driven reload already
++     * advanced past them. The save writes them a second time — a
++     * duplicate of a record already on disk — and that write is what puts
++     * them in the resident tree, where a round can finally read them.
++     *
++     * At most one duplicate write per commit, ever: a reload only marks a
++     * hash `knownHashes` did not already hold, and `#saveNewCommits`
++     * unmarks every hash it stores. A server that keeps rejecting the
++     * commit therefore costs re-tries of the round (capped by
++     * {@link MAX_BACKSTOP_SYNCS}), not re-tries of the write.
++     *
++     * Returns null when there was nothing stranded, else a promise for the
++     * save that stores it.
++     */
++    #reingestStranded(entry) {
++        this.#forgetStrandedOnTheServer(entry);
++        if (entry.strandedHashes.size === 0)
++            return null;
++        const batch = [...entry.strandedHashes];
++        this.#log.debug(`re-ingesting ${batch.length} stranded commit(s) for ` +
++            entry.sedimentreeId.toString().slice(0, 8));
++        for (const hash of batch)
++            entry.knownHashes.delete(hash);
++        return (async () => {
++            // A save that started before the drop above filtered on the old
++            // `knownHashes` and would leave the commits stranded; let it go
++            // before arming the one that sees them. It restores the save
++            // baseline as it finishes, so the baseline is cleared after it:
++            // cleared first, the finishing save puts it straight back and the
++            // save below returns on `#save`'s heads fast path.
++            await entry.saveSettled;
++            entry.lastSavedHeads.clear();
++            entry.flushSave();
++            entry.flushSave.flush();
++            await entry.saveSettled;
++            // `#saveNewCommits` has already unmarked what it stored. What is
++            // left of this batch is what it could not store — absorbed into a
++            // fragment since the reload, say — and holding on to that would
++            // arm the backstop for ever. A save that failed outright keeps its
++            // batch, so the next expiry retries it.
++            if (entry.lastSaveError === null) {
++                for (const hash of batch)
++                    entry.strandedHashes.delete(hash);
++            }
++        })();
++    }
++    /**
++     * Forget the stranded commits some peer's heads already descend from.
++     *
++     * `#serverHasAllHeads` asks whether the server holds everything this
++     * handle holds, which is false for the ordinary moment between a local
++     * edit and its confirmation. That is the wrong question here: what the
++     * re-ingest is for is a commit nobody else will push, and a commit the
++     * server's heads descend from has already been pushed by the tab that
++     * wrote it. Asking the narrower question is what keeps a busy origin
++     * from paying a duplicate write per sibling edit.
++     *
++     * Only runs with something stranded, which in normal operation is
++     * nothing at all.
++     */
++    #forgetStrandedOnTheServer(entry) {
++        if (entry.strandedHashes.size === 0)
++            return;
++        const byPeer = this.#lastRemoteHeads.get(entry.sedimentreeId.toString());
++        if (byPeer === undefined)
++            return;
++        const doc = entry.handle.doc();
++        if (!doc)
++            return;
++        for (const { hashes } of byPeer.values()) {
++            let unpushed;
++            try {
++                unpushed = new Set(Automerge.getChangesMetaSince(doc, hashes).map(m => m.hash));
++            }
++            catch {
++                // Heads this doc does not have; that peer says nothing about
++                // what it holds of ours.
++                continue;
++            }
++            for (const hash of entry.strandedHashes) {
++                if (!unpushed.has(hash))
++                    entry.strandedHashes.delete(hash);
++            }
++            if (entry.strandedHashes.size === 0)
++                return;
++        }
++    }
+     #recomputeEntry(entry) {
+         // No new background syncs once shutting down: `shutdown()`'s quiesce
+         // round is the sole sync initiator from that point. A recompute walk
+@@ -625,6 +976,10 @@ export class SubductionSource {
                          entry.syncInFlight = true;
                          void this.#doSync(entry);
                      }
@@ -283,27 +685,42 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
                      else if (Automerge.getHeads(entry.handle.fullDoc()).length === 0 &&
                          !this.#anyConnectionManagerConnecting()) {
                          // All connections settled and sync failed — give up.
-@@ -632,9 +688,19 @@ export class SubductionSource {
+@@ -632,12 +987,31 @@ export class SubductionSource {
                          entry.query.sourceUnavailable("subduction");
                      }
                  }
 +                if (entry.localLoadPending && !entry.blobLoadInFlight) {
 +                    entry.localLoadPending = false;
++                    const fromSibling = entry.siblingLoadPending;
++                    entry.siblingLoadPending = false;
 +                    entry.blobLoadInFlight = true;
-+                    void this.#loadBlobsAndTransition(entry, true);
++                    void this.#loadBlobsAndTransition(entry, true, fromSibling);
 +                }
                  return;
              }
              case "running": {
+-                if (!entry.syncInFlight && this.#needsOutboundSync(entry)) {
+-                    entry.syncInFlight = true;
+-                    void this.#doSync(entry);
 +                if (entry.localLoadPending && !entry.blobLoadInFlight) {
 +                    entry.localLoadPending = false;
++                    const fromSibling = entry.siblingLoadPending;
++                    entry.siblingLoadPending = false;
 +                    entry.blobLoadInFlight = true;
-+                    void this.#loadBlobsAndTransition(entry, true);
++                    void this.#loadBlobsAndTransition(entry, true, fromSibling);
 +                }
-                 if (!entry.syncInFlight && this.#needsOutboundSync(entry)) {
-                     entry.syncInFlight = true;
-                     void this.#doSync(entry);
-@@ -663,6 +729,8 @@ export class SubductionSource {
++                if (!entry.syncInFlight) {
++                    if (this.#needsOutboundSync(entry)) {
++                        entry.syncInFlight = true;
++                        void this.#doSync(entry);
++                    }
++                    else {
++                        this.#maybeBackstopSync(entry);
++                    }
+                 }
+                 return;
+             }
+@@ -663,6 +1037,8 @@ export class SubductionSource {
              await entry.saveSettled;
              this.#log.debug(`doSync ${sid} (state=${entry.syncState})`);
              const peerResultMap = await subduction.syncWithAllPeers(sedimentreeId, true, timeoutMs !== undefined ? timeoutMs : this.#syncTimeout);
@@ -312,7 +729,7 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
              const results = peerResultMap.entries();
              const anySuccess = results.some(r => r.success);
              this.#log.debug(`doSync ${sid}: ${results.length} peer(s), success=${anySuccess}`);
-@@ -676,7 +744,7 @@ export class SubductionSource {
+@@ -676,7 +1052,7 @@ export class SubductionSource {
              // arrives, without waiting for further state transitions.
              //
              // During "initializing", `#loadBlobsAndTransition` performs one
@@ -321,7 +738,7 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
              // here too would duplicate storage reads on first open.
              //
              // Also retry when the handle is empty: a previous load may have
-@@ -754,7 +822,7 @@ export class SubductionSource {
+@@ -754,42 +1130,63 @@ export class SubductionSource {
          return out;
      }
      /**
@@ -330,9 +747,22 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
       * handle via `Automerge.loadIncremental`. If new data was loaded, signal
       * the query so it can transition to "ready".
       *
-@@ -764,26 +832,21 @@ export class SubductionSource {
-     async #loadBlobsIntoHandle(entry, subduction) {
+      * This is called reactively after any `syncWithAllPeers` that received
+      * data, making handle updates immediate.
+      */
+-    async #loadBlobsIntoHandle(entry, subduction) {
++    async #loadBlobsIntoHandle(entry, subduction, fromSibling = false) {
          const sid = entry.sedimentreeId.toString().slice(0, 8);
++        // An announcement still waiting for its own reload is answered by
++        // this read too — it reads the same shared database. Honour it
++        // whoever asked for the read, so a peer-fed load landing in that
++        // window cannot file the sibling's commit as known and not stranded.
++        // Left set for `#recomputeEntry` to consume as usual. Only once
++        // running: while initializing the resident tree is hydrated from
++        // this same storage, so nothing read here is stranded.
++        if (entry.syncState === "running" && entry.siblingLoadPending) {
++            fromSibling = true;
++        }
          const headCount = () => Automerge.getHeads(entry.handle.fullDoc()).length;
 -        const allBlobs = await subduction.getBlobs(entry.sedimentreeId);
 -        const totalBytes = allBlobs
@@ -365,16 +795,50 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
 +            return false;
          blobsWithIds.sort((a, b) => b.blob.byteLength - a.blob.byteLength);
          // Record these IDs as known hashes since nothing in subduction's storage
-         // should be re-encrypted and re-saved.
-@@ -835,10 +898,14 @@ export class SubductionSource {
+-        // should be re-encrypted and re-saved.
++        // should be re-encrypted and re-saved. A sibling's write read back out
++        // of the shared database is the exception: `knownHashes` then hides a
++        // commit the resident tree has never seen, so mark it stranded too.
++        let newlyStranded = 0;
+         for (const u of blobsWithIds) {
+-            if (u.idHex)
+-                entry.knownHashes.add(u.idHex);
++            if (!u.idHex)
++                continue;
++            if (fromSibling && !entry.knownHashes.has(u.idHex)) {
++                entry.strandedHashes.add(u.idHex);
++                newlyStranded++;
++            }
++            entry.knownHashes.add(u.idHex);
++        }
++        // A commit that has only just arrived is no evidence of divergence:
++        // the tab that wrote it is still mid-push. Start the settling delay
++        // again from here — the recompute in `#loadBlobsAndTransition` re-arms
++        // it — so a stream of sibling edits never expires the backstop.
++        if (newlyStranded > 0 && entry.backstopTimer !== null) {
++            clearTimeout(entry.backstopTimer);
++            entry.backstopTimer = null;
+         }
+         let toApply = blobsWithIds.map(u => u.blob);
+         if (this.#blobInterceptor) {
+@@ -835,10 +1232,22 @@ export class SubductionSource {
          this.#scheduleCompaction(entry);
          return true;
      }
 -    async #loadBlobsAndTransition(entry) {
-+    async #loadBlobsAndTransition(entry, onlyIfData = false) {
++    /**
++     * `fromSibling` is consumed by the caller, not read off the entry
++     * here: an announcement that lands while this load is in flight sets
++     * the flag again, and clearing it afterwards would erase it. The
++     * follow-up reload would then file the sibling's commit as known and
++     * not stranded — the one commit the re-ingest exists for.
++     */
++    async #loadBlobsAndTransition(entry, onlyIfData = false, fromSibling = false) {
          try {
              const subduction = await this.#subduction;
-             const hadBlobs = await this.#loadBlobsIntoHandle(entry, subduction);
+-            const hadBlobs = await this.#loadBlobsIntoHandle(entry, subduction);
++            const hadBlobs = await this.#loadBlobsIntoHandle(entry, subduction, fromSibling);
++            entry.blobRetries = 0;
 +            if (onlyIfData &&
 +                Automerge.getHeads(entry.handle.fullDoc()).length === 0) {
 +                return;
@@ -382,7 +846,29 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
              entry.syncState = "running";
              if (Automerge.getHeads(entry.handle.fullDoc()).length === 0) {
                  if (this.#blobInterceptor && hadBlobs) {
-@@ -948,6 +1015,7 @@ export class SubductionSource {
+@@ -864,6 +1273,21 @@ export class SubductionSource {
+             }
+         }
+         catch (e) {
++            if (onlyIfData) {
++                if (entry.blobRetries < MAX_LOCAL_LOAD_RETRIES) {
++                    entry.blobRetries++;
++                    entry.localLoadPending = true;
++                    if (fromSibling)
++                        entry.siblingLoadPending = true;
++                }
++                else {
++                    entry.blobRetries = 0;
++                    this.#log.warn(`reload from storage failed ${MAX_LOCAL_LOAD_RETRIES + 1} times for ${entry.sedimentreeId
++                        .toString()
++                        .slice(0, 8)}; waiting for the next announcement`, e);
++                }
++                return;
++            }
+             this.#log.debug(`loadBlobsAndTransition threw for ${entry.sedimentreeId
+                 .toString()
+                 .slice(0, 8)}: %O`, e);
+@@ -948,6 +1372,7 @@ export class SubductionSource {
          entry.saveSettled = new Promise(r => {
              resolveSaveSettled = r;
          });
@@ -390,15 +876,22 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
          try {
              const doc = entry.handle.fullDoc();
              if (!doc)
-@@ -989,6 +1057,7 @@ export class SubductionSource {
+@@ -989,6 +1414,14 @@ export class SubductionSource {
              // so future mutations to either side stay isolated.
              entry.lastSaveError = null;
              entry.lastSavedHeads = new Set(currentSet);
 +            stored = result.stored;
++            if (stored > 0) {
++                this.#headsChannel?.postMessage({
++                    kind: "saved",
++                    sid: entry.sedimentreeId.toString(),
++                    heads: currentHeads,
++                });
++            }
              // Detect a post-save delta the `heads-changed` listener didn't
              // fire on. `getChangeByHash` calls inside `#saveNewCommits` can
              // shift what `getHeads` returns for the same doc reference on
-@@ -1014,6 +1083,8 @@ export class SubductionSource {
+@@ -1014,6 +1447,8 @@ export class SubductionSource {
              entry.saveInProgress = false;
              resolveSaveSettled();
          }
@@ -407,7 +900,7 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
          // Trigger an immediate sync — the only broadcast path for newly
          // saved commits (`#saveNewCommits` is store-only). If a sync is
          // already in flight, flag a re-sync for when it completes; otherwise
-@@ -1062,7 +1133,7 @@ export class SubductionSource {
+@@ -1062,7 +1497,7 @@ export class SubductionSource {
          const newCommitMetas = commitMetas.filter(m => !entry.knownHashes.has(m.head));
          const newFragmentMetas = fragmentMetas.filter(m => !entry.knownHashes.has(m.head));
          if (newCommitMetas.length === 0 && newFragmentMetas.length === 0) {
@@ -416,7 +909,7 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
          }
          const newCommitBytes = newCommitMetas.length === 0
              ? []
-@@ -1143,7 +1214,7 @@ export class SubductionSource {
+@@ -1143,7 +1578,7 @@ export class SubductionSource {
                      : new AggregateError(prepErrors, `${prepErrors.length} inputs failed to prepare`);
          }
          if (commitInputs.length === 0 && fragmentInputs.length === 0) {
@@ -425,9 +918,14 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
          }
          // Record hashes BEFORE `storeBuiltBatch` so the synchronous
          // `commit-saved` / `fragment-saved` events fired from the storage
-@@ -1172,7 +1243,10 @@ export class SubductionSource {
+@@ -1171,8 +1606,15 @@ export class SubductionSource {
+                 `${fragmentInputs.length} fragments):`, e);
              throw e;
          }
++        // Stored for real now, so not stranded any more — including anything
++        // a reload marked while this batch was in flight.
++        for (const hash of acceptedHashes)
++            entry.strandedHashes.delete(hash);
          this.#scheduleCompaction(entry);
 -        return { prepFailures: prepErrors.length };
 +        return {
@@ -437,246 +935,42 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..f8d6d363c0db8e363cc543097191a7a5
      }
      /**
       * Kick off a compaction pass without blocking the save loop.
-diff --git a/dist/subduction/storage.d.ts b/dist/subduction/storage.d.ts
-index 8d260aa38e6de498e56efff9747149696c150d0c..1c5ba6a559d0b0ee62eaf9718f60fc6934614053 100644
---- a/dist/subduction/storage.d.ts
-+++ b/dist/subduction/storage.d.ts
-@@ -13,7 +13,7 @@
-  * ```
-  */
- import type { StorageAdapterInterface } from "../storage/StorageAdapterInterface.js";
--import type { SedimentreeStorage } from "@automerge/automerge-subduction/slim";
-+import type { SedimentreeStorage, Subduction } from "@automerge/automerge-subduction/slim";
- import { CommitId, CommitWithBlob, FragmentWithBlob, SedimentreeId, SignedLooseCommit, SignedFragment } from "@automerge/automerge-subduction/slim";
- export interface StorageBridgeEvents {
-     /**
-@@ -52,7 +52,14 @@ export declare class SubductionStorageBridge implements SedimentreeStorage {
-     private droppedWriteCount;
-     private idleWaiters;
-     private log;
--    constructor(adapter: StorageAdapterInterface, prefix?: string);
-+    subduction: Promise<Subduction> | null;
-+    tracked: Set<string>;
-+    private bus;
-+    private busOrigin;
-+    private seen;
-+    private ingesting;
-+    private ingestingSids;
-+    constructor(adapter: StorageAdapterInterface, prefix?: string, channel?: string);
-     /**
-      * Wait for in-scope save operations to drain.
-      *
-@@ -171,6 +178,9 @@ export declare class SubductionStorageBridge implements SedimentreeStorage {
-         signedFragment: SignedFragment;
-         blob: Uint8Array;
-     }>): Promise<number>;
-+    private remember;
-+    private announce;
-+    private ingest;
-     /**
-      * Persist the last-known heads a remote peer/storage advertises for a
-      * sedimentree, so the sync state survives reload. One record per remote
-diff --git a/dist/subduction/storage.js b/dist/subduction/storage.js
-index 37f9cc727f7ab1d24118879efadc4bb44f90e827..988835981476872c443042cffdebc16ad10cc981 100644
---- a/dist/subduction/storage.js
-+++ b/dist/subduction/storage.js
-@@ -13,7 +13,7 @@
-  * ```
-  */
- import { makeLogger } from "../Logger.js";
--import { CommitId, CommitWithBlob, FragmentWithBlob, SedimentreeId, SignedLooseCommit, SignedFragment, } from "@automerge/automerge-subduction/slim";
-+import { CommitId, CommitInput, CommitWithBlob, FragmentInput, FragmentWithBlob, SedimentreeId, SignedLooseCommit, SignedFragment, } from "@automerge/automerge-subduction/slim";
- export class SubductionStorageBridge {
-     adapter;
-     /**
-@@ -39,9 +39,23 @@ export class SubductionStorageBridge {
-     droppedWriteCount = 0;
-     idleWaiters = [];
-     log = makeLogger("automerge-repo:subduction:storage");
--    constructor(adapter, prefix = DEFAULT_PREFIX) {
-+    subduction = null;
-+    tracked = new Set();
-+    bus = null;
-+    busOrigin = Math.random().toString(36).slice(2);
-+    seen = new Set();
-+    ingesting = new Set();
-+    ingestingSids = new Map();
-+    constructor(adapter, prefix = DEFAULT_PREFIX, channel) {
-         this.prefix = prefix;
-         this.adapter = adapter;
-+        if (channel && typeof BroadcastChannel !== "undefined") {
-+            this.bus = new BroadcastChannel(channel);
-+            this.bus.unref?.();
-+            this.bus.onmessage = e => {
-+                this.ingest(e.data).catch(err => this.log.warn("storage bus ingest failed: %O", err));
-+            };
-+        }
+@@ -1321,6 +1763,7 @@ export class SubductionSource {
+             return;
+         this.#scheduler.resetHealState(sid);
+         entry.lastSyncResult = null;
++        entry.backstopSyncs = 0;
+         this.#scheduleRecompute(entry);
      }
-     /**
-      * Wait for in-scope save operations to drain.
-@@ -92,6 +106,8 @@ export class SubductionStorageBridge {
-      */
-     close() {
-         this.closed = true;
-+        this.bus?.close();
-+        this.bus = null;
-     }
-     get isClosed() {
-         return this.closed;
-@@ -228,6 +244,8 @@ export class SubductionStorageBridge {
-     }
-     // ==================== Sedimentree IDs ====================
-     async saveSedimentreeId(sedimentreeId) {
-+        if (this.ingestingSids.has(sedimentreeId.toString()))
-+            return;
-         const key = [this.prefix, IDS_PREFIX, sedimentreeId.toString()];
-         await this.guarded("saveSedimentreeId", undefined, () => this.adapter.save(key, ID_MARKER));
-     }
-@@ -268,6 +286,7 @@ export class SubductionStorageBridge {
-                 if (this.listeners["commit-saved"]?.length) {
-                     this.emit("commit-saved", sedimentreeId, commitId, new Uint8Array(blobCopy));
-                 }
-+                this.announce(sid, [idHex], []);
-             });
+     // ── Flush ───────────────────────────────────────────────────────────
+@@ -1430,6 +1873,11 @@ export class SubductionSource {
+             mgr.shutdown();
          }
-         finally {
-@@ -383,6 +402,7 @@ export class SubductionStorageBridge {
-                 if (this.listeners["fragment-saved"]?.length) {
-                     this.emit("fragment-saved", sedimentreeId, fragmentHead, new Uint8Array(blobCopy));
-                 }
-+                this.announce(sid, [], [idHex]);
-             });
-         }
-         finally {
-@@ -488,24 +508,31 @@ export class SubductionStorageBridge {
-         const fragmentBlobCopies = [];
-         const blobEntries = [];
-         const metaEntries = [];
-+        const written = { commits: [], fragments: [] };
-         for (const { commitId, signedCommit, blob } of commits) {
-             const idHex = commitId.toHexString();
-             const blobCopy = new Uint8Array(blob);
-+            commitBlobCopies.push(blobCopy);
-+            if (this.ingesting.has("c" + idHex))
-+                continue;
-             const commitCopy = new Uint8Array(signedCommit.encode());
-             blobEntries.push([[this.prefix, BLOBS_PREFIX, sid, idHex], blobCopy]);
-             metaEntries.push([[this.prefix, COMMITS_PREFIX, sid, idHex], commitCopy]);
--            commitBlobCopies.push(blobCopy);
-+            written.commits.push(idHex);
-         }
-         for (const { fragmentHead, signedFragment, blob } of fragments) {
-             const idHex = fragmentHead.toHexString();
-             const blobCopy = new Uint8Array(blob);
-+            fragmentBlobCopies.push(blobCopy);
-+            if (this.ingesting.has("f" + idHex))
-+                continue;
-             const fragCopy = new Uint8Array(signedFragment.encode());
-             blobEntries.push([
-                 [this.prefix, FRAGMENT_BLOBS_PREFIX, sid, idHex],
-                 blobCopy,
-             ]);
-             metaEntries.push([[this.prefix, FRAGMENTS_PREFIX, sid, idHex], fragCopy]);
--            fragmentBlobCopies.push(blobCopy);
-+            written.fragments.push(idHex);
-         }
-         const markerEntry = [
-             [this.prefix, IDS_PREFIX, sid],
-@@ -521,8 +548,8 @@ export class SubductionStorageBridge {
-                 }
-                 if (metaEntries.length > 0) {
-                     await this.adapter.saveBatch(metaEntries);
-+                    await this.adapter.saveBatch([markerEntry]);
-                 }
--                await this.adapter.saveBatch([markerEntry]);
-                 // Defensive copy per event; see comment in saveCommit.
-                 if (this.listeners["commit-saved"]?.length) {
-                     commits.forEach(({ commitId }, i) => {
-@@ -534,6 +561,7 @@ export class SubductionStorageBridge {
-                         this.emit("fragment-saved", sedimentreeId, fragmentHead, new Uint8Array(fragmentBlobCopies[i]));
-                     });
-                 }
-+                this.announce(sid, written.commits, written.fragments);
-                 return commits.length + fragments.length;
-             });
-         }
-@@ -541,6 +569,68 @@ export class SubductionStorageBridge {
-             this.decrementPending(sid);
-         }
-     }
-+    remember(key) {
-+        if (this.seen.size >= SEEN_CAP) {
-+            this.seen.delete(this.seen.values().next().value);
+         this.#scheduler.shutdown();
++        for (const entry of this.#entries.values()) {
++            if (entry.backstopTimer !== null)
++                clearTimeout(entry.backstopTimer);
++            entry.backstopTimer = null;
 +        }
-+        this.seen.add(key);
-+    }
-+    announce(sid, commits, fragments) {
-+        if (!this.bus)
-+            return;
-+        for (const hex of commits)
-+            this.remember("c" + hex);
-+        for (const hex of fragments)
-+            this.remember("f" + hex);
-+        if (commits.length === 0 && fragments.length === 0)
-+            return;
-+        this.bus.postMessage({ origin: this.busOrigin, sid, commits, fragments });
-+    }
-+    async ingest(msg) {
-+        if (this.closed || !this.subduction || msg.origin === this.busOrigin)
-+            return;
-+        if (!this.tracked.has(msg.sid))
-+            return;
-+        const commits = msg.commits.filter(hex => !this.seen.has("c" + hex));
-+        const fragments = msg.fragments.filter(hex => !this.seen.has("f" + hex));
-+        if (commits.length === 0 && fragments.length === 0)
-+            return;
-+        const keys = [
-+            ...commits.map(hex => "c" + hex),
-+            ...fragments.map(hex => "f" + hex),
-+        ];
-+        for (const key of keys) {
-+            this.remember(key);
-+            this.ingesting.add(key);
-+        }
-+        try {
-+            const sid = SedimentreeId.fromBytes(hexToBytes(msg.sid));
-+            const [loadedCommits, loadedFragments] = await Promise.all([
-+                Promise.all(commits.map(hex => this.loadCommit(sid, CommitId.fromHexString(hex)))),
-+                Promise.all(fragments.map(hex => this.loadFragment(sid, CommitId.fromHexString(hex)))),
-+            ]);
-+            const commitInputs = loadedCommits.flatMap(c => c ? [new CommitInput(c.signed.payload, c.blob)] : []);
-+            const fragmentInputs = loadedFragments.flatMap(f => f ? [new FragmentInput(f.signed.payload, f.blob)] : []);
-+            if (commitInputs.length === 0 && fragmentInputs.length === 0)
-+                return;
-+            const subduction = await this.subduction;
-+            this.ingestingSids.set(msg.sid, (this.ingestingSids.get(msg.sid) ?? 0) + 1);
-+            try {
-+                await subduction.storeBuiltBatch(sid, commitInputs, fragmentInputs);
-+            }
-+            finally {
-+                const left = this.ingestingSids.get(msg.sid) - 1;
-+                if (left === 0)
-+                    this.ingestingSids.delete(msg.sid);
-+                else
-+                    this.ingestingSids.set(msg.sid, left);
-+            }
-+        }
-+        finally {
-+            for (const key of keys)
-+                this.ingesting.delete(key);
-+        }
-+    }
-     // ==================== Remote heads (last-known sync state) ====================
-     /**
-      * Persist the last-known heads a remote peer/storage advertises for a
-@@ -630,6 +720,7 @@ const decodeRemoteHeads = (bytes) => {
- };
- /** Marker value for sedimentree ID existence */
- const ID_MARKER = new Uint8Array([1]);
-+const SEEN_CAP = 10_000;
- /** Method naming is stable: every mutating bridge op is save* / delete*. */
- const isWriteOp = (op) => /^(save|delete)/.test(op);
- /**
+         for (const entry of this.#entries.values())
+             this.#flushInbound(entry);
+         for (const entry of this.#entries.values()) {
+@@ -1468,6 +1916,7 @@ export class SubductionSource {
+             for (const endpoint of this.#websocketEndpoints) {
+                 endpoint.shutdown?.();
+             }
++            this.#closeHeadsChannel();
+             this.#storage.close();
+             await this.#awaitStorageIdle();
+             return;
+@@ -1481,6 +1930,7 @@ export class SubductionSource {
+         for (const endpoint of this.#websocketEndpoints) {
+             endpoint.shutdown?.();
+         }
++        this.#closeHeadsChannel();
+         this.#storage.close();
+         await this.#awaitStorageIdle();
+     }
 diff --git a/src/DocumentSource.ts b/src/DocumentSource.ts
 index 363cbbad5af3f2db28ed5fa0ca85ca584a60bb49..d9eb3c5d8429607480867bf105d0e772ba1aecfd 100644
 --- a/src/DocumentSource.ts
@@ -691,27 +985,25 @@ index 363cbbad5af3f2db28ed5fa0ca85ca584a60bb49..d9eb3c5d8429607480867bf105d0e772
    shareConfigChanged(): void
  
 diff --git a/src/Repo.ts b/src/Repo.ts
-index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..a084afce9a037cc0024046b1389b5d46a3fdff90 100644
+index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..a26a259b4d1c07951bdb75a86cb8b6c297c2e079 100644
 --- a/src/Repo.ts
 +++ b/src/Repo.ts
 @@ -136,6 +136,7 @@ export class Repo extends EventEmitter<RepoEvents> {
      subductionTimeouts,
      subductionCompactionDeleteConcurrency,
      subductionBlobInterceptor,
-+    subductionStorageChannel,
++    headsChannel,
    }: RepoConfig = {}) {
      super()
      this.#peerId = peerId
-@@ -198,7 +199,8 @@ export class Repo extends EventEmitter<RepoEvents> {
-     if (storage) {
-       subductionStorage = new SubductionStorageBridge(
-         storage,
--        subductionBlobInterceptor ? INTERCEPTOR_PREFIX : undefined
-+        subductionBlobInterceptor ? INTERCEPTOR_PREFIX : undefined,
-+        subductionStorageChannel
-       )
-     } else {
-       subductionStorage = new SubductionStorageBridge(new DummyStorageAdapter())
+@@ -213,6 +214,7 @@ export class Repo extends EventEmitter<RepoEvents> {
+       timeouts: subductionTimeouts,
+       compactionDeleteConcurrency: subductionCompactionDeleteConcurrency,
+       blobInterceptor: subductionBlobInterceptor,
++      headsChannel,
+       onRemoteHeadsChanged: (documentId, storageId, heads, timestamp) => {
+         const handle = this.#queries[documentId]?.handle
+         if (handle) {
 @@ -930,11 +932,12 @@ export class Repo extends EventEmitter<RepoEvents> {
     * @param documentId - documentId of the DocHandle to remove from handleCache, if present in cache.
     */
@@ -741,18 +1033,12 @@ index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..a084afce9a037cc0024046b1389b5d46
    }[]
  
    /**
-@@ -1088,6 +1094,14 @@ export interface RepoConfig {
+@@ -1088,6 +1094,8 @@ export interface RepoConfig {
     * `storage` when only one of the two Repos runs the interceptor.
     */
    subductionBlobInterceptor?: BlobInterceptor
 +
-+  /**
-+   * Name of a BroadcastChannel over which Repos on one origin that share
-+   * `storage` announce the subduction records they persist. Each Repo
-+   * ingests the records its siblings wrote straight from the shared
-+   * storage, so their documents converge without a network hop.
-+   */
-+  subductionStorageChannel?: string
++  headsChannel?: string
  }
  
  /** A function that determines whether we should share a document with a peer
@@ -810,26 +1096,106 @@ index 0d5510500c1e3a8e0d84b6f9b5f87f42096ee8e3..6b8376be24f932f21ab3ddc4b76bc81f
      return false
    }
 diff --git a/src/subduction/source.ts b/src/subduction/source.ts
-index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad1f83e817 100644
+index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..cc507ab8adfa56f3043beee966157251a7c56ad0 100644
 --- a/src/subduction/source.ts
 +++ b/src/subduction/source.ts
-@@ -53,6 +53,7 @@ const DEFAULT_SYNC_TIMEOUT_MS = 60_000
+@@ -16,7 +16,7 @@ import { DocumentSource } from "../DocumentSource.js"
+ import { DocumentQuery, SourcePriority } from "../DocumentQuery.js"
+ import { DocumentId, PeerId } from "../types.js"
+ import { toSedimentreeId, toDocumentId } from "./helpers.js"
+-import { encodeHeads } from "../AutomergeUrl.js"
++import { encodeHeads, decodeHeads } from "../AutomergeUrl.js"
+ import { DocHandle, NetworkAdapterInterface } from "../index.js"
+ import { ConnectionManager } from "./ConnectionManager.js"
+ import type { StorageId } from "../storage/types.js"
+@@ -53,6 +53,36 @@ const DEFAULT_SYNC_TIMEOUT_MS = 60_000
   * unresponsive or half-torn-down peer.
   */
  const SHUTDOWN_SYNC_TIMEOUT_MS = 5_000
 +const MAX_DETACH_SAVE_ROUNDS = 8
++const MAX_LOCAL_LOAD_RETRIES = 3
++
++/**
++ * Cap on how many heal rounds the containment backstop may open for a
++ * single entry before some peer has been seen holding everything the
++ * handle holds.
++ *
++ * A handle can hold a commit this node is structurally unable to push:
++ * a sibling's write, read back out of shared storage, lands in
++ * `knownHashes`, and `#saveNewCommits` filters every future push against
++ * that same set. Containment is then unsatisfiable no matter how many
++ * rounds run, so the backstop has to be counted, not just conditioned.
++ * The counter resets when containment is observed, and on `resync()`.
++ */
++const MAX_BACKSTOP_SYNCS = 3
++
++/**
++ * How long an entry must look diverged before the backstop believes it.
++ *
++ * A sibling's write reaches this handle out of the shared database well
++ * before the tab that made it has finished its own round and said what
++ * the server now holds, so a moment of apparent divergence is the normal
++ * shape of a healthy origin. Waiting, and looking again, is what keeps
++ * the backstop from costing a round every time a sibling types.
++ *
++ * Shares the healer's `healInitialDelayMs` knob and default: both answer
++ * "how long before this is worth a round".
++ */
++const DEFAULT_BACKSTOP_DELAY_MS = 2_000
  
  /**
   * Deadline for draining in-flight storage-bridge operations at shutdown.
-@@ -95,6 +96,7 @@ interface SedimentreeEntry {
+@@ -93,8 +123,28 @@ interface SedimentreeEntry {
+   syncInFlight: boolean
+   lastSyncResult: SyncResult | null
    lastSyncGeneration: number
++  /**
++   * Heal rounds the containment backstop has opened since the last time
++   * a peer was seen holding every head this handle holds. Capped at
++   * {@link MAX_BACKSTOP_SYNCS}.
++   */
++  backstopSyncs: number
++  /** Pending {@link MAX_BACKSTOP_SYNCS} re-check, or null. */
++  backstopTimer: ReturnType<typeof setTimeout> | null
    blobLoadInFlight: boolean
    needsResync: boolean
 +  localLoadPending: boolean
++  /**
++   * True while a sibling's `saved` announcement is waiting for its
++   * reload. A read of the shared database made while it is set can leave
++   * the handle holding a commit the resident subduction tree has never
++   * seen, so such a read records what it read into
++   * {@link SedimentreeEntry.strandedHashes}. Consumed by
++   * `#recomputeEntry`, which hands it to the reload it starts — clearing
++   * it after the load instead would erase an announcement that arrived
++   * during it.
++   */
++  siblingLoadPending: boolean
    blobRetries: number
    /**
     * Resolves when the in-flight `#doSync` round (if any) completes.
-@@ -160,6 +162,7 @@ interface SedimentreeEntry {
+@@ -123,6 +173,20 @@ interface SedimentreeEntry {
+    * bounded by automerge's compaction policy, not by total history.
+    */
+   knownHashes: Set<string>
++  /**
++   * The part of `knownHashes` this node has never stored itself: a
++   * sibling's commits, read back out of the shared database by a
++   * channel-driven reload.
++   *
++   * They are in the handle and in `knownHashes`, so `#saveNewCommits`
++   * filters them out of every push — and they are not in this node's
++   * resident subduction tree, so no round can carry them either. If the
++   * tab that wrote them closes before pushing them, nothing else will.
++   * `#reingestStranded` drops them back out of `knownHashes` so the next
++   * save stores them for real; a hash leaves the set for good once some
++   * `storeBuiltBatch` has accepted it.
++   */
++  strandedHashes: Set<string>
+   /**
+    * Hashes of commits we currently believe are persisted to local
+    * storage as loose-commit records (not as part of a fragment).
+@@ -160,6 +224,7 @@ interface SedimentreeEntry {
     */
    compactionInFlight: Promise<void> | null
    flushSave: ThrottledFunction<() => void>
@@ -837,15 +1203,234 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
    /** Resolves when any in-progress `#save` completes. */
    saveSettled: Promise<void>
    /**
-@@ -491,6 +494,7 @@ export class SubductionSource implements DocumentSource {
+@@ -226,6 +291,37 @@ interface SedimentreeEntry {
+   inboundFlushScheduled: boolean
+ }
+ 
++/**
++ * What one tab tells its siblings over the heads channel.
++ *
++ * `saved` says a local write reached the shared database, so a sibling
++ * with the document open should re-read it. `remote` relays an
++ * observation of what a sync server holds: every tab on the origin talks
++ * to the same server as the same identity, so one tab's observation is a
++ * fact for all of them. Only a real wasm `onRemoteHeads` callback
++ * announces `remote`; relaying a relay is what would turn the origin
++ * into an echo chamber.
++ */
++type HeadsChannelMessage =
++  | { kind: "saved"; sid: string; heads: string[] }
++  | {
++      kind: "remote"
++      sid: string
++      storageId: string
++      heads: string[]
++      timestamp: number
++    }
++
++/** The last remote heads surfaced for one sedimentree and one peer. */
++interface SurfacedRemoteHeads {
++  /** Sorted and joined `UrlHeads`, for equality alone. */
++  joined: string
++  /** When the observation was made, so older news can be dropped. */
++  timestamp: number
++  /** The same heads as raw hashes, to compare with `Automerge.getHeads`. */
++  hashes: string[]
++}
++
+ /** Callback for remote heads changes from subduction peers. */
+ export type OnRemoteHeadsChanged = (
+   documentId: DocumentId,
+@@ -370,11 +466,13 @@ export interface SubductionSourceOptions {
+   compactionDeleteConcurrency?: number
+ 
+   blobInterceptor?: BlobInterceptor
++  headsChannel?: string
+ }
+ 
+ export class SubductionSource implements DocumentSource {
+   #subduction: Promise<Subduction>
+   #storage: SubductionStorageBridge
++  #headsChannel: (BroadcastChannel & { unref?(): void }) | null = null
+   #entries = new Map<string, SedimentreeEntry>()
+   #log: Logger
+   #connectionManagers: ConnectionManager[] = []
+@@ -383,6 +481,7 @@ export class SubductionSource implements DocumentSource {
+   #scheduler: SyncScheduler
+   #syncTimeoutMs: number
+   #syncTimeout: number | null
++  #backstopDelayMs: number
+   #compactionDeleteConcurrency: number
+   #blobInterceptor?: BlobInterceptor
+   #onRemoteHeadsChanged?: OnRemoteHeadsChanged
+@@ -390,9 +489,14 @@ export class SubductionSource implements DocumentSource {
+   /** Last reported aggregate connectedness, to fire onConnectionChanged only
+    *  on transitions. */
+   #lastConnected = false
+-  /** Last surfaced remote heads per `sid|storageId`, to dedupe repeated
+-   *  notifications (avoids redundant handle events and storage writes). */
+-  #lastRemoteHeads = new Map<string, string>()
++  /**
++   * Last surfaced remote heads per sedimentree, keyed inside by peer.
++   * Dedupes repeated notifications (avoids redundant handle events and
++   * storage writes), carries the observation timestamp so a sibling
++   * relaying older news cannot walk this node's view backwards, and
++   * keeps the hashes that `#serverHasAllHeads` compares against.
++   */
++  #lastRemoteHeads = new Map<string, Map<string, SurfacedRemoteHeads>>()
+   /**
+    * Set at the top of `shutdown()`. Makes `#scheduleRecompute` a
+    * no-op so no new background sync rounds spin up mid-teardown; the
+@@ -418,12 +522,15 @@ export class SubductionSource implements DocumentSource {
+     timeouts,
+     compactionDeleteConcurrency = DEFAULT_COMPACTION_DELETE_CONCURRENCY,
+     blobInterceptor,
++    headsChannel,
+   }: SubductionSourceOptions) {
+     this.#blobInterceptor = blobInterceptor
+     this.#onConnectionChanged = onConnectionChanged
+     this.priority = priority
+     this.#syncTimeoutMs = timeouts?.syncMs ?? DEFAULT_SYNC_TIMEOUT_MS
+     this.#syncTimeout = this.#syncTimeoutMs
++    this.#backstopDelayMs =
++      timeouts?.healInitialDelayMs ?? DEFAULT_BACKSTOP_DELAY_MS
+     this.#compactionDeleteConcurrency = compactionDeleteConcurrency
+     // Default roundtrip deadline forwarded to the Subduction constructor.
+     // The field must be *omitted* (not passed as `undefined`) to get the
+@@ -467,13 +574,28 @@ export class SubductionSource implements DocumentSource {
+       // raw subduction CommitId hex would never compare equal to a doc's
+       // own heads).
+       const urlHeads = encodeHeads(heads.map(h => h.toHexString()))
+-      this.#surfaceRemoteHeads(
+-        sedimentreeId,
++      const timestamp = Date.now()
++      // Only announce what actually surfaced: the wasm fires repeatedly
++      // with the same heads during a sync burst, and relaying each one
++      // would multiply that burst by the number of tabs on the origin.
++      if (
++        !this.#surfaceRemoteHeads(
++          sedimentreeId,
++          storageId,
++          urlHeads,
++          timestamp,
++          true
++        )
++      ) {
++        return
++      }
++      this.#headsChannel?.postMessage({
++        kind: "remote",
++        sid: sedimentreeId.toString(),
+         storageId,
+-        urlHeads,
+-        Date.now(),
+-        true
+-      )
++        heads: urlHeads,
++        timestamp,
++      } satisfies HeadsChannelMessage)
+     }
+ 
+     // Construct without hydrating: skip preloading persisted sedimentrees
+@@ -491,6 +613,32 @@ export class SubductionSource implements DocumentSource {
          ...defaultTimeoutOption,
        })
      )
-+    storage.subduction = this.#subduction
++    if (headsChannel && typeof BroadcastChannel !== "undefined") {
++      this.#headsChannel = new BroadcastChannel(headsChannel)
++      this.#headsChannel.unref?.()
++      this.#headsChannel.onmessage = ({
++        data,
++      }: MessageEvent<HeadsChannelMessage>) => {
++        const entry = this.#entries.get(data.sid)
++        if (!entry) return
++        if (data.kind === "remote") {
++          // Never re-announce: the observing tab already told everyone.
++          this.#surfaceRemoteHeads(
++            entry.sedimentreeId,
++            data.storageId,
++            data.heads as UrlHeads,
++            data.timestamp,
++            false
++          )
++          return
++        }
++        if (data.kind !== "saved") return
++        if (data.heads.every(h => entry.knownHashes.has(h))) return
++        entry.localLoadPending = true
++        entry.siblingLoadPending = true
++        this.#scheduleRecompute(entry)
++      }
++    }
  
      // ── Connection managers ─────────────────────────────────────────
      // Endpoints own *where* their socket lives (in-thread, Worker, ...);
-@@ -631,6 +635,7 @@ export class SubductionSource implements DocumentSource {
+@@ -554,6 +702,9 @@ export class SubductionSource implements DocumentSource {
+    * when `persist` is set, durably store it so the last-known sync state
+    * survives reload and replays on the next attach. `heads` must already be
+    * in automerge-repo `UrlHeads` (bs58check) form.
++   *
++   * Returns whether this was news: `false` means the observation was a
++   * repeat, or older than what is already held for that peer.
+    */
+   #surfaceRemoteHeads(
+     sedimentreeId: SedimentreeId,
+@@ -561,14 +712,24 @@ export class SubductionSource implements DocumentSource {
+     heads: UrlHeads,
+     timestamp: number,
+     persist: boolean
+-  ) {
+-    // Dedupe: skip if this peer's heads for this sedimentree are unchanged
+-    // since we last surfaced them (the wasm can fire repeatedly with the
+-    // same heads during a sync burst).
+-    const dedupeKey = `${sedimentreeId.toString()}|${storageId}`
++  ): boolean {
++    const sidStr = sedimentreeId.toString()
+     const joined = [...heads].sort().join(",")
+-    if (this.#lastRemoteHeads.get(dedupeKey) === joined) return
+-    this.#lastRemoteHeads.set(dedupeKey, joined)
++    const byPeer = this.#lastRemoteHeads.get(sidStr)
++    const previous = byPeer?.get(storageId)
++    // Skip a repeat (the wasm fires repeatedly with the same heads during
++    // a sync burst), and skip stale news: heads carry no order of their
++    // own, so an older observation relayed by a sibling would otherwise
++    // replace a newer one and walk this node's view of the peer back.
++    if (
++      previous !== undefined &&
++      (previous.joined === joined || timestamp < previous.timestamp)
++    ) {
++      return false
++    }
++    const surfaced = { joined, timestamp, hashes: decodeHeads(heads) }
++    if (byPeer) byPeer.set(storageId, surfaced)
++    else this.#lastRemoteHeads.set(sidStr, new Map([[storageId, surfaced]]))
+ 
+     const documentId = toDocumentId(sedimentreeId)
+     this.#onRemoteHeadsChanged?.(
+@@ -582,6 +743,22 @@ export class SubductionSource implements DocumentSource {
+         .saveRemoteHeads(sedimentreeId, storageId, heads, timestamp)
+         .catch(e => this.#log.debug("saveRemoteHeads failed: %O", e))
+     }
++    return true
++  }
++
++  /**
++   * Close the heads channel and forget it.
++   *
++   * Forgetting is the point. `shutdown()` closes the channel after its
++   * flush-then-final-sync pass, but the 100 ms save throttle can still
++   * fire after that, and `postMessage` on a closed BroadcastChannel
++   * throws `InvalidStateError`. `#save` is called as `void this.#save(…)`
++   * with no catch, so the throw would surface as an unhandled rejection
++   * and skip the rest of that save.
++   */
++  #closeHeadsChannel() {
++    this.#headsChannel?.close()
++    this.#headsChannel = null
+   }
+ 
+   #anyConnectionManagerConnecting(): boolean {
+@@ -631,6 +808,7 @@ export class SubductionSource implements DocumentSource {
      // — recomputes are targeted, so other entries' completions no
      // longer walk this one. Mark it dirty so the walk retries the load.
      if (entry.syncState === "initializing") {
@@ -853,25 +1438,31 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
        this.#scheduleRecompute(entry)
        return
      }
-@@ -766,7 +771,9 @@ export class SubductionSource implements DocumentSource {
+@@ -766,6 +944,7 @@ export class SubductionSource implements DocumentSource {
        if (!entry) return
        void this.#save(entry)
      }, 100)
 +    const onHeadsChanged = () => throttledSave()
  
-+    this.#storage.tracked.add(sidStr)
      this.#entries.set(sidStr, {
        syncState: "initializing",
-       query,
-@@ -778,6 +785,7 @@ export class SubductionSource implements DocumentSource {
+@@ -775,17 +954,23 @@ export class SubductionSource implements DocumentSource {
+       syncInFlight: false,
+       lastSyncResult: null,
+       lastSyncGeneration: -1,
++      backstopSyncs: 0,
++      backstopTimer: null,
        blobLoadInFlight: false,
        blobRetries: 0,
        needsResync: false,
 +      localLoadPending: true,
++      siblingLoadPending: false,
        syncSettled: Promise.resolve(),
        lastSavedHeads: new Set(),
        knownHashes: new Set(),
-@@ -786,6 +794,7 @@ export class SubductionSource implements DocumentSource {
++      strandedHashes: new Set(),
+       persistedCommitHashes: new Set(),
+       untransformedHashes: new Set(),
        persistedFragmentHashes: new Set(),
        compactionInFlight: null,
        flushSave: throttledSave,
@@ -879,7 +1470,7 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
        saveSettled,
        saveInProgress: false,
        saveDeltaPending: false,
-@@ -799,7 +808,7 @@ export class SubductionSource implements DocumentSource {
+@@ -799,7 +984,7 @@ export class SubductionSource implements DocumentSource {
  
      query.sourcePending("subduction")
  
@@ -888,17 +1479,15 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
      throttledSave()
  
      // Subscribe to ephemeral messages for this sedimentree
-@@ -851,6 +860,9 @@ export class SubductionSource implements DocumentSource {
+@@ -851,6 +1036,7 @@ export class SubductionSource implements DocumentSource {
        }
      })()
  
-+    for (const key of this.#lastRemoteHeads.keys()) {
-+      if (key.startsWith(`${sidStr}|`)) this.#lastRemoteHeads.delete(key)
-+    }
++    this.#lastRemoteHeads.delete(sidStr)
      // Replay the last-known remote heads for this sedimentree so the
      // DocHandle reflects the last sync state immediately on (re)attach,
      // before any network round-trip completes. Does not re-persist.
-@@ -877,7 +889,45 @@ export class SubductionSource implements DocumentSource {
+@@ -877,7 +1063,45 @@ export class SubductionSource implements DocumentSource {
      this.#scheduleRecompute(this.#entries.get(sidStr))
    }
  
@@ -909,7 +1498,7 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
 +    const entry = this.#entries.get(sidStr)
 +    if (!entry) return
 +    this.#entries.delete(sidStr)
-+    this.#storage.tracked.delete(sidStr)
++    if (entry.backstopTimer !== null) clearTimeout(entry.backstopTimer)
 +    entry.handle.off("heads-changed", entry.onHeadsChanged)
 +    await entry.saveSettled
 +    for (let round = 0; round < MAX_DETACH_SAVE_ROUNDS; round++) {
@@ -945,7 +1534,213 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
  
    shareConfigChanged(): void {
      for (const entry of this.#entries.values()) {
-@@ -1051,6 +1101,9 @@ export class SubductionSource implements DocumentSource {
+@@ -1024,6 +1248,205 @@ export class SubductionSource implements DocumentSource {
+     )
+   }
+ 
++  /**
++   * True when some peer has been seen holding every head this entry's
++   * handle holds — there is nothing left for this node to get across.
++   * Vacuously true for a handle with nothing in it.
++   */
++  #serverHasAllHeads(entry: SedimentreeEntry): boolean {
++    const doc = entry.handle.doc()
++    if (!doc) return true
++    const heads = Automerge.getHeads(doc)
++    if (heads.length === 0) return true
++    const byPeer = this.#lastRemoteHeads.get(entry.sedimentreeId.toString())
++    if (byPeer === undefined) return false
++    for (const { hashes } of byPeer.values()) {
++      if (heads.every(h => hashes.includes(h))) return true
++    }
++    return false
++  }
++
++  /**
++   * Backstop for the sync predicate. `#needsOutboundSync` knows only
++   * whether this entry synced since the connection generation moved; it
++   * cannot tell "synced and caught up" from "synced, and the handle has
++   * since advanced by a path that stored nothing" — a sibling's write
++   * read back out of shared storage, say. That entry would otherwise sit
++   * diverged with nothing scheduled to notice.
++   *
++   * Counted, not merely conditioned. See {@link MAX_BACKSTOP_SYNCS}: the
++   * divergence can be permanent, and a bare "sync while not contained"
++   * predicate would then round-trip for the life of the tab. Routed
++   * through the healer so the rounds it does open inherit the healer's
++   * backoff and attempt cap, and left to the healer entirely once a real
++   * failure is being retried.
++   */
++  #maybeBackstopSync(entry: SedimentreeEntry) {
++    if (this.#serverHasAllHeads(entry)) {
++      entry.backstopSyncs = 0
++      // A peer holding every head holds every ancestor, so nothing the
++      // handle carries is stranded any more.
++      entry.strandedHashes.clear()
++      return
++    }
++    if (entry.backstopTimer !== null || this.#backstopBlocked(entry)) return
++    entry.backstopTimer = setTimeout(
++      () => this.#backstopExpired(entry),
++      this.#backstopDelayMs
++    )
++  }
++
++  #backstopBlocked(entry: SedimentreeEntry): boolean {
++    if (entry.lastSyncResult === "all-failed") return true
++    // Disconnected there is no round to open, but a stranded commit has
++    // to reach the resident tree *before* the reconnect round reads it,
++    // or that round pushes around it. So the timer still arms offline —
++    // for the re-ingest alone, and only while something is stranded.
++    if (!this.isConnected()) return entry.strandedHashes.size === 0
++    // The cap counts rounds, not writes: a stranded commit still needs
++    // its one duplicate write after the round budget is spent.
++    if (entry.backstopSyncs >= MAX_BACKSTOP_SYNCS)
++      return entry.strandedHashes.size === 0
++    return false
++  }
++
++  /** Look again once {@link DEFAULT_BACKSTOP_DELAY_MS} is up. */
++  #backstopExpired(entry: SedimentreeEntry) {
++    entry.backstopTimer = null
++    if (this.#shuttingDown) return
++    if (this.#serverHasAllHeads(entry)) {
++      entry.backstopSyncs = 0
++      entry.strandedHashes.clear()
++      return
++    }
++    if (this.#backstopBlocked(entry)) return
++
++    // Settled, and still diverged: this is the moment the entry has
++    // earned a duplicate write. Offline that is the whole of it — there
++    // is no round to open, and the next reconnect round will find the
++    // tree already holding the sibling's commits.
++    const reingested = this.#reingestStranded(entry)
++    if (!this.isConnected()) return
++
++    // The write above is owed to the commit; the round is not. A spent
++    // budget, or a heal chain already retrying this entry, gates the
++    // round alone.
++    if (
++      entry.backstopSyncs >= MAX_BACKSTOP_SYNCS ||
++      this.#scheduler.isHealing(entry.sedimentreeId)
++    ) {
++      return
++    }
++
++    entry.backstopSyncs++
++    this.#log.debug(
++      `backstop sync ${entry.sedimentreeId.toString().slice(0, 8)} ` +
++        `(${entry.backstopSyncs}/${MAX_BACKSTOP_SYNCS})`
++    )
++    const heal = () => {
++      // The re-ingest can outlive the entry: `detach()` resets this
++      // sedimentree's heal state, and a round for an evicted document is
++      // noise the protocol handler worker pays for in bursts.
++      if (this.#shuttingDown) return
++      if (this.#entries.get(entry.sedimentreeId.toString()) !== entry) return
++      this.#scheduler.scheduleHealSync(entry.sedimentreeId)
++    }
++    // The round has to read a tree that already holds the re-ingested
++    // commits, or it pushes exactly what the last one did.
++    if (reingested) void reingested.then(heal)
++    else heal()
++  }
++
++  /**
++   * Hand the next save back the commits this node holds only because it
++   * read a sibling's write out of the shared database.
++   *
++   * Dropping them from `knownHashes` un-filters them in
++   * `#saveNewCommits`, and clearing the save baseline gets them past
++   * `#save`'s heads fast path, which the channel-driven reload already
++   * advanced past them. The save writes them a second time — a
++   * duplicate of a record already on disk — and that write is what puts
++   * them in the resident tree, where a round can finally read them.
++   *
++   * At most one duplicate write per commit, ever: a reload only marks a
++   * hash `knownHashes` did not already hold, and `#saveNewCommits`
++   * unmarks every hash it stores. A server that keeps rejecting the
++   * commit therefore costs re-tries of the round (capped by
++   * {@link MAX_BACKSTOP_SYNCS}), not re-tries of the write.
++   *
++   * Returns null when there was nothing stranded, else a promise for the
++   * save that stores it.
++   */
++  #reingestStranded(entry: SedimentreeEntry): Promise<void> | null {
++    this.#forgetStrandedOnTheServer(entry)
++    if (entry.strandedHashes.size === 0) return null
++    const batch = [...entry.strandedHashes]
++    this.#log.debug(
++      `re-ingesting ${batch.length} stranded commit(s) for ` +
++        entry.sedimentreeId.toString().slice(0, 8)
++    )
++    for (const hash of batch) entry.knownHashes.delete(hash)
++    return (async () => {
++      // A save that started before the drop above filtered on the old
++      // `knownHashes` and would leave the commits stranded; let it go
++      // before arming the one that sees them. It restores the save
++      // baseline as it finishes, so the baseline is cleared after it:
++      // cleared first, the finishing save puts it straight back and the
++      // save below returns on `#save`'s heads fast path.
++      await entry.saveSettled
++      entry.lastSavedHeads.clear()
++      entry.flushSave()
++      entry.flushSave.flush()
++      await entry.saveSettled
++      // `#saveNewCommits` has already unmarked what it stored. What is
++      // left of this batch is what it could not store — absorbed into a
++      // fragment since the reload, say — and holding on to that would
++      // arm the backstop for ever. A save that failed outright keeps its
++      // batch, so the next expiry retries it.
++      if (entry.lastSaveError === null) {
++        for (const hash of batch) entry.strandedHashes.delete(hash)
++      }
++    })()
++  }
++
++  /**
++   * Forget the stranded commits some peer's heads already descend from.
++   *
++   * `#serverHasAllHeads` asks whether the server holds everything this
++   * handle holds, which is false for the ordinary moment between a local
++   * edit and its confirmation. That is the wrong question here: what the
++   * re-ingest is for is a commit nobody else will push, and a commit the
++   * server's heads descend from has already been pushed by the tab that
++   * wrote it. Asking the narrower question is what keeps a busy origin
++   * from paying a duplicate write per sibling edit.
++   *
++   * Only runs with something stranded, which in normal operation is
++   * nothing at all.
++   */
++  #forgetStrandedOnTheServer(entry: SedimentreeEntry) {
++    if (entry.strandedHashes.size === 0) return
++    const byPeer = this.#lastRemoteHeads.get(entry.sedimentreeId.toString())
++    if (byPeer === undefined) return
++    const doc = entry.handle.doc()
++    if (!doc) return
++    for (const { hashes } of byPeer.values()) {
++      let unpushed: Set<string>
++      try {
++        unpushed = new Set(
++          Automerge.getChangesMetaSince(doc, hashes).map(m => m.hash)
++        )
++      } catch {
++        // Heads this doc does not have; that peer says nothing about
++        // what it holds of ours.
++        continue
++      }
++      for (const hash of entry.strandedHashes) {
++        if (!unpushed.has(hash)) entry.strandedHashes.delete(hash)
++      }
++      if (entry.strandedHashes.size === 0) return
++    }
++  }
++
+   #recomputeEntry(entry: SedimentreeEntry) {
+     // No new background syncs once shutting down: `shutdown()`'s quiesce
+     // round is the sole sync initiator from that point. A recompute walk
+@@ -1051,6 +1474,9 @@ export class SubductionSource implements DocumentSource {
              entry.query.sourcePending("subduction")
              entry.syncInFlight = true
              void this.#doSync(entry)
@@ -955,28 +1750,42 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
            } else if (
              Automerge.getHeads(entry.handle.fullDoc()).length === 0 &&
              !this.#anyConnectionManagerConnecting()
-@@ -1060,10 +1113,20 @@ export class SubductionSource implements DocumentSource {
+@@ -1060,13 +1486,31 @@ export class SubductionSource implements DocumentSource {
              entry.query.sourceUnavailable("subduction")
            }
          }
 +        if (entry.localLoadPending && !entry.blobLoadInFlight) {
 +          entry.localLoadPending = false
++          const fromSibling = entry.siblingLoadPending
++          entry.siblingLoadPending = false
 +          entry.blobLoadInFlight = true
-+          void this.#loadBlobsAndTransition(entry, true)
++          void this.#loadBlobsAndTransition(entry, true, fromSibling)
 +        }
          return
        }
  
        case "running": {
+-        if (!entry.syncInFlight && this.#needsOutboundSync(entry)) {
+-          entry.syncInFlight = true
+-          void this.#doSync(entry)
 +        if (entry.localLoadPending && !entry.blobLoadInFlight) {
 +          entry.localLoadPending = false
++          const fromSibling = entry.siblingLoadPending
++          entry.siblingLoadPending = false
 +          entry.blobLoadInFlight = true
-+          void this.#loadBlobsAndTransition(entry, true)
++          void this.#loadBlobsAndTransition(entry, true, fromSibling)
 +        }
-         if (!entry.syncInFlight && this.#needsOutboundSync(entry)) {
-           entry.syncInFlight = true
-           void this.#doSync(entry)
-@@ -1103,6 +1166,8 @@ export class SubductionSource implements DocumentSource {
++        if (!entry.syncInFlight) {
++          if (this.#needsOutboundSync(entry)) {
++            entry.syncInFlight = true
++            void this.#doSync(entry)
++          } else {
++            this.#maybeBackstopSync(entry)
++          }
+         }
+         return
+       }
+@@ -1103,6 +1547,8 @@ export class SubductionSource implements DocumentSource {
          timeoutMs !== undefined ? timeoutMs : this.#syncTimeout
        )
  
@@ -985,7 +1794,7 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
        const results = peerResultMap.entries()
        const anySuccess = results.some(r => r.success)
        this.#log.debug(
-@@ -1120,7 +1185,7 @@ export class SubductionSource implements DocumentSource {
+@@ -1120,7 +1566,7 @@ export class SubductionSource implements DocumentSource {
        // arrives, without waiting for further state transitions.
        //
        // During "initializing", `#loadBlobsAndTransition` performs one
@@ -994,7 +1803,7 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
        // here too would duplicate storage reads on first open.
        //
        // Also retry when the handle is empty: a previous load may have
-@@ -1204,7 +1269,7 @@ export class SubductionSource implements DocumentSource {
+@@ -1204,7 +1650,7 @@ export class SubductionSource implements DocumentSource {
    }
  
    /**
@@ -1003,8 +1812,25 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
     * handle via `Automerge.loadIncremental`. If new data was loaded, signal
     * the query so it can transition to "ready".
     *
-@@ -1218,30 +1283,26 @@ export class SubductionSource implements DocumentSource {
+@@ -1213,41 +1659,64 @@ export class SubductionSource implements DocumentSource {
+    */
+   async #loadBlobsIntoHandle(
+     entry: SedimentreeEntry,
+-    subduction: Subduction
++    subduction: Subduction,
++    fromSibling = false
+   ): Promise<boolean> {
      const sid = entry.sedimentreeId.toString().slice(0, 8)
++    // An announcement still waiting for its own reload is answered by
++    // this read too — it reads the same shared database. Honour it
++    // whoever asked for the read, so a peer-fed load landing in that
++    // window cannot file the sibling's commit as known and not stranded.
++    // Left set for `#recomputeEntry` to consume as usual. Only once
++    // running: while initializing the resident tree is hydrated from
++    // this same storage, so nothing read here is stranded.
++    if (entry.syncState === "running" && entry.siblingLoadPending) {
++      fromSibling = true
++    }
      const headCount = () => Automerge.getHeads(entry.handle.fullDoc()).length
  
 -    const allBlobs = await subduction.getBlobs(entry.sedimentreeId)
@@ -1046,15 +1872,56 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
      blobsWithIds.sort((a, b) => b.blob.byteLength - a.blob.byteLength)
  
      // Record these IDs as known hashes since nothing in subduction's storage
-@@ -1300,10 +1361,16 @@ export class SubductionSource implements DocumentSource {
+-    // should be re-encrypted and re-saved.
++    // should be re-encrypted and re-saved. A sibling's write read back out
++    // of the shared database is the exception: `knownHashes` then hides a
++    // commit the resident tree has never seen, so mark it stranded too.
++    let newlyStranded = 0
+     for (const u of blobsWithIds) {
+-      if (u.idHex) entry.knownHashes.add(u.idHex)
++      if (!u.idHex) continue
++      if (fromSibling && !entry.knownHashes.has(u.idHex)) {
++        entry.strandedHashes.add(u.idHex)
++        newlyStranded++
++      }
++      entry.knownHashes.add(u.idHex)
++    }
++    // A commit that has only just arrived is no evidence of divergence:
++    // the tab that wrote it is still mid-push. Start the settling delay
++    // again from here — the recompute in `#loadBlobsAndTransition` re-arms
++    // it — so a stream of sibling edits never expires the backstop.
++    if (newlyStranded > 0 && entry.backstopTimer !== null) {
++      clearTimeout(entry.backstopTimer)
++      entry.backstopTimer = null
+     }
+ 
+     let toApply = blobsWithIds.map(u => u.blob)
+@@ -1300,10 +1769,32 @@ export class SubductionSource implements DocumentSource {
      return true
    }
  
 -  async #loadBlobsAndTransition(entry: SedimentreeEntry) {
-+  async #loadBlobsAndTransition(entry: SedimentreeEntry, onlyIfData = false) {
++  /**
++   * `fromSibling` is consumed by the caller, not read off the entry
++   * here: an announcement that lands while this load is in flight sets
++   * the flag again, and clearing it afterwards would erase it. The
++   * follow-up reload would then file the sibling's commit as known and
++   * not stranded — the one commit the re-ingest exists for.
++   */
++  async #loadBlobsAndTransition(
++    entry: SedimentreeEntry,
++    onlyIfData = false,
++    fromSibling = false
++  ) {
      try {
        const subduction = await this.#subduction
-       const hadBlobs = await this.#loadBlobsIntoHandle(entry, subduction)
+-      const hadBlobs = await this.#loadBlobsIntoHandle(entry, subduction)
++      const hadBlobs = await this.#loadBlobsIntoHandle(
++        entry,
++        subduction,
++        fromSibling
++      )
++      entry.blobRetries = 0
 +      if (
 +        onlyIfData &&
 +        Automerge.getHeads(entry.handle.fullDoc()).length === 0
@@ -1064,7 +1931,32 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
  
        entry.syncState = "running"
  
-@@ -1416,6 +1483,7 @@ export class SubductionSource implements DocumentSource {
+@@ -1328,6 +1819,24 @@ export class SubductionSource implements DocumentSource {
+         entry.query.sourcePending("subduction")
+       }
+     } catch (e) {
++      if (onlyIfData) {
++        if (entry.blobRetries < MAX_LOCAL_LOAD_RETRIES) {
++          entry.blobRetries++
++          entry.localLoadPending = true
++          if (fromSibling) entry.siblingLoadPending = true
++        } else {
++          entry.blobRetries = 0
++          this.#log.warn(
++            `reload from storage failed ${
++              MAX_LOCAL_LOAD_RETRIES + 1
++            } times for ${entry.sedimentreeId
++              .toString()
++              .slice(0, 8)}; waiting for the next announcement`,
++            e
++          )
++        }
++        return
++      }
+       this.#log.debug(
+         `loadBlobsAndTransition threw for ${entry.sedimentreeId
+           .toString()
+@@ -1416,6 +1925,7 @@ export class SubductionSource implements DocumentSource {
        resolveSaveSettled = r
      })
  
@@ -1072,7 +1964,7 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
      try {
        const doc = entry.handle.fullDoc()
        if (!doc) return
-@@ -1438,7 +1506,7 @@ export class SubductionSource implements DocumentSource {
+@@ -1438,7 +1948,7 @@ export class SubductionSource implements DocumentSource {
            `syncInFlight=${entry.syncInFlight}`
        )
  
@@ -1081,15 +1973,22 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
        try {
          result = await this.#saveNewCommits(entry, doc, subduction)
        } catch (e) {
-@@ -1467,6 +1535,7 @@ export class SubductionSource implements DocumentSource {
+@@ -1467,6 +1977,14 @@ export class SubductionSource implements DocumentSource {
        // so future mutations to either side stay isolated.
        entry.lastSaveError = null
        entry.lastSavedHeads = new Set(currentSet)
 +      stored = result.stored
++      if (stored > 0) {
++        this.#headsChannel?.postMessage({
++          kind: "saved",
++          sid: entry.sedimentreeId.toString(),
++          heads: currentHeads,
++        } satisfies HeadsChannelMessage)
++      }
  
        // Detect a post-save delta the `heads-changed` listener didn't
        // fire on. `getChangeByHash` calls inside `#saveNewCommits` can
-@@ -1498,6 +1567,8 @@ export class SubductionSource implements DocumentSource {
+@@ -1498,6 +2016,8 @@ export class SubductionSource implements DocumentSource {
        resolveSaveSettled()
      }
  
@@ -1098,7 +1997,7 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
      // Trigger an immediate sync — the only broadcast path for newly
      // saved commits (`#saveNewCommits` is store-only). If a sync is
      // already in flight, flag a re-sync for when it completes; otherwise
-@@ -1521,7 +1592,7 @@ export class SubductionSource implements DocumentSource {
+@@ -1521,7 +2041,7 @@ export class SubductionSource implements DocumentSource {
      entry: SedimentreeEntry,
      doc: Automerge.Doc<T>,
      subduction: Subduction
@@ -1107,7 +2006,7 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
      // Ask the doc directly for its level-0 loose commits and its
      // higher-level fragments. Automerge core owns the compaction
      // policy (which commits get absorbed into which fragments); we
-@@ -1558,7 +1629,7 @@ export class SubductionSource implements DocumentSource {
+@@ -1558,7 +2078,7 @@ export class SubductionSource implements DocumentSource {
      )
  
      if (newCommitMetas.length === 0 && newFragmentMetas.length === 0) {
@@ -1116,7 +2015,7 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
      }
  
      const newCommitBytes =
-@@ -1677,7 +1748,7 @@ export class SubductionSource implements DocumentSource {
+@@ -1677,7 +2197,7 @@ export class SubductionSource implements DocumentSource {
      }
  
      if (commitInputs.length === 0 && fragmentInputs.length === 0) {
@@ -1125,8 +2024,14 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
      }
  
      // Record hashes BEFORE `storeBuiltBatch` so the synchronous
-@@ -1714,7 +1785,10 @@ export class SubductionSource implements DocumentSource {
+@@ -1712,9 +2232,16 @@ export class SubductionSource implements DocumentSource {
+       throw e
+     }
  
++    // Stored for real now, so not stranded any more — including anything
++    // a reload marked while this batch was in flight.
++    for (const hash of acceptedHashes) entry.strandedHashes.delete(hash)
++
      this.#scheduleCompaction(entry)
  
 -    return { prepFailures: prepErrors.length }
@@ -1137,225 +2042,39 @@ index 4bd5d5cf682f3792f403efa44914ca88fa8f4006..733bc00a6ea2a1eacb5bbd0d28f59aad
    }
  
    /**
-diff --git a/src/subduction/storage.ts b/src/subduction/storage.ts
-index bda00635ccb518d9ab6c8e3e79639709936ea48e..1caa2fdc99dfc756464d25f3beea6fa509e1c3e7 100644
---- a/src/subduction/storage.ts
-+++ b/src/subduction/storage.ts
-@@ -16,10 +16,15 @@
- import { makeLogger } from "../Logger.js"
- import type { StorageAdapterInterface } from "../storage/StorageAdapterInterface.js"
- // Type-only imports (don't trigger Wasm access)
--import type { SedimentreeStorage } from "@automerge/automerge-subduction/slim"
-+import type {
-+  SedimentreeStorage,
-+  Subduction,
-+} from "@automerge/automerge-subduction/slim"
- import {
-   CommitId,
-+  CommitInput,
-   CommitWithBlob,
-+  FragmentInput,
-   FragmentWithBlob,
-   SedimentreeId,
-   SignedLooseCommit,
-@@ -108,13 +113,30 @@ export class SubductionStorageBridge implements SedimentreeStorage {
-   private droppedWriteCount = 0
-   private idleWaiters: Array<() => void> = []
-   private log = makeLogger("automerge-repo:subduction:storage")
-+  subduction: Promise<Subduction> | null = null
-+  tracked = new Set<string>()
-+  private bus: (BroadcastChannel & { unref?(): void }) | null = null
-+  private busOrigin = Math.random().toString(36).slice(2)
-+  private seen = new Set<string>()
-+  private ingesting = new Set<string>()
-+  private ingestingSids = new Map<string, number>()
- 
-   constructor(
-     adapter: StorageAdapterInterface,
--    prefix: string = DEFAULT_PREFIX
-+    prefix: string = DEFAULT_PREFIX,
-+    channel?: string
-   ) {
-     this.prefix = prefix
-     this.adapter = adapter
-+    if (channel && typeof BroadcastChannel !== "undefined") {
-+      this.bus = new BroadcastChannel(channel)
-+      this.bus.unref?.()
-+      this.bus.onmessage = e => {
-+        this.ingest(e.data).catch(err =>
-+          this.log.warn("storage bus ingest failed: %O", err)
-+        )
-+      }
-+    }
+@@ -1892,6 +2419,7 @@ export class SubductionSource implements DocumentSource {
+     if (entry === undefined) return
+     this.#scheduler.resetHealState(sid)
+     entry.lastSyncResult = null
++    entry.backstopSyncs = 0
+     this.#scheduleRecompute(entry)
    }
  
-   /**
-@@ -171,6 +193,8 @@ export class SubductionStorageBridge implements SedimentreeStorage {
-    */
-   close(): void {
-     this.closed = true
-+    this.bus?.close()
-+    this.bus = null
+@@ -2021,6 +2549,11 @@ export class SubductionSource implements DocumentSource {
+ 
+     this.#scheduler.shutdown()
+ 
++    for (const entry of this.#entries.values()) {
++      if (entry.backstopTimer !== null) clearTimeout(entry.backstopTimer)
++      entry.backstopTimer = null
++    }
++
+     for (const entry of this.#entries.values()) this.#flushInbound(entry)
+ 
+     for (const entry of this.#entries.values()) {
+@@ -2076,6 +2609,7 @@ export class SubductionSource implements DocumentSource {
+       for (const endpoint of this.#websocketEndpoints) {
+         endpoint.shutdown?.()
+       }
++      this.#closeHeadsChannel()
+       this.#storage.close()
+       await this.#awaitStorageIdle()
+       return
+@@ -2090,6 +2624,7 @@ export class SubductionSource implements DocumentSource {
+       endpoint.shutdown?.()
+     }
+ 
++    this.#closeHeadsChannel()
+     this.#storage.close()
+     await this.#awaitStorageIdle()
    }
- 
-   get isClosed(): boolean {
-@@ -329,6 +353,7 @@ export class SubductionStorageBridge implements SedimentreeStorage {
-   // ==================== Sedimentree IDs ====================
- 
-   async saveSedimentreeId(sedimentreeId: SedimentreeId): Promise<void> {
-+    if (this.ingestingSids.has(sedimentreeId.toString())) return
-     const key = [this.prefix, IDS_PREFIX, sedimentreeId.toString()]
-     await this.guarded("saveSedimentreeId", undefined, () =>
-       this.adapter.save(key, ID_MARKER)
-@@ -390,6 +415,7 @@ export class SubductionStorageBridge implements SedimentreeStorage {
-             new Uint8Array(blobCopy)
-           )
-         }
-+        this.announce(sid, [idHex], [])
-       })
-     } finally {
-       this.decrementPending(sid)
-@@ -549,6 +575,7 @@ export class SubductionStorageBridge implements SedimentreeStorage {
-             new Uint8Array(blobCopy)
-           )
-         }
-+        this.announce(sid, [], [idHex])
-       })
-     } finally {
-       this.decrementPending(sid)
-@@ -691,25 +718,30 @@ export class SubductionStorageBridge implements SedimentreeStorage {
- 
-     const blobEntries: Array<[string[], Uint8Array]> = []
-     const metaEntries: Array<[string[], Uint8Array]> = []
-+    const written = { commits: [] as string[], fragments: [] as string[] }
- 
-     for (const { commitId, signedCommit, blob } of commits) {
-       const idHex = commitId.toHexString()
-       const blobCopy = new Uint8Array(blob)
-+      commitBlobCopies.push(blobCopy)
-+      if (this.ingesting.has("c" + idHex)) continue
-       const commitCopy = new Uint8Array(signedCommit.encode())
-       blobEntries.push([[this.prefix, BLOBS_PREFIX, sid, idHex], blobCopy])
-       metaEntries.push([[this.prefix, COMMITS_PREFIX, sid, idHex], commitCopy])
--      commitBlobCopies.push(blobCopy)
-+      written.commits.push(idHex)
-     }
-     for (const { fragmentHead, signedFragment, blob } of fragments) {
-       const idHex = fragmentHead.toHexString()
-       const blobCopy = new Uint8Array(blob)
-+      fragmentBlobCopies.push(blobCopy)
-+      if (this.ingesting.has("f" + idHex)) continue
-       const fragCopy = new Uint8Array(signedFragment.encode())
-       blobEntries.push([
-         [this.prefix, FRAGMENT_BLOBS_PREFIX, sid, idHex],
-         blobCopy,
-       ])
-       metaEntries.push([[this.prefix, FRAGMENTS_PREFIX, sid, idHex], fragCopy])
--      fragmentBlobCopies.push(blobCopy)
-+      written.fragments.push(idHex)
-     }
- 
-     const markerEntry: [string[], Uint8Array] = [
-@@ -727,8 +759,8 @@ export class SubductionStorageBridge implements SedimentreeStorage {
-         }
-         if (metaEntries.length > 0) {
-           await this.adapter.saveBatch(metaEntries)
-+          await this.adapter.saveBatch([markerEntry])
-         }
--        await this.adapter.saveBatch([markerEntry])
- 
-         // Defensive copy per event; see comment in saveCommit.
-         if (this.listeners["commit-saved"]?.length) {
-@@ -752,6 +784,7 @@ export class SubductionStorageBridge implements SedimentreeStorage {
-           })
-         }
- 
-+        this.announce(sid, written.commits, written.fragments)
-         return commits.length + fragments.length
-       })
-     } finally {
-@@ -759,6 +792,68 @@ export class SubductionStorageBridge implements SedimentreeStorage {
-     }
-   }
- 
-+  private remember(key: string): void {
-+    if (this.seen.size >= SEEN_CAP) {
-+      this.seen.delete(this.seen.values().next().value!)
-+    }
-+    this.seen.add(key)
-+  }
-+
-+  private announce(sid: string, commits: string[], fragments: string[]): void {
-+    if (!this.bus) return
-+    for (const hex of commits) this.remember("c" + hex)
-+    for (const hex of fragments) this.remember("f" + hex)
-+    if (commits.length === 0 && fragments.length === 0) return
-+    this.bus.postMessage({ origin: this.busOrigin, sid, commits, fragments })
-+  }
-+
-+  private async ingest(msg: BusMessage): Promise<void> {
-+    if (this.closed || !this.subduction || msg.origin === this.busOrigin) return
-+    if (!this.tracked.has(msg.sid)) return
-+    const commits = msg.commits.filter(hex => !this.seen.has("c" + hex))
-+    const fragments = msg.fragments.filter(hex => !this.seen.has("f" + hex))
-+    if (commits.length === 0 && fragments.length === 0) return
-+    const keys = [
-+      ...commits.map(hex => "c" + hex),
-+      ...fragments.map(hex => "f" + hex),
-+    ]
-+    for (const key of keys) {
-+      this.remember(key)
-+      this.ingesting.add(key)
-+    }
-+    try {
-+      const sid = SedimentreeId.fromBytes(hexToBytes(msg.sid))
-+      const [loadedCommits, loadedFragments] = await Promise.all([
-+        Promise.all(
-+          commits.map(hex => this.loadCommit(sid, CommitId.fromHexString(hex)))
-+        ),
-+        Promise.all(
-+          fragments.map(hex =>
-+            this.loadFragment(sid, CommitId.fromHexString(hex))
-+          )
-+        ),
-+      ])
-+      const commitInputs = loadedCommits.flatMap(c =>
-+        c ? [new CommitInput(c.signed.payload, c.blob)] : []
-+      )
-+      const fragmentInputs = loadedFragments.flatMap(f =>
-+        f ? [new FragmentInput(f.signed.payload, f.blob)] : []
-+      )
-+      if (commitInputs.length === 0 && fragmentInputs.length === 0) return
-+      const subduction = await this.subduction
-+      this.ingestingSids.set(msg.sid, (this.ingestingSids.get(msg.sid) ?? 0) + 1)
-+      try {
-+        await subduction.storeBuiltBatch(sid, commitInputs, fragmentInputs)
-+      } finally {
-+        const left = this.ingestingSids.get(msg.sid)! - 1
-+        if (left === 0) this.ingestingSids.delete(msg.sid)
-+        else this.ingestingSids.set(msg.sid, left)
-+      }
-+    } finally {
-+      for (const key of keys) this.ingesting.delete(key)
-+    }
-+  }
-+
-   // ==================== Remote heads (last-known sync state) ====================
- 
-   /**
-@@ -871,6 +966,15 @@ const decodeRemoteHeads = (
- /** Marker value for sedimentree ID existence */
- const ID_MARKER = new Uint8Array([1])
- 
-+interface BusMessage {
-+  origin: string
-+  sid: string
-+  commits: string[]
-+  fragments: string[]
-+}
-+
-+const SEEN_CAP = 10_000
-+
- /** Method naming is stable: every mutating bridge op is save* / delete*. */
- const isWriteOp = (op: string): boolean => /^(save|delete)/.test(op)
- 
