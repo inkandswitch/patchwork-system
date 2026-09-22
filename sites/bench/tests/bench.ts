@@ -385,3 +385,31 @@ export async function rendererMemory(
     .reduce((sum, line) => sum + Number(line.trim()), 0);
   return { mb: Math.round(kb / 1024), processes: pids.length };
 }
+
+export async function rendererProcesses(
+  browser: Browser
+): Promise<Array<{ pid: number; mb: number }>> {
+  const session = await browser.newBrowserCDPSession();
+  const { processInfo } = (await session.send("SystemInfo.getProcessInfo")) as {
+    processInfo: Array<{ type: string; id: number }>;
+  };
+  await session.detach();
+  const pids = processInfo
+    .filter((process) => process.type === "renderer")
+    .map((process) => process.id);
+  return pids.map((pid) => {
+    if (process.platform === "darwin") {
+      const out = execFileSync(
+        "footprint",
+        ["-f", "bytes", "-p", String(pid)],
+        { encoding: "utf8" }
+      );
+      const bytes = Number(out.match(/phys_footprint:\s+(\d+)/)?.[1] ?? 0);
+      return { pid, mb: Math.round(bytes / 104857.6) / 10 };
+    }
+    const rss = execFileSync("ps", ["-o", "rss=", "-p", String(pid)], {
+      encoding: "utf8",
+    });
+    return { pid, mb: Math.round(Number(rss.trim()) / 102.4) / 10 };
+  });
+}
