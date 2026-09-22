@@ -6,7 +6,11 @@ import {
   type Accessor,
 } from "solid-js";
 import { createStore, reconcile, type Store } from "solid-js/store";
-import type { AutomergeUrl, Doc, DocHandle } from "@automerge/automerge-repo";
+import type {
+  AutomergeUrl,
+  Doc,
+  DocHandle,
+} from "@automerge/automerge-repo/slim";
 import * as Providers from "@inkandswitch/patchwork-providers";
 import type {
   JSONArray,

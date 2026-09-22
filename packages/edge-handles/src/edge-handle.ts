@@ -40,7 +40,7 @@ import {
   type DocHandle,
   type Repo,
   type SubChangeFn,
-} from "@automerge/automerge-repo";
+} from "@automerge/automerge-repo/slim";
 
 // ─── subscriber set ────────────────────────────────────────────────────────
 

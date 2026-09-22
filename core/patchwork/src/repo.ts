@@ -7,8 +7,8 @@ import type {
   SyncServerSelection,
 } from "@automerge/automerge-repo-keyhive";
 // eslint-disable-next-line
-// @ts-ignore — initSync is a wasm-bindgen runtime helper not in the .d.ts
-import { initSync as initSubductionSync } from "@automerge/automerge-subduction/slim";
+// @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
+import initSubduction from "@automerge/automerge-subduction/slim";
 import {
   keyhiveStorageName,
   storagePrefix,
@@ -34,14 +34,10 @@ const syncServer =
 let wasmReady: Promise<void> | undefined;
 export function initWasm(): Promise<void> {
   if (!wasmReady) {
-    wasmReady = (async () => {
-      const [automergeWasm, subductionWasm] = await Promise.all([
-        fetch("/automerge.wasm").then((r) => r.bytes()),
-        fetch("/subduction.wasm").then((r) => r.bytes()),
-      ]);
-      await initializeWasm(automergeWasm);
-      initSubductionSync(subductionWasm);
-    })();
+    wasmReady = Promise.all([
+      initializeWasm(new Request("/automerge.wasm")),
+      initSubduction(new Request("/subduction.wasm")),
+    ]).then(() => undefined);
   }
   return wasmReady;
 }

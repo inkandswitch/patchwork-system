@@ -11,8 +11,8 @@
 // reply on the same channel.
 import { initializeWasm, hasHeads } from "@automerge/automerge/slim";
 // eslint-disable-next-line
-// @ts-ignore — initSync is a wasm-bindgen runtime helper not in the .d.ts
-import { initSync as initSubductionSync } from "@automerge/automerge-subduction/slim";
+// @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
+import initSubduction from "@automerge/automerge-subduction/slim";
 
 import {
   Repo,
@@ -85,12 +85,10 @@ function getRepo(): Promise<Repo> {
 
 async function buildRepo(): Promise<Repo> {
   log("fetching wasm");
-  const [automergeWasm, subductionWasm] = await Promise.all([
-    fetch("/automerge.wasm").then((r) => r.arrayBuffer()),
-    fetch("/subduction.wasm").then((r) => r.arrayBuffer()),
+  await Promise.all([
+    initializeWasm(new Request("/automerge.wasm")),
+    initSubduction(new Request("/subduction.wasm")),
   ]);
-  initSubductionSync(new Uint8Array(subductionWasm));
-  await initializeWasm(new Uint8Array(automergeWasm));
   log("wasm initialized");
 
   const { repo, hive } = syncServer.keyhive

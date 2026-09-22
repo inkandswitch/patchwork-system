@@ -1,4 +1,4 @@
-import type { AutomergeUrl, Repo } from "@automerge/automerge-repo";
+import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
 
 import { accept, type SubscribeEvent } from "./index.js";
 import type { DocHandleDescriptor } from "./overlay-repo.js";

@@ -2,10 +2,10 @@ import type { Plugin } from "vite";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import * as esbuild from "esbuild";
-import { wasmAssets } from "@inkandswitch/patchwork-bootloader/externals";
+import { slim, wasmAssets } from "@inkandswitch/patchwork-bootloader/externals";
 import type { PatchworkVitePluginOptions } from "./patchwork-plugin.js";
 import { buildDefines } from "./config-plugin.js";
-import { builtins, devDependencyId } from "./importmap-plugin.js";
+import { builtins, chunks, devDependencyId } from "./importmap-plugin.js";
 import { workers } from "./service-worker-plugin.js";
 
 const PATCHWORK_CSS = "/@inkandswitch/patchwork/global.css";
@@ -23,9 +23,7 @@ const stylesheets: Record<string, string> = {
   ),
 };
 
-const builtinPaths = new Map(
-  Object.entries(builtins).map(([id, fileName]) => [fileName, id])
-);
+const builtinPaths = new Map(chunks.map((id) => [builtins[id]!, id]));
 
 /**
  * Workers are `type: "module"` scripts the browser fetches directly, so import
@@ -40,7 +38,7 @@ function externalBuiltins(): esbuild.Plugin {
       build.onResolve({ filter: /.*/ }, (args) => {
         if (!(args.path in builtins)) return null;
         return {
-          path: `/@id/${devDependencyId(args.path)}`,
+          path: `/@id/${devDependencyId(slim[args.path] ?? args.path)}`,
           external: true,
         };
       });

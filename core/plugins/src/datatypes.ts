@@ -4,7 +4,7 @@ import {
   stringifyAutomergeUrl,
   type DocHandle,
   type Repo,
-} from "@automerge/automerge-repo";
+} from "@automerge/automerge-repo/slim";
 import type {
   LoadablePlugin,
   LoadedPlugin,

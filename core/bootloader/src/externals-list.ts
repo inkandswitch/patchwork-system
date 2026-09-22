@@ -37,3 +37,10 @@ const externals = [
   "solid-js/jsx-runtime",
 ];
 export default externals;
+
+export const slim: Record<string, string> = {
+  "@automerge/automerge": "@automerge/automerge/slim",
+  "@automerge/automerge-repo": "@automerge/automerge-repo/slim",
+  "@automerge/automerge-subduction": "@automerge/automerge-subduction/slim",
+  "@keyhive/keyhive": "@keyhive/keyhive/slim",
+};

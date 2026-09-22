@@ -1,4 +1,8 @@
-import type { AutomergeUrl, DocHandle, Repo } from "@automerge/automerge-repo";
+import type {
+  AutomergeUrl,
+  DocHandle,
+  Repo,
+} from "@automerge/automerge-repo/slim";
 import type {
   LoadablePlugin,
   LoadedPlugin,

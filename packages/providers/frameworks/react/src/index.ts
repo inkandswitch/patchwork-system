@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { useDocument, useDocHandle } from "@automerge/automerge-repo-react-hooks";
-import type { AutomergeUrl, Doc, DocHandle } from "@automerge/automerge-repo";
+import type {
+  AutomergeUrl,
+  Doc,
+  DocHandle,
+} from "@automerge/automerge-repo/slim";
 import * as Providers from "@inkandswitch/patchwork-providers";
 import type { JSONValue, Selector } from "@inkandswitch/patchwork-providers";
 

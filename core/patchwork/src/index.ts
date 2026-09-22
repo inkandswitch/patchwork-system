@@ -66,8 +66,8 @@ declare global {
   interface Window {
     patchwork: Patchwork;
     repo: Repo;
-    Automerge: typeof import("@automerge/automerge");
-    AutomergeRepo: typeof import("@automerge/automerge-repo");
+    Automerge: typeof import("@automerge/automerge/slim");
+    AutomergeRepo: typeof import("@automerge/automerge-repo/slim");
     hive?: AutomergeRepoKeyhive;
   }
 }
@@ -138,9 +138,9 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   // `window.patchwork` handle is deliberately not set here — the caller does
   // `window.patchwork = await setup(...)`.
   window.repo = repo;
-  window.Automerge = Automerge as typeof import("@automerge/automerge");
+  window.Automerge = Automerge as typeof import("@automerge/automerge/slim");
   window.AutomergeRepo =
-    AutomergeRepo as typeof import("@automerge/automerge-repo");
+    AutomergeRepo as typeof import("@automerge/automerge-repo/slim");
   if (hive) window.hive = hive;
 
   (hive?.networkAdapter as any)?.syncKeyhive?.();

@@ -1,10 +1,10 @@
 import {
+  parseAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
   type DocHandleChangePayload,
   type Repo,
-} from "@automerge/automerge-repo";
-import { parseAutomergeUrl } from "@automerge/automerge-repo/slim";
+} from "@automerge/automerge-repo/slim";
 import {
   getSuggestedImportUrl,
   getType,

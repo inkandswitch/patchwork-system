@@ -1,4 +1,7 @@
-import { type AutomergeUrl, type DocHandle } from "@automerge/automerge-repo";
+import {
+  type AutomergeUrl,
+  type DocHandle,
+} from "@automerge/automerge-repo/slim";
 
 // The origin to resolve service-worker module URLs against. `location.origin`
 // is the string "null" inside a srcdoc/sandboxed frame — an invalid URL base —

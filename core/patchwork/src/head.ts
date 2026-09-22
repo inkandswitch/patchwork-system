@@ -1,9 +1,11 @@
-import externals from "@inkandswitch/patchwork-bootloader/externals-list";
+import externals, {
+  slim,
+} from "@inkandswitch/patchwork-bootloader/externals-list";
 
 const importmap: { imports: Record<string, string> } = { imports: {} };
 
 for (const name of externals) {
-  importmap.imports[name] = `/packages/${name}.js`;
+  importmap.imports[name] = `/packages/${slim[name] ?? name}.js`;
 }
 
 const script = document.createElement("script");
