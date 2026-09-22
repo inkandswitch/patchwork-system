@@ -1,6 +1,5 @@
 import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
-import { siblingAdapters } from "@inkandswitch/patchwork-bootloader/siblings";
 import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import {
@@ -57,7 +56,7 @@ export type TabRepo = {
 
 /**
  * The tab's own node: this origin's IndexedDB, opened on this thread, a socket
- * to the sync server, and the siblings channel to every other Repo on the
+ * to the sync server, and the storage channel to every other Repo on the
  * origin. Nothing is shared with other tabs except the database underneath
  * and the identity every node on the origin signs with.
  */
@@ -83,7 +82,7 @@ export async function createRepo(): Promise<TabRepo> {
       repo: {
         storage: new IndexedDBStorageAdapter(),
         subductionWebsocketEndpoints: [syncServer.url],
-        subductionAdapters: siblingAdapters(),
+        subductionStorageChannel: `${storagePrefix}-storage`,
         enableRemoteHeadsGossiping: true,
       },
     });
@@ -102,7 +101,7 @@ export async function createRepo(): Promise<TabRepo> {
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
     subductionWebsocketEndpoints: [syncServer.url],
-    subductionAdapters: siblingAdapters(),
+    subductionStorageChannel: `${storagePrefix}-storage`,
     enableRemoteHeadsGossiping: true,
   });
   const signerIdentity = {

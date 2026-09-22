@@ -3,7 +3,7 @@
 // does.
 //
 // It is a node like any tab's: the same IndexedDB, its own sync-server socket,
-// and the siblings channel to the tabs. Resolving requests is its whole job.
+// and the storage channel to the tabs. Resolving requests is its whole job.
 // When the service worker misses the cache for a request that looks like a URL
 // encoded URL, it broadcasts a HandoffRequestMessage on HANDOFF_CHANNEL; we
 // resolve the automerge URL, write the response into the service worker's
@@ -37,7 +37,6 @@ import {
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
-import { siblingAdapters } from "./siblings.js";
 import { loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
@@ -113,7 +112,7 @@ async function buildPlainRepo(): Promise<Repo> {
     peerId:
       `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
     subductionWebsocketEndpoints: [syncServer.url],
-    subductionAdapters: siblingAdapters(),
+    subductionStorageChannel: `${storagePrefix}-storage`,
     enableRemoteHeadsGossiping: true,
   });
 }
@@ -140,7 +139,7 @@ async function buildKeyhiveRepo(
     repo: {
       storage: new IndexedDBStorageAdapter(),
       subductionWebsocketEndpoints: [syncServer.url],
-      subductionAdapters: siblingAdapters(),
+      subductionStorageChannel: `${storagePrefix}-storage`,
       enableRemoteHeadsGossiping: true,
     },
   });
