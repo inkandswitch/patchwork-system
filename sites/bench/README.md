@@ -32,7 +32,7 @@ package list — in one of seven shapes, chosen by `?mode=`:
 `patchwork` is `createRepo()` as shipped, plus the service worker and the
 automerge worker that resolves URLs for it (that worker builds its Repo on the
 first URL it is asked to resolve, so in this bench it is a spawned but idle
-process); the other four are built in the page. In the two worker modes the tab's Repo has no storage and one subduction
+process); the other six are built in the page. In the two worker modes the tab's Repo has no storage and one subduction
 peer, its worker, reached over a MessagePort (`src/worker-link.ts`); the worker
 runs a Repo of its own as the node (`src/node.ts`) but never opens a document.
 A node like that stores what a tab pushes and answers what a peer asks, but
