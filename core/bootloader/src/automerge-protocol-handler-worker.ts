@@ -274,6 +274,8 @@ async function caughtUpWithPeers(
     handle.on("remote-heads", check);
     handle.on("heads-changed", check);
     signal.addEventListener("abort", done);
+    if (signal.aborted) done();
+    else check();
   });
 }
 
