@@ -1,5 +1,59 @@
 # @inkandswitch/patchwork
 
+## 0.8.3
+
+### Patch Changes
+
+- 2558064: The vite plugin applies this repo's pnpm patch of `@automerge/automerge-repo` (`patches/@automerge__automerge-repo@<version>.patch`, shipped in the package as `dist/patches/`) to every copy of automerge-repo vite bundles for a site, in place of the two hand-written edits it carried before. A site installing from npm gets the same automerge-repo as this workspace: the real `detach` behind eviction, the `mesh` adapter role, and whatever else the patch holds.
+
+  Covered: the page build's chunks, including the `/packages/@automerge/automerge-repo*.js` import-map chunks that patchwork's own protocol-handler worker imports from; the dev server's pre-bundled deps (an esbuild `onLoad` plugin in `optimizeDeps`); and module workers a site builds through vite (`new Worker(new URL("./x.ts", import.meta.url), { type: "module" })`), which vite bundles in a separate rollup pass with only `worker.plugins` — the `config()` plugin's worker config now sets `worker.plugins` to `[wasm(), patches({ complete: false })]`, so those bundles are patched too. A site that passes `worker: false` and writes its own `worker.plugins` has to add `patches({ complete: false })` to them itself.
+
+  `patches()` fails the build if any file the patch edits never reached the bundler; `patches({ complete: false })` skips that check, for a worker bundle that may import none or only some of them. The patch is pinned to one automerge-repo version; a version bump fails the build until the patch is re-made against it.
+
+- 1cafc5e: Every Repo on the origin — each tab's `createRepo()` and the automerge protocol handler worker's, in both the plain and the keyhive branch — passes `headsChannel`, named `<storagePrefix>-heads`. When a tab persists commits it authored, its Repo posts the document's new heads on that BroadcastChannel; a sibling with the document open reloads it from the shared IndexedDB into its handle, and ignores announcements for documents it does not have open or heads it already knows. The channel also carries what the sync server holds: every tab talks to that server as the same identity, so one tab's `onRemoteHeads` observation is a fact for all of them, and each keeps the newest one per peer rather than the last one to arrive. Only a real observation is announced, never a relay of a relay. Every node keeps the same signer and peer id, its own socket to the sync server and the shared database; what changes is how a write in one tab reaches the others.
+
+  The siblings mesh is gone with it: `siblingAdapters()` and the `@inkandswitch/patchwork-bootloader/siblings` export are removed, and no Repo passes `subductionAdapters`. Under one peer id the Subduction core never pushes a commit back to the sending peer's other connections, so the mesh links only added sync rounds.
+
+  The option lives in this workspace's pnpm patch of `@automerge/automerge-repo@2.6.0-subduction.48`, which also carries three fixes: a `find` resolves from local storage as soon as shared storage holds the document, before the first server round; a `heads-changed` that saved nothing new (a reload, for instance) opens no server round; a document still initializing hydrates from local storage when a sync round fails while disconnected. A reload whose storage read fails is retried a few times, then logged once and left until the next announcement.
+
+  A reload updates the handle, not the Subduction node's resident tree, so a commit that reached a tab only over the channel is one that tab cannot push: its hash is in the set every push is filtered against, and it is not in the tree a round reads. A containment backstop watches for that. When an entry's handle holds heads no peer has been seen holding, and a settling delay passes without a sibling reporting that the server has them, the tab writes those commits to storage a second time — which is what puts them in its tree — and then opens a round that can carry them. Each commit costs at most one such duplicate write, and a tab that is offline still does the write, so the reconnect round finds the tree already correct. The write is owed to the commit, not to the round: the cap on heal rounds gates the rounds alone, and a commit stops counting as stranded only once it has been stored or some peer has been seen holding it. Where every tab is online and pushing its own edits, the sibling's report arrives inside the settling delay and none of this runs.
+
+  Consumers installing from npm get the unpatched fork, where `headsChannel` is ignored and tabs meet only through the server, until the fork is republished with these changes and the catalog pin is bumped.
+
+- f7d2e8c: IndexedDB is opened on the node's own thread: `createRepo` and the automerge protocol handler worker use `IndexedDBStorageAdapter` in place of `IndexedDBWorkerStorageAdapter`. Measured in `sites/bench`, the worker adapter bought no main-thread time (same boot, same cold load of 40 documents, 1ms flush latency either way) and cost a dedicated worker per tab, about 30 MB across three. The origin-wide signer is unchanged.
+- 32ed577: `@automerge/automerge-repo-keyhive` is loaded only where keyhive is in use: `createRepo` and the automerge protocol handler worker `import()` it inside their keyhive branch, and `patchwork-elements` and `patchwork-plugins` no longer import it at runtime. Its entry module carries the keyhive wasm as a 3 MB base64 string, so the static imports put a 3.1 MB chunk in every tab's modulepreload list and in the worker whether or not the site enabled keyhive, at 7 to 10 MB of memory per tab, and 8 MB in the protocol-handler worker. The chunk is still emitted under `/packages/` and listed in the import map for tool code. Type imports are unchanged.
+
+  `isKeyhiveDoc` in `patchwork-plugins`, and the keyhive access gates in `patchwork-elements`, decide from the document id's bytes: an id shorter than 32 bytes, or one whose bytes 16 through 31 are all zero, is a legacy document. They used to construct a keyhive `DocumentId` and take a throw as legacy, but that constructor is an ed25519 point decode and accepts about half of legacy padded ids, so about half of legacy documents went through `bestAccessForDoc`. This is the check behind ARK's `isUnprotectedDoc`, which it recommends over the deprecated `docIdFromAutomergeUrl`.
+
+  When keyhive access to a document changes, `patchwork-elements` looks up the document's handle by its automerge document id before retrying. It used the keyhive `DocumentId` string, which is hex and never matched a handle, so an unavailable handle was never dropped before the retry.
+
+  The vite plugin gives the worker chunks an empty module-preload dependency list. Vite wraps a dynamic import in a preload helper that touches `document` when it has dependencies to preload, and a worker has no `document`.
+
+- 86d59d4: Add the `importModulesInWorker` setup option. It defaults to `true`, keeping plugin-descriptor discovery in the module-loader worker; `false` imports each Automerge package directly on the main thread instead.
+- 1d22480: Every tab and worker now runs one automerge wasm instance, streamed from `/automerge.wasm`.
+
+  The bare `@automerge/automerge`, `@automerge/automerge-repo`, `@automerge/automerge-subduction` and `@keyhive/keyhive` specifiers resolve to their `/slim` builds everywhere: in the vite plugin's bundle, in the importmap a tool sees at runtime, and in the dev server's worker bundles. The fullfat entries embed and instantiate their own copy of the wasm on import, so a single value import of the bare name (there were four in our own packages) used to cost each tab a second automerge instance and a second, byte-identical `automerge.wasm` download. The `/packages/@automerge/automerge.js` chunk is no longer emitted; the bare name points at `/packages/@automerge/automerge/slim.js`.
+
+  `initWasm` in the host and the protocol-handler worker hand the wasm-bindgen init a `Request` instead of buffering the bytes first, so both automerge and subduction go through `WebAssembly.instantiateStreaming`: no 5 MB transient copy, and the compiled module is eligible for Chrome's code cache.
+
+  `@inkandswitch/patchwork-bootloader/externals` and `/externals-list` export the alias table as `slim`.
+
+  `pnpm lint` (scripts/lint-slim-imports.mts, run in CI) fails on any import of a bare name in the table, type-only ones included, so the fullfat entries stay out of every bundle.
+
+- aa9af7e: The tab no longer heartbeats the automerge SharedWorker. The ping/pong, the second-connection probe, instance ids, and the recovery rate limit are gone: since every tab is its own Subduction node, the worker's control port carries only console forwarding, a debug toggle, and `connectClassicSync`, so a silent port strands nothing. The worker is respawned on the next `get()` if the browser terminates it (its control port fires `close`). `SharedWorkerHandle.onRecreated` is removed; it had no listeners. `@inkandswitch/patchwork` drops its page-lifecycle logging, which existed to line up against sync-socket reaps in a worker that no longer holds the tab's socket.
+- Updated dependencies [7f54bd8]
+- Updated dependencies [1cafc5e]
+- Updated dependencies [f7d2e8c]
+- Updated dependencies [32ed577]
+- Updated dependencies [1d22480]
+- Updated dependencies [aa9af7e]
+- Updated dependencies [1d22480]
+  - @inkandswitch/patchwork-bootloader@0.8.0
+  - @inkandswitch/patchwork-elements@6.0.3
+  - @inkandswitch/patchwork-plugins@1.2.6
+  - @inkandswitch/patchwork-filesystem@0.2.10
+  - @inkandswitch/patchwork-providers@0.5.3
+
 ## 0.8.2
 
 ### Patch Changes
