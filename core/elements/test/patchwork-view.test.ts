@@ -97,10 +97,6 @@ describe("patchwork-view (component mode)", () => {
   });
 });
 
-// A `supportedDatatypes: "*"` tool (the raw viewer) matches every doc, so it is
-// what a doc with no editor of its own falls back to. The registry is global, so
-// tests take it in turns: `afterEach` unregisters, or the previous test's
-// wildcard would be the one a later fallback picks.
 const registeredTools: string[] = [];
 
 function registerWildcardTool(): Counters {
@@ -132,8 +128,6 @@ describe("patchwork-view (legacy mode)", () => {
 
   beforeEach(() => {
     registerPatchworkViewElement({ name: "patchwork-view-legacy", repo });
-    // The overlay shim resolves a doc by asking an ancestor for its handle
-    // descriptor, so a view outside a provider subtree never resolves.
     registerRepoProviderElement(repo);
     document.body.replaceChildren();
   });

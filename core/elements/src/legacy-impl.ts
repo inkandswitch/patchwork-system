@@ -626,7 +626,7 @@ export class LegacyImpl {
 
     // A wildcard fallback tool (`supportedDatatypes: ["*"]`) supports this doc
     // only generically, not because it's built for the doc's datatype — it's a
-    // stopgap, so it gives way to anything the doc suggests we load instead.
+    // stopgap we render while we try to load something better.
     const mountingWildcardStopgap =
       fallingBack &&
       !!fallbackTool &&
@@ -634,18 +634,12 @@ export class LegacyImpl {
 
     if (fallingBack) {
       console.warn(`falling back to default tool for ${this.#docUrl}`);
-      // A wildcard stopgap is a raw viewer, not this datatype's editor. When the
-      // doc names a package that would bring the real thing, offer that instead
-      // of mounting the stopgap: raw JSON isn't what was asked for, and it would
-      // only be swapped out from under the reader once the import lands. Parking
-      // in `unable` is what lets the registry listeners re-render then — the
-      // loaded tool sorts ahead of the wildcard as the new fallback.
+      // Offer the suggested package instead of mounting the stopgap, and park in
+      // `unable` so registry listeners re-render once a real tool registers.
       if (mountingWildcardStopgap) {
         const suggestion = this.#suggestedImport();
         if (suggestion) {
           this.#state = State.unable;
-          // While the import is in flight `#loadSuggestedImport`'s progress
-          // toast is already up, and `#resetDisplay` leaves it alone.
           if (!suggestion.loading) {
             this.#showToast(
               "This document suggests a package",
@@ -726,9 +720,6 @@ export class LegacyImpl {
       } else {
         console.warn(`return a cleanup function from ${toolId}`);
       }
-      // Something mounted, so retire any "loading suggested import" toast. A
-      // wildcard stopgap only gets this far when the doc suggests nothing, so
-      // there's no offer left standing either way.
       this.#dismissToast();
       this.#state = fallingBack ? "fallback" : "rendered";
       this.#element.dispatchEvent(
@@ -995,9 +986,6 @@ export class LegacyImpl {
       gap: "10px",
       padding: "12px 14px",
       borderRadius: "var(--studio-radius, 6px)",
-      // Themed surface, faintly tinted by the accent: a hardcoded light card
-      // would hold a dark-themed button (they share `--studio-*`) and read as
-      // black-on-black in a dark theme.
       background:
         "color-mix(in oklch, var(--studio-fill, #eaf1fb), var(--studio-primary, #1e5fbf) 8%)",
       color: "var(--studio-line, #1a1a1a)",
@@ -1149,12 +1137,6 @@ export class LegacyImpl {
     }
   }
 
-  /**
-   * The import registered nothing, so the view it was going to fill has nothing
-   * coming: say so rather than sit empty once the progress toast times out.
-   * Only called where nothing could have been registered, so no render is in
-   * flight, and only acts while this view still has nothing mounted.
-   */
   #reportImportFailed(epoch: number, url: string, error?: unknown): void {
     if (epoch !== this.#initEpoch) return;
     if (this.#state !== State.unable) return;
