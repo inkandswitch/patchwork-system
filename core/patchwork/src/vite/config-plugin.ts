@@ -69,6 +69,7 @@ export function config(options: PatchworkVitePluginOptions = {}): Plugin {
             : {
                 port: process.env.PORT ? +process.env.PORT : 5173,
                 headers: CORS_HEADERS,
+                cors: false,
                 ...options.preview,
               },
         worker:
