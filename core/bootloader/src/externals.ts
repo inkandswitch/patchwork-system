@@ -52,7 +52,7 @@ export function wasmAssets(): { fileName: string; path: string }[] {
     },
     {
       fileName: "keyhive_wasm.wasm",
-      path: require.resolve("@keyhive/keyhive/keyhive_wasm.wasm"),
+      path: require.resolve("@keyhive/keyhive/wasm"),
     },
     {
       fileName: "subduction.wasm",
