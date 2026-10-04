@@ -97,6 +97,16 @@ export interface PatchworkVitePluginOptions extends PatchworkSiteOptions {
    * whatever else the site wants recorded.
    */
   buildInfo?: boolean | Record<string, unknown>;
+  /**
+   * This build's id (-> __BUILD_ID__ define), a number where later builds
+   * compare greater. Defaults to `Date.now()` when the build starts. A tab
+   * from a newer build connecting to the shared automerge worker makes it
+   * restart on the new code, and tabs on older builds reload. Set it from a
+   * CI run number to make it deterministic; keep it increasing, since a
+   * build with a lower id than the one running is left alone (so to roll
+   * back, rebuild rather than republish an old build).
+   */
+  buildId?: number;
 
   server?: false | ServerOptions;
   preview?: false | PreviewOptions;

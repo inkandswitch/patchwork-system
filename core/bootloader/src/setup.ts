@@ -1,7 +1,9 @@
 import type {
+  NewBuildInfo,
   SetupServiceWorkerOptions,
   SetupServiceWorkerResult,
 } from "./types.js";
+import { buildId, isNewerBuild } from "./build-id.js";
 import {
   readClassicSyncServer,
   DEFAULT_CLASSIC_SYNC_SERVER,
@@ -56,6 +58,51 @@ function installServiceWorkerLogForwarding(): void {
   });
 }
 
+// ── New builds ─────────────────────────────────────────────────────────
+// After a deploy, open tabs are on the old build. The default response is to
+// reload, because the alternative — an old page sharing IndexedDB with the
+// new automerge worker — is where storage-format changes bite.
+
+const RELOAD_THROTTLE_KEY = "patchworkNewBuildReloadedAt";
+const RELOAD_THROTTLE_MS = 30_000;
+
+let onNewBuild: ((info: NewBuildInfo) => void) | undefined;
+
+function reloadForNewBuild(info: NewBuildInfo): void {
+  // Something is wrong if we keep landing back here (an offline tab served a
+  // stale page, say); don't let it turn into a reload loop.
+  const last = Number(sessionStorage.getItem(RELOAD_THROTTLE_KEY));
+  if (last && Date.now() - last < RELOAD_THROTTLE_MS) {
+    console.warn("new build detected, but reloaded recently; staying put", info);
+    return;
+  }
+  sessionStorage.setItem(RELOAD_THROTTLE_KEY, Date.now().toString());
+  lifecycleLog("new build detected via %s, reloading", info.source);
+  location.reload();
+}
+
+function newBuild(info: NewBuildInfo): void {
+  (onNewBuild ?? reloadForNewBuild)(info);
+}
+
+/**
+ * The build a service worker was compiled from, or undefined if it doesn't
+ * say (one from before this existed) within a couple of seconds.
+ */
+function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
+  const { port1, port2 } = new MessageChannel();
+  return new Promise<number | undefined>((resolve) => {
+    const timeout = setTimeout(() => resolve(undefined), 2_000);
+    port1.onmessage = (event) => {
+      clearTimeout(timeout);
+      resolve(
+        typeof event.data?.build === "number" ? event.data.build : undefined
+      );
+    };
+    sw.postMessage({ type: "build" }, [port2]);
+  }).finally(() => port1.close());
+}
+
 // ── The automerge worker ───────────────────────────────────────────────
 // A SharedWorker holding the Repo that resolves `automerge:` URLs for the
 // service worker. Tabs don't sync through it — each tab is its own node — but
@@ -73,11 +120,29 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
     onMessage(event) {
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
     },
+    onRestarting(message) {
+      // The worker restarts because a newer tab connected. If that build is
+      // newer than ours too, we're the stale one.
+      if (isNewerBuild(message.build)) {
+        newBuild({
+          source: "shared-worker",
+          build: message.build,
+          current: buildId,
+        });
+      }
+    },
   }
 );
 
 export function getAutomergeProtocolHandlerWorker(): SharedWorker {
   return automergeProtocolHandlerWorker.get();
+}
+
+/** Dev escape hatch: make the shared worker close so the next use respawns it. */
+export function restartAutomergeProtocolHandlerWorker(
+  reason = "restartAutomergeProtocolHandlerWorker() called"
+): void {
+  automergeProtocolHandlerWorker.restart(reason);
 }
 
 export function connectClassicSync(
@@ -136,6 +201,7 @@ export default async function setupServiceWorker(
   // activate markers are rendered here.
   installServiceWorkerLogForwarding();
   localStorage.removeItem(CACHE_VERSION_KEY);
+  onNewBuild = options?.onNewBuild;
 
   // Cache growth can otherwise trip origin-wide eviction, which would take the
   // Automerge IndexedDB — the user's documents — with it. Chrome/Safari decide
@@ -172,9 +238,18 @@ export default async function setupServiceWorker(
   }
 
   // A replacement worker boots with the default cache name, so reconfigure
-  // whenever a new one takes control.
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    configureServiceWorker(navigator.serviceWorker.controller);
+  // whenever a new one takes control. A new one taking control is also how a
+  // deploy shows up: the service worker skipWaiting()s and claims every open
+  // tab. But it also claims the tab whose load installed it, which is already
+  // on the new build, so only a worker from a newer build than ours counts.
+  navigator.serviceWorker.addEventListener("controllerchange", async () => {
+    const controller = navigator.serviceWorker.controller;
+    configureServiceWorker(controller);
+    if (!controller) return;
+    const build = await serviceWorkerBuild(controller);
+    if (isNewerBuild(build)) {
+      newBuild({ source: "service-worker", build, current: buildId });
+    }
   });
 
   console.log(
@@ -186,3 +261,5 @@ export default async function setupServiceWorker(
 }
 
 (window as any).bumpServiceWorkerCache = bumpServiceWorkerCache;
+(window as any).restartAutomergeProtocolHandlerWorker =
+  restartAutomergeProtocolHandlerWorker;

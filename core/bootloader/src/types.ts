@@ -106,6 +106,22 @@ export interface HandoffOnlineMessage {
   type: "online";
 }
 
+/**
+ * Why a tab has decided a newer build of the site is live.
+ *
+ * - `service-worker`: a replacement service worker took control of this tab,
+ *   which happens in every open tab shortly after a deploy.
+ * - `shared-worker`: the automerge shared worker restarted because a tab from
+ *   a newer build connected to it, and this tab is older than that build.
+ */
+export type NewBuildInfo = {
+  source: "service-worker" | "shared-worker";
+  /** The newer build, when known (the shared worker reports it). */
+  build?: number;
+  /** This tab's build, when it was built with the vite plugin. */
+  current?: number;
+};
+
 export type SetupServiceWorkerOptions = {
   /**
    * The public path to the service worker file.
@@ -117,6 +133,14 @@ export type SetupServiceWorkerOptions = {
    * Defaults to `/automerge-protocol-handler-worker.js`
    */
   workerPath?: string;
+  /**
+   * What to do when a newer build of the site is live and this tab is stale.
+   * The default reloads the page (at most once every 30s), since an old page
+   * sharing IndexedDB with a newer automerge worker is the combination to
+   * avoid. Replace it to show a "new version" nudge instead — then the page
+   * stays on the old build until the user reloads.
+   */
+  onNewBuild?: (info: NewBuildInfo) => void;
 };
 
 export type SetupServiceWorkerResult = {

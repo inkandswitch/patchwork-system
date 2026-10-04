@@ -1,4 +1,6 @@
 import debug from "debug";
+import { buildId } from "./build-id.js";
+import type { ClosingMessage, RestartingMessage } from "./worker-control.js";
 
 export const lifecycleLog = debug("patchwork:lifecycle");
 
@@ -16,11 +18,19 @@ export type SharedWorkerHandle = {
   get(): SharedWorker;
   /** Send on the current instance's control port. */
   post(message: unknown, transfer?: Transferable[]): void;
+  /** Ask the current instance to close itself; the next use spawns a fresh one. */
+  restart(reason: string): void;
 };
 
 /**
  * A SharedWorker a tab keeps alive: spawned on demand, and respawned if the
- * browser terminates it (which it may, under memory pressure).
+ * browser terminates it (which it may, under memory pressure) or it restarts
+ * itself because a tab from a newer build connected.
+ *
+ * Browser termination shows up as `close` on the control port. A self-restart
+ * doesn't (Chromium never fires it for a worker that called `self.close()`),
+ * so the worker announces it instead: `restarting` when it decides to, and
+ * `closing` as its last word, which is when the replacement is spawned.
  */
 export function sharedWorkerHandle(
   name: string,
@@ -30,13 +40,32 @@ export function sharedWorkerHandle(
     debugging,
     onMessage,
     onSpawn,
+    onRestarting,
   }: {
     debugging: boolean;
     onMessage: (event: MessageEvent) => void;
     onSpawn?: (worker: SharedWorker) => void;
+    /** The worker announced it's closing to be replaced. */
+    onRestarting?: (message: RestartingMessage) => void;
   }
 ): SharedWorkerHandle {
   let current: SharedWorker | undefined;
+  // Between the current instance's `restarting` and its `closing`, posts
+  // would go to a worker that's winding down; hold them for the replacement.
+  let held: Array<[unknown, Transferable[]]> | undefined;
+
+  const replace = (worker: SharedWorker) => {
+    if (current !== worker) return;
+    worker.port.close();
+    current = undefined;
+    // The service worker needs a resolver to exist, so respawn now rather
+    // than on the next post().
+    const next = get();
+    const queued = held ?? [];
+    held = undefined;
+    for (const [message, transfer] of queued)
+      next.port.postMessage(message, transfer);
+  };
 
   const get = (): SharedWorker => {
     if (current) return current;
@@ -65,8 +94,26 @@ export function sharedWorkerHandle(
     // Replies come back on this port, and we listen with addEventListener
     // rather than onmessage, so it needs start().
     worker.port.start();
-    worker.port.addEventListener("message", onMessage);
+    worker.port.addEventListener("message", (event) => {
+      const type = event.data?.type;
+      if (type === "restarting") {
+        const message = event.data as RestartingMessage;
+        lifecycleLog("%s SharedWorker restarting: %s", name, message.reason);
+        if (current === worker) held ??= [];
+        onRestarting?.(message);
+        return;
+      }
+      if (type === "closing") {
+        lifecycleLog("%s SharedWorker closed itself, respawning", name);
+        replace(worker);
+        return;
+      }
+      onMessage(event);
+    });
     worker.port.postMessage({ type: "debug", debug: debugging });
+    // The worker compares this against its own build and restarts if we're
+    // newer — see startWorkerControl.
+    worker.port.postMessage({ type: "hello", build: buildId });
 
     onSpawn?.(worker);
     return worker;
@@ -76,7 +123,13 @@ export function sharedWorkerHandle(
     name,
     get,
     post(message, transfer) {
-      get().port.postMessage(message, transfer ?? []);
+      if (held) held.push([message, transfer ?? []]);
+      else get().port.postMessage(message, transfer ?? []);
+    },
+    restart(reason) {
+      // Only an instance that exists can be restarted; spawning one to kill
+      // it would be pointless.
+      current?.port.postMessage({ type: "restart", reason });
     },
   };
 }

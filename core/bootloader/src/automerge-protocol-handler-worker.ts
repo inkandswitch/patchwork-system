@@ -64,6 +64,7 @@ const CACHEABLE_STATUSES = [200, 203, 204];
 
 const control = startWorkerControl("automerge-protocol-handler-worker", {
   onMessage: handleControlMessage,
+  onRestart: drainForRestart,
 });
 const log = control.log;
 
@@ -494,10 +495,36 @@ async function respondToHandoff(message: HandoffRequestMessage, handoff: URL) {
   }
 }
 
-handoffChannel.addEventListener("message", (event) => {
-  if (event.data?.type === "request") {
-    void handleHandoffRequest(event.data as HandoffRequestMessage);
+// How long a restart waits for in-flight handoffs before closing anyway.
+const DRAIN_HANDOFFS_MS = 3_000;
+let draining = false;
+
+// Stop taking new handoffs and let the ones in flight finish. The service
+// worker keeps every unanswered handoff pending and re-broadcasts them when
+// our replacement announces itself online, so nothing dropped here is lost —
+// waiting is a courtesy to requests that are nearly done, not a requirement.
+async function drainForRestart(): Promise<void> {
+  draining = true;
+  const deadline = Date.now() + DRAIN_HANDOFFS_MS;
+  while (handoffsInFlight > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
+  if (handoffsInFlight > 0) {
+    console.warn(
+      `[lifecycle] closing with ${handoffsInFlight} handoff(s) in flight; the service worker will re-send them`
+    );
+  }
+  const repo = await repoPromise?.catch(() => null);
+  await repo?.flush();
+}
+
+handoffChannel.addEventListener("message", (event) => {
+  if (event.data?.type !== "request") return;
+  if (draining) {
+    log(`ignoring handoff ${event.data.id} while restarting`);
+    return;
+  }
+  void handleHandoffRequest(event.data as HandoffRequestMessage);
 });
 
 // Announce ourselves so the service worker can re-broadcast handoff requests
