@@ -69,6 +69,9 @@ function origin(server: Server) {
   return {
     storage,
     remote,
+    get node() {
+      return node;
+    },
     /** What a worker restart does: a fresh node on the same database. */
     async restartNode() {
       const old = node;
@@ -126,6 +129,23 @@ async function seenElsewhere(
 
 type Doc = { text?: string; count?: number };
 
+/**
+ * Count the sync rounds the node runs with the server, each held open for
+ * `delayMs` so that requests arriving meanwhile overlap it, as they would
+ * behind a real network round trip.
+ */
+function countRounds(node: SyncNode, delayMs = 200) {
+  const subduction = node.subduction as any;
+  const real = subduction.syncWithAllPeers.bind(subduction);
+  const counter = { rounds: 0 };
+  subduction.syncWithAllPeers = async (...args: unknown[]) => {
+    counter.rounds++;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    return real(...args);
+  };
+  return counter;
+}
+
 describe("sync node", () => {
   it("pushes a tab's edits to the server", async () => {
     const server = startServer();
@@ -175,6 +195,62 @@ describe("sync node", () => {
       doc.count = 3;
     });
     await eventually(() => inB.doc().count === 3);
+  });
+
+  it("runs one round for many tabs opening the same document", async () => {
+    const server = startServer();
+    const other = elsewhere(server);
+    const theirs = other.create<Doc>({ count: 1 });
+    await other.flush();
+
+    const site = origin(server);
+    const tabs = Array.from({ length: 10 }, () => site.tab());
+    const counter = countRounds(site.node);
+    const found = await Promise.all(tabs.map((tab) => tab.find<Doc>(theirs.url)));
+
+    expect(found.every((handle) => handle.doc().count === 1)).toBe(true);
+    // None of them wrote anything, so the round the first started covers all.
+    expect(counter.rounds).toBe(1);
+  });
+
+  it("pushes an edit made while a round is already running", async () => {
+    const server = startServer();
+    const site = origin(server);
+    countRounds(site.node, 500);
+    const tab = site.tab();
+    const handle = tab.create<Doc>({ count: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    handle.change((doc) => {
+      doc.count = 2;
+    });
+
+    await seenElsewhere(server, handle.url, (doc) => doc.count === 2);
+  });
+
+  it("pushes every tab's edit when they all write during a round", async () => {
+    const server = startServer();
+    const site = origin(server);
+    const first = site.tab();
+    const created = first.create<{ [tab: string]: number }>({});
+    await first.flush();
+    const tabs = [first, ...Array.from({ length: 4 }, () => site.tab())];
+    const handles = await Promise.all(
+      tabs.map((tab) => tab.find<{ [tab: string]: number }>(created.url))
+    );
+
+    const counter = countRounds(site.node, 300);
+    handles.forEach((handle, i) =>
+      handle.change((doc) => {
+        doc[`tab${i}`] = i;
+      })
+    );
+
+    await seenElsewhere(
+      server,
+      created.url,
+      (doc: any) => handles.every((_, i) => doc[`tab${i}`] === i)
+    );
+    expect(counter.rounds).toBeLessThan(tabs.length);
   });
 
   it("follows the node across a worker restart", async () => {

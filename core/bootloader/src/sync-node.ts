@@ -55,7 +55,11 @@ type Client = {
   interests: Set<string>;
   ephemeral: Set<string>;
   keyhive: boolean;
+  /** Per sedimentree, the tick of this Repo's last write the node heard of. */
+  wrote: Map<string, number>;
 };
+
+type Round = { result: Promise<SyncResult[]>; startedAt: number };
 
 export type SyncNodeOptions = {
   /** Must be the same identity the Repos sign with. */
@@ -92,6 +96,12 @@ export class SyncNode {
   /** Peer deliveries waiting for this microtask's flush, per sedimentree. */
   readonly #outbound = new Map<string, DataRecord[]>();
   readonly #ephemeralSubscribers = new Map<string, number>();
+  /** Per sedimentree, the round with the server in progress. */
+  readonly #rounds = new Map<string, Round>();
+  /** Orders Repo writes against round starts. */
+  #tick = 0;
+  /** Per sedimentree, the round queued behind it, shared by every asker. */
+  readonly #queued = new Map<string, Promise<SyncResult[]>>();
 
   constructor({
     signer,
@@ -180,6 +190,7 @@ export class SyncNode {
       port,
       interests: new Set(),
       ephemeral: new Set(),
+      wrote: new Map(),
       keyhive: false,
     };
     this.#clients.add(client);
@@ -242,7 +253,7 @@ export class SyncNode {
       case "sync": {
         client.interests.add(request.sid);
         await this.#reply(client, request.id, () =>
-          this.#sync(request.sid, request.timeoutMs)
+          this.#sync(client, request.sid, request.timeoutMs)
         );
         return;
       }
@@ -273,10 +284,12 @@ export class SyncNode {
         return;
       case "stored":
         client.interests.add(request.sid);
+        client.wrote.set(request.sid, ++this.#tick);
         this.#ingest(client, request.sid, request.records);
         return;
       case "release":
         client.interests.delete(request.sid);
+        client.wrote.delete(request.sid);
         return;
       case "ephemeral-subscribe":
         if (client.ephemeral.has(request.sid)) return;
@@ -318,7 +331,52 @@ export class SyncNode {
     }
   }
 
-  async #sync(sid: string, timeoutMs: number | null): Promise<SyncResult[]> {
+  /**
+   * Every Repo holding a document asks for its own rounds, and tabs opening
+   * the same document all ask at once. A Repo that hasn't written since the
+   * running round started shares that round. One that has waits for the
+   * next, since the running round's tree was read before that write was
+   * stored, and every such Repo shares the next one. So a crowd of tabs
+   * opening a document costs one round, and a crowd of writers at most two.
+   * The queued round runs with the first asker's timeout.
+   */
+  #sync(
+    client: Client,
+    sid: string,
+    timeoutMs: number | null
+  ): Promise<SyncResult[]> {
+    const running = this.#rounds.get(sid);
+    if (!running) return this.#startRound(sid, timeoutMs);
+    if ((client.wrote.get(sid) ?? 0) <= running.startedAt) {
+      return running.result;
+    }
+    const queued = this.#queued.get(sid);
+    if (queued) return queued;
+    const next = running.result
+      .catch(() => {})
+      .then(() => {
+        this.#queued.delete(sid);
+        return this.#startRound(sid, timeoutMs);
+      });
+    this.#queued.set(sid, next);
+    return next;
+  }
+
+  #startRound(sid: string, timeoutMs: number | null) {
+    const round: Round = {
+      result: this.#round(sid, timeoutMs),
+      startedAt: this.#tick,
+    };
+    this.#rounds.set(sid, round);
+    void round.result
+      .catch(() => {})
+      .finally(() => {
+        if (this.#rounds.get(sid) === round) this.#rounds.delete(sid);
+      });
+    return round.result;
+  }
+
+  async #round(sid: string, timeoutMs: number | null): Promise<SyncResult[]> {
     // Whatever a Repo stored before asking has to be in the tree the round
     // reads, or the round pushes around it.
     await this.#ingesting.get(sid);
