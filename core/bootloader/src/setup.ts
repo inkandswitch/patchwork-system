@@ -9,6 +9,9 @@ import {
   DEFAULT_CLASSIC_SYNC_SERVER,
 } from "./sync-config.js";
 import debug from "debug";
+import { PortSyncRemote } from "./sync-remote.js";
+import type { SyncConnectMessage } from "./sync-protocol.js";
+export { relayKeyhive, type PortSyncRemote } from "./sync-remote.js";
 import {
   forwardWorkerConsole,
   lifecycleLog,
@@ -105,9 +108,9 @@ function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
 
 // ── The automerge worker ───────────────────────────────────────────────
 // A SharedWorker holding the Repo that resolves `automerge:` URLs for the
-// service worker. Tabs don't sync through it — each tab is its own node — but
-// each tab keeps it alive and heartbeats it, so it's here rather than in the
-// service worker, which can't own one.
+// service worker, and the sync node every tab's Repo syncs through. Each tab
+// keeps it alive and heartbeats it, so it's here rather than in the service
+// worker, which can't own one.
 
 let automergeProtocolHandlerWorkerPath =
   "/automerge-protocol-handler-worker.js";
@@ -121,6 +124,9 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
     },
     onRestarting(message) {
+      // Ask the replacement for a sync port now: posts are held until it's
+      // up, and this one's sync node is going away with it.
+      syncRemote?.reconnect();
       // The worker restarts because a newer tab connected. If that build is
       // newer than ours too, we're the stale one.
       if (isNewerBuild(message.build)) {
@@ -136,6 +142,25 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
 
 export function getAutomergeProtocolHandlerWorker(): SharedWorker {
   return automergeProtocolHandlerWorker.get();
+}
+
+let syncRemote: PortSyncRemote | undefined;
+
+/**
+ * This tab's connection to the sync node in the automerge worker, to pass to
+ * its Repo as `subductionRemote`. One per tab: it follows the worker across
+ * restarts.
+ */
+export function getSyncRemote(): PortSyncRemote {
+  syncRemote ??= new PortSyncRemote(() => {
+    const { port1, port2 } = new MessageChannel();
+    automergeProtocolHandlerWorker.post(
+      { type: "sync-connect" } satisfies SyncConnectMessage,
+      [port2]
+    );
+    return port1;
+  });
+  return syncRemote;
 }
 
 /** Dev escape hatch: make the shared worker close so the next use respawns it. */

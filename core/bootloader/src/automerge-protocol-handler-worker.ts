@@ -2,8 +2,10 @@
 // SharedWorker: one instance serves every tab and lives as long as any tab
 // does.
 //
-// It is a node like any tab's: the same IndexedDB, its own sync-server socket,
-// and the storage channel to the tabs. Resolving requests is its whole job.
+// It also hosts the origin's sync node (sync-node.ts), the one Subduction node
+// with a connection to the sync server. Every tab's Repo syncs through it, and
+// so does the resolver Repo here, which is otherwise a Repo like any tab's: the
+// same IndexedDB and the storage channel to the tabs.
 // When the service worker misses the cache for a request that looks like a URL
 // encoded URL, it broadcasts a HandoffRequestMessage on HANDOFF_CHANNEL; we
 // resolve the automerge URL, write the response into the service worker's
@@ -15,6 +17,7 @@ import { initializeWasm, hasHeads } from "@automerge/automerge/slim";
 import initSubduction from "@automerge/automerge-subduction/slim";
 
 import {
+  INTERCEPTOR_PREFIX,
   Repo,
   isValidAutomergeUrl,
   parseAutomergeUrl,
@@ -35,9 +38,11 @@ import type {
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
-import { loadOrCreateSigner } from "./signer.js";
+import { loadKeyhiveSigner, loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
+import { SyncNode } from "./sync-node.js";
+import { PortSyncRemote, relayKeyhive } from "./sync-remote.js";
 import {
   HANDOFF_CHANNEL,
   type HandoffCachedMessage,
@@ -68,6 +73,74 @@ const control = startWorkerControl("automerge-protocol-handler-worker", {
 });
 const log = control.log;
 
+// ── The sync node ──────────────────────────────────────────────────────
+
+let wasmPromise: Promise<void> | null = null;
+
+function initWasm(): Promise<void> {
+  if (!wasmPromise) {
+    log("fetching wasm");
+    wasmPromise = Promise.all([
+      initializeWasm(new Request("/automerge.wasm")),
+      initSubduction(new Request("/subduction.wasm")),
+    ]).then(() => log("wasm initialized"));
+    wasmPromise.catch(() => {
+      wasmPromise = null;
+    });
+  }
+  return wasmPromise;
+}
+
+let syncNodePromise: Promise<SyncNode> | null = null;
+
+function getSyncNode(): Promise<SyncNode> {
+  if (!syncNodePromise) {
+    syncNodePromise = (async () => {
+      await initWasm();
+      const storage = new IndexedDBStorageAdapter();
+      // On keyhive sites the Repos store encrypted documents under the
+      // interceptor's prefix and sign as the keyhive identity.
+      const node = new SyncNode({
+        signer: syncServer.keyhive
+          ? await loadKeyhiveSigner(
+              new IndexedDBStorageAdapter(keyhiveStorageName)
+            )
+          : await loadOrCreateSigner(storage),
+        storage,
+        storagePrefix: syncServer.keyhive ? INTERCEPTOR_PREFIX : undefined,
+        endpoints: [syncServer.url],
+        log,
+      });
+      (self as any).syncNode = node;
+      return node;
+    })();
+    syncNodePromise.catch(() => {
+      syncNodePromise = null;
+    });
+  }
+  return syncNodePromise;
+}
+
+/** Serve a Repo on `port` once the node is up; messages queue until then. */
+function connectToSyncNode(port: MessagePort): void {
+  getSyncNode().then(
+    (node) => node.connect(port),
+    (error) => {
+      console.error("sync node failed to start", error);
+      port.close();
+    }
+  );
+}
+
+/** The resolver Repo's connection to the node, which lives right here. */
+function resolverRemote(): PortSyncRemote {
+  return new PortSyncRemote(() => {
+    const { port1, port2 } = new MessageChannel();
+    connectToSyncNode(port2);
+    return port1;
+  });
+}
+
 // ── The repo ───────────────────────────────────────────────────────────
 
 let repoPromise: Promise<Repo> | null = null;
@@ -85,12 +158,7 @@ function getRepo(): Promise<Repo> {
 }
 
 async function buildRepo(): Promise<Repo> {
-  log("fetching wasm");
-  await Promise.all([
-    initializeWasm(new Request("/automerge.wasm")),
-    initSubduction(new Request("/subduction.wasm")),
-  ]);
-  log("wasm initialized");
+  await initWasm();
 
   const { repo, hive } = syncServer.keyhive
     ? await buildKeyhiveRepo(syncServer.keyhive)
@@ -108,7 +176,7 @@ async function buildPlainRepo(): Promise<Repo> {
     storage,
     peerId:
       `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
-    subductionWebsocketEndpoints: [syncServer.url],
+    subductionRemote: resolverRemote(),
     headsChannel: `${storagePrefix}-heads`,
     enableRemoteHeadsGossiping: true,
   });
@@ -120,12 +188,16 @@ async function buildKeyhiveRepo(
   const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
     await import("@automerge/automerge-repo-keyhive");
   initKeyhiveWasm();
+  const remote = resolverRemote();
   const { hive, repo } = await initializeAutomergeRepoKeyhive({
     // ARK injects an `idFactory` deriving document ids from keyhive. A site
     // can opt out of it with `keyhive: { useIdFactory: false }`.
     createRepo: ({ idFactory, ...config }) =>
-      new Repo(
-        syncServer.useIdFactory === false ? config : { ...config, idFactory }
+      relayKeyhive(
+        new Repo(
+          syncServer.useIdFactory === false ? config : { ...config, idFactory }
+        ),
+        remote
       ),
     storage: new IndexedDBStorageAdapter(keyhiveStorageName),
     peerIdSuffix:
@@ -137,7 +209,7 @@ async function buildKeyhiveRepo(
     syncServer: keyhiveSyncServer,
     repo: {
       storage: new IndexedDBStorageAdapter(),
-      subductionWebsocketEndpoints: [syncServer.url],
+      subductionRemote: remote,
       headsChannel: `${storagePrefix}-heads`,
       enableRemoteHeadsGossiping: true,
     },
@@ -194,6 +266,11 @@ function handleControlMessage(
   controlPort: MessagePort,
   event: MessageEvent
 ): void {
+  if (data?.type === "sync-connect") {
+    const [port] = event.ports;
+    if (port) connectToSyncNode(port);
+    return;
+  }
   if (data?.type !== "connect-classic-sync") return;
   const [replyPort] = event.ports;
   const server =
@@ -516,6 +593,8 @@ async function drainForRestart(): Promise<void> {
   }
   const repo = await repoPromise?.catch(() => null);
   await repo?.flush();
+  const node = await syncNodePromise?.catch(() => null);
+  await node?.shutdown();
 }
 
 handoffChannel.addEventListener("message", (event) => {
