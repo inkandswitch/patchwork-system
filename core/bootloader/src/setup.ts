@@ -4,6 +4,7 @@ import type {
   SetupServiceWorkerResult,
 } from "./types.js";
 import { buildId, isNewerBuild } from "./build-id.js";
+import { promptForNewBuild } from "./new-build-prompt.js";
 import {
   readClassicSyncServer,
   DEFAULT_CLASSIC_SYNC_SERVER,
@@ -64,29 +65,15 @@ function installServiceWorkerLogForwarding(): void {
 
 // ── New builds ─────────────────────────────────────────────────────────
 // After a deploy, open tabs are on the old build. The default response is to
-// reload, because the alternative — an old page sharing IndexedDB with the
-// new automerge worker — is where storage-format changes bite.
-
-const RELOAD_THROTTLE_KEY = "patchworkNewBuildReloadedAt";
-const RELOAD_THROTTLE_MS = 30_000;
+// say so and offer a reload, rather than reload out from under someone
+// mid-edit; an old page sharing IndexedDB with the new automerge worker is
+// still where storage-format changes bite, so it shouldn't stay that way long.
 
 let onNewBuild: ((info: NewBuildInfo) => void) | undefined;
 
-function reloadForNewBuild(info: NewBuildInfo): void {
-  // Something is wrong if we keep landing back here (an offline tab served a
-  // stale page, say); don't let it turn into a reload loop.
-  const last = Number(sessionStorage.getItem(RELOAD_THROTTLE_KEY));
-  if (last && Date.now() - last < RELOAD_THROTTLE_MS) {
-    console.warn("new build detected, but reloaded recently; staying put", info);
-    return;
-  }
-  sessionStorage.setItem(RELOAD_THROTTLE_KEY, Date.now().toString());
-  lifecycleLog("new build detected via %s, reloading", info.source);
-  location.reload();
-}
-
 function newBuild(info: NewBuildInfo): void {
-  (onNewBuild ?? reloadForNewBuild)(info);
+  lifecycleLog("new build detected via %s", info.source);
+  (onNewBuild ?? promptForNewBuild)(info);
 }
 
 /**

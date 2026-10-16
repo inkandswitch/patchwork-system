@@ -99,6 +99,16 @@ export class SyncNode {
   /** Per sedimentree, the tail of the chain of reads-back of Repo writes. */
   readonly #ingesting = new Map<string, Promise<void>>();
   /**
+   * Per sedimentree, Repo writes whose read-back failed. A Repo says it
+   * stored something only once, and a node that has already hydrated a
+   * sedimentree won't look in the database for it again, so these are tried
+   * again before the next round rather than left out of what it pushes.
+   */
+  readonly #unread = new Map<
+    string,
+    Array<{ from: Client; records: Array<{ kind: RecordKind; id: string }> }>
+  >();
+  /**
    * `${sid}:${id}` of records being stored back from a Repo's write. The
    * bridge announces them like anything a peer sent; they're forwarded from
    * the read-back instead, so the Repo that wrote them can be left out.
@@ -460,6 +470,11 @@ export class SyncNode {
   async #round(sid: string, timeoutMs: number | null): Promise<SyncResult[]> {
     // Whatever a Repo stored before asking has to be in the tree the round
     // reads, or the round pushes around it.
+    const unread = this.#unread.get(sid);
+    this.#unread.delete(sid);
+    for (const { from, records } of unread ?? []) {
+      this.#ingest(from, sid, records);
+    }
     await this.#ingesting.get(sid);
     const results = await this.subduction.syncWithAllPeers(
       sedimentreeId(sid),
@@ -469,6 +484,12 @@ export class SyncNode {
     // The Repo reads what arrived out of the database as soon as we reply.
     await this.#bridge.awaitSettled([sid]);
     this.#flush(sid);
+    // What did arrive is worth having, but this round didn't push everything
+    // the Repos wrote, so it isn't a success: the Repo asks again later, and
+    // the next round tries those writes again.
+    if (this.#unread.has(sid)) {
+      throw new Error(`sync node: some writes to ${sid} aren't picked up yet`);
+    }
     const mapped = results.entries().map((result) => ({
       success: result.success,
       transportErrors: result.transportErrors?.map(String),
@@ -489,9 +510,12 @@ export class SyncNode {
     const previous = this.#ingesting.get(sid) ?? Promise.resolve();
     const next = previous
       .then(() => this.#storeBack(from, sid, records))
-      .catch((error) =>
-        console.error(`sync node: couldn't pick up writes to ${sid}`, error)
-      );
+      .catch((error) => {
+        console.error(`sync node: couldn't pick up writes to ${sid}`, error);
+        let unread = this.#unread.get(sid);
+        if (!unread) this.#unread.set(sid, (unread = []));
+        unread.push({ from, records });
+      });
     this.#ingesting.set(sid, next);
     void next.finally(() => {
       if (this.#ingesting.get(sid) === next) this.#ingesting.delete(sid);

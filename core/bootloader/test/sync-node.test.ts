@@ -208,7 +208,9 @@ describe("sync node", () => {
     const site = origin(server);
     const tabs = Array.from({ length: 10 }, () => site.tab());
     const counter = countRounds(site.node);
-    const found = await Promise.all(tabs.map((tab) => tab.find<Doc>(theirs.url)));
+    const found = await Promise.all(
+      tabs.map((tab) => tab.find<Doc>(theirs.url))
+    );
 
     expect(found.every((handle) => handle.doc().count === 1)).toBe(true);
     // None of them wrote anything, so the round the first started covers all.
@@ -247,10 +249,8 @@ describe("sync node", () => {
       })
     );
 
-    await seenElsewhere(
-      server,
-      created.url,
-      (doc: any) => handles.every((_, i) => doc[`tab${i}`] === i)
+    await seenElsewhere(server, created.url, (doc: any) =>
+      handles.every((_, i) => doc[`tab${i}`] === i)
     );
     expect(counter.rounds).toBeLessThan(tabs.length);
   });
@@ -270,6 +270,25 @@ describe("sync node", () => {
     );
     expect(records.length).toBeGreaterThan(0);
     expect(records.filter(([, times]) => times > 1)).toEqual([]);
+  });
+
+  it("pushes an edit the node failed to pick up the first time", async () => {
+    const server = startServer();
+    const site = origin(server);
+    const tab = site.tab();
+    const handle = tab.create<Doc>({ count: 1 });
+    await seenElsewhere(server, handle.url, (doc) => doc.count === 1);
+
+    const subduction = site.node.subduction as any;
+    const real = subduction.storeBuiltBatch.bind(subduction);
+    let failures = 1;
+    subduction.storeBuiltBatch = (...args: unknown[]) =>
+      failures-- > 0 ? Promise.reject(new Error("transient")) : real(...args);
+    handle.change((doc) => {
+      doc.count = 2;
+    });
+
+    await seenElsewhere(server, handle.url, (doc) => doc.count === 2);
   });
 
   it("follows the node across a worker restart", async () => {

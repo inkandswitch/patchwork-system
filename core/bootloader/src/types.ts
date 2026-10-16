@@ -135,10 +135,10 @@ export type SetupServiceWorkerOptions = {
   workerPath?: string;
   /**
    * What to do when a newer build of the site is live and this tab is stale.
-   * The default reloads the page (at most once every 30s), since an old page
-   * sharing IndexedDB with a newer automerge worker is the combination to
-   * avoid. Replace it to show a "new version" nudge instead — then the page
-   * stays on the old build until the user reloads.
+   * The default pops up a small box in the corner saying there's an updated
+   * patchwork system core, with a button to reload. Until then the page stays
+   * on the old build, sharing IndexedDB with a newer automerge worker. Replace
+   * it to handle that some other way, say `() => location.reload()`.
    */
   onNewBuild?: (info: NewBuildInfo) => void;
 };
