@@ -454,6 +454,11 @@ export class SyncNode {
       }
     }
     if (forward.length === 0) return;
+    // The writer already persisted these, so the other Repos holding this
+    // document can have them now rather than after this node's own store,
+    // and rather than by reloading the whole document when the writer's
+    // heads announcement lands.
+    this.#sendToInterested(sid, { type: "data", sid, records: forward }, from);
 
     const keys = forward.map((record) => `${sid}:${record.id}`);
     for (const key of keys) this.#echoes.add(key);
@@ -467,9 +472,6 @@ export class SyncNode {
       if (left) this.#echoing.set(sid, left);
       else this.#echoing.delete(sid);
     }
-    // The other Repos holding this document get it now rather than by
-    // reloading the whole thing when the writer's heads announcement lands.
-    this.#sendToInterested(sid, { type: "data", sid, records: forward }, from);
   }
 
   /**
