@@ -28,7 +28,7 @@ import {
   type PeerId,
   type StorageId,
 } from "@automerge/automerge-repo/slim";
-import { resolvePath } from "@inkandswitch/patchwork-filesystem";
+import { getDefaultBranch, resolvePath } from "@inkandswitch/patchwork-filesystem";
 
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import { WebSocketWorkerClientAdapter } from "@automerge/automerge-repo-network-websocket";
@@ -382,9 +382,20 @@ async function resolveAutomergeUrl(
   // todo, maybe a bad idea? maybe we should throw instead of es-module-caching
   // the headless req
   if (!heads) {
-    const folder = await repo.find(maybeAutomergeUrl, { signal });
+    let folder = await repo.find(maybeAutomergeUrl, { signal });
     await caughtUpWithPeers(repo, folder, signal);
-    const url = stringifyAutomergeUrl({ documentId, heads: folder.heads() });
+    // Packages used to be published as a branches doc, which stands for its
+    // default branch. The tab's ModuleWatcher looks packages up through here,
+    // so this is where that's followed.
+    const branch = getDefaultBranch(folder.doc());
+    if (branch) {
+      folder = await repo.find(branch, { signal });
+      await caughtUpWithPeers(repo, folder, signal);
+    }
+    const url = stringifyAutomergeUrl({
+      documentId: folder.documentId,
+      heads: folder.heads(),
+    });
     const location = `/${encodeURIComponent(url)}${path.length ? `/${path.join("/")}` : ""}`;
     return Response.redirect(location, 307);
   }

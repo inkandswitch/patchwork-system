@@ -9,7 +9,8 @@ import {
   DEFAULT_CLASSIC_SYNC_SERVER,
 } from "./sync-config.js";
 import debug from "debug";
-import { PortSyncRemote } from "./sync-remote.js";
+import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import { PortSyncRemote, getSedimentreeId } from "./sync-remote.js";
 import type { SyncConnectMessage } from "./sync-protocol.js";
 export { relayKeyhive, type PortSyncRemote } from "./sync-remote.js";
 import {
@@ -161,6 +162,21 @@ export function getSyncRemote(): PortSyncRemote {
     return port1;
   });
   return syncRemote;
+}
+
+/**
+ * Call `onChange` whenever the document at `url` may have new heads, until the
+ * returned function is called. Nothing is loaded for it: the sync node keeps
+ * the document subscribed with the server and says when something arrives for
+ * it, whether from the server or from another tab. That's the way to follow a
+ * document whose contents you only need now and then; find it again when
+ * `onChange` fires.
+ */
+export function watchDocument(
+  url: AutomergeUrl,
+  onChange: () => void
+): () => void {
+  return getSyncRemote().watch(getSedimentreeId(url), onChange);
 }
 
 /** Dev escape hatch: make the shared worker close so the next use respawns it. */

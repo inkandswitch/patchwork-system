@@ -22,6 +22,12 @@ export type RemoteRequest =
       records: Array<{ kind: RecordKind; id: string }>;
     }
   | { type: "release"; sid: string }
+  /**
+   * Hear when a sedimentree may have new heads, without holding it: the node
+   * says `changed` and sends no data, so the Repo needn't load the document.
+   */
+  | { type: "watch"; sid: string }
+  | { type: "unwatch"; sid: string }
   | { type: "ephemeral-subscribe"; sid: string }
   | { type: "ephemeral-unsubscribe"; sid: string }
   | { type: "ephemeral-publish"; sid: string; payload: Uint8Array }
@@ -44,6 +50,7 @@ export type NodeMessage =
       records: Array<{ kind: RecordKind; id: string; blob: Uint8Array }>;
     }
   | { type: "heads"; sid: string; peerId: string; heads: string[] }
+  | { type: "changed"; sid: string }
   | { type: "ephemeral"; sid: string; senderId: string; payload: Uint8Array }
   | { type: "keyhive-frame"; peer: Uint8Array; payload: Uint8Array }
   | { type: "keyhive-peer-disconnected"; peer: Uint8Array };

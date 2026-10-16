@@ -49,7 +49,12 @@ export class MemoryAdapter implements StorageAdapterInterface {
   }
 }
 
-export type Server = { subduction: Subduction; up: boolean };
+export type Server = {
+  subduction: Subduction;
+  up: boolean;
+  /** The client ends of the connections made to it, to drop them. */
+  connections?: Set<{ disconnect(): Promise<void> }>;
+};
 
 export function endpointTo(server: Server): WebSocketEndpointInterface {
   return {
@@ -64,6 +69,8 @@ export function endpointTo(server: Server): WebSocketEndpointInterface {
       const closed = new Promise<void>((resolve) =>
         transport.onDisconnect(() => resolve())
       );
+      server.connections?.add(transport);
+      void closed.then(() => server.connections?.delete(transport));
       return Object.assign(transport, {
         closed: () => closed,
       }) as unknown as ManagedTransport;

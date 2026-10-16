@@ -12,11 +12,13 @@ import {
 import {
   MemorySigner,
   MemoryStorage,
+  SedimentreeId,
   Subduction,
 } from "@automerge/automerge-subduction";
+import { parseAutomergeUrl } from "@automerge/automerge-repo";
 
 import { SyncNode } from "../src/sync-node.js";
-import { PortSyncRemote } from "../src/sync-remote.js";
+import { PortSyncRemote, getSedimentreeId } from "../src/sync-remote.js";
 import {
   MemoryAdapter,
   SERVICE,
@@ -358,5 +360,120 @@ describe("sync node", () => {
       [4, 5],
       [4, 5],
     ]);
+  });
+});
+
+describe("watching a document", () => {
+  /** A Repo-less connection to the node, counting `changed` for `url`. */
+  function startWatching(site: ReturnType<typeof origin>, url: AutomergeUrl) {
+    const remote = site.remote();
+    cleanup.push(async () => remote.shutdown());
+    const heard = { changes: 0, unwatch: () => {} };
+    heard.unwatch = remote.watch(getSedimentreeId(url), () => heard.changes++);
+    return heard;
+  }
+
+  it("names a document's sedimentree the way subduction does", () => {
+    const url = generateAutomergeUrl();
+    const bytes = new Uint8Array(32);
+    bytes.set(parseAutomergeUrl(url).binaryDocumentId);
+    expect(getSedimentreeId(url)).toBe(
+      SedimentreeId.fromBytes(bytes).toString()
+    );
+  });
+
+  it("hears the server's edits to a document nobody on the origin holds", async () => {
+    const server = startServer();
+    const other = elsewhere(server);
+    const theirs = other.create<Doc>({ count: 0 });
+    await other.flush();
+
+    const heard = startWatching(origin(server), theirs.url);
+    // Give the node time to subscribe before the edit goes out.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const before = heard.changes;
+    theirs.change((doc) => {
+      doc.count = 1;
+    });
+    await eventually(() => heard.changes > before);
+  });
+
+  it("hears a tab's edit, the writing tab included", async () => {
+    const server = startServer();
+    const site = origin(server);
+    const tab = site.tab();
+    const handle = tab.create<Doc>({ count: 0 });
+    await tab.flush();
+
+    const heard = startWatching(site, handle.url);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const before = heard.changes;
+    handle.change((doc) => {
+      doc.count = 1;
+    });
+    await eventually(() => heard.changes > before);
+  });
+
+  it("stops hearing once unwatched", async () => {
+    const server = startServer();
+    const other = elsewhere(server);
+    const theirs = other.create<Doc>({ count: 0 });
+    await other.flush();
+
+    const heard = startWatching(origin(server), theirs.url);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    heard.unwatch();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const before = heard.changes;
+    theirs.change((doc) => {
+      doc.count = 1;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    expect(heard.changes).toBe(before);
+  });
+
+  // The in-process server pushes to every peer, subscribed or not, so what's
+  // checked here is that the node asks.
+  it("subscribes a watched document, and again when the connection is back", async () => {
+    const server = startServer();
+    const other = elsewhere(server);
+    const theirs = other.create<Doc>({ count: 0 });
+    await other.flush();
+
+    // The same server, but only the origin's connections get dropped.
+    const dropping = { ...server, connections: new Set<any>() };
+    const site = origin(dropping);
+    const counter = countRounds(site.node, 0);
+    // Connected first, so it's the watch that asks, not the connection.
+    await eventually(() => dropping.connections.size > 0);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    startWatching(site, theirs.url);
+    await eventually(() => counter.rounds >= 1);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const before = counter.rounds;
+
+    for (const connection of dropping.connections)
+      await connection.disconnect();
+    await eventually(() => counter.rounds > before);
+  });
+
+  it("keeps hearing the server across a worker restart", async () => {
+    const server = startServer();
+    const other = elsewhere(server);
+    const theirs = other.create<Doc>({ count: 0 });
+    await other.flush();
+
+    const site = origin(server);
+    const heard = startWatching(site, theirs.url);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await site.restartNode();
+    // Losing the node makes everyone look again, whether or not it moved.
+    await eventually(() => heard.changes > 0);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const before = heard.changes;
+    theirs.change((doc) => {
+      doc.count = 1;
+    });
+    await eventually(() => heard.changes > before);
   });
 });

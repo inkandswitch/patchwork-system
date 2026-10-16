@@ -3,10 +3,12 @@
 // deploy, or the browser terminates it — so it is opened through `open`, and
 // `reconnect()` swaps in a fresh one.
 import { PeerId } from "@automerge/automerge-subduction/slim";
-import type {
-  SubductionRemote,
-  SubductionRemoteHandlers,
-  SubductionRemoteSyncResult,
+import {
+  parseAutomergeUrl,
+  type AutomergeUrl,
+  type SubductionRemote,
+  type SubductionRemoteHandlers,
+  type SubductionRemoteSyncResult,
 } from "@automerge/automerge-repo/slim";
 
 import type {
@@ -50,6 +52,8 @@ export class PortSyncRemote implements SubductionRemote {
   #nextId = 0;
   readonly #pending = new Map<number, Pending>();
   readonly #ephemeral = new Set<string>();
+  /** Per sedimentree, who wants to hear it may have changed. */
+  readonly #watchers = new Map<string, Set<() => void>>();
   #keyhiveHandler: KeyhiveFrameHandler | null = null;
   /**
    * Writes the node hasn't heard about because there was no port to tell it
@@ -78,6 +82,13 @@ export class PortSyncRemote implements SubductionRemote {
     port.start();
     for (const sid of this.#ephemeral) {
       this.#post({ type: "ephemeral-subscribe", sid });
+    }
+    // A replacement node only says `changed` for what reaches it after this,
+    // and a watched document may have moved while there was no node to say
+    // so. Everyone looks again.
+    for (const [sid, watchers] of this.#watchers) {
+      this.#post({ type: "watch", sid });
+      for (const onChange of watchers) onChange();
     }
     if (this.#keyhiveHandler) this.#post({ type: "keyhive-listen" });
     const unsent = this.#unsent;
@@ -144,6 +155,11 @@ export class PortSyncRemote implements SubductionRemote {
           message.peerId,
           message.heads
         );
+        return;
+      case "changed":
+        for (const onChange of this.#watchers.get(message.sid) ?? []) {
+          onChange();
+        }
         return;
       case "ephemeral":
         this.#handlers?.onEphemeral(
@@ -229,6 +245,28 @@ export class PortSyncRemote implements SubductionRemote {
     this.#post({ type: "release", sid });
   }
 
+  /**
+   * Call `onChange` whenever the sedimentree `sid` may have new heads, whether
+   * or not this Repo holds it, until the returned function is called. The
+   * node keeps it subscribed with the server meanwhile.
+   */
+  watch(sid: string, onChange: () => void): () => void {
+    let watchers = this.#watchers.get(sid);
+    if (!watchers) {
+      watchers = new Set();
+      this.#watchers.set(sid, watchers);
+      this.#post({ type: "watch", sid });
+    }
+    // Wrapped, so that watching twice with one function takes two unwatches.
+    const watcher = () => onChange();
+    watchers.add(watcher);
+    return () => {
+      if (!watchers.delete(watcher) || watchers.size > 0) return;
+      this.#watchers.delete(sid);
+      this.#post({ type: "unwatch", sid });
+    };
+  }
+
   async subscribeEphemeral(sid: string): Promise<void> {
     this.#ephemeral.add(sid);
     this.#post({ type: "ephemeral-subscribe", sid });
@@ -265,6 +303,18 @@ export class PortSyncRemote implements SubductionRemote {
       },
     };
   }
+}
+
+/**
+ * The sedimentree a document syncs as: its 16 id bytes, zero-padded to 32, in
+ * hex, which is what `SedimentreeId.toString()` gives.
+ */
+export function getSedimentreeId(url: AutomergeUrl): string {
+  const bytes = new Uint8Array(32);
+  bytes.set(parseAutomergeUrl(url).binaryDocumentId.subarray(0, 32));
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
+    ""
+  );
 }
 
 /**

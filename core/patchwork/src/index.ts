@@ -29,7 +29,10 @@ import * as Automerge from "@automerge/automerge/slim";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
-import { ModuleWatcher } from "@inkandswitch/patchwork-filesystem";
+import {
+  ModuleWatcher,
+  trackPackagesViaServiceWorker,
+} from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
 import { registerPatchworkViewElement } from "@inkandswitch/patchwork-elements";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
@@ -44,7 +47,9 @@ import {
   unregisterPlugins,
 } from "@inkandswitch/patchwork-plugins";
 import * as plugins from "@inkandswitch/patchwork-plugins";
-import setupServiceWorker from "@inkandswitch/patchwork-bootloader";
+import setupServiceWorker, {
+  watchDocument,
+} from "@inkandswitch/patchwork-bootloader";
 import debug from "debug";
 
 import type {
@@ -177,7 +182,10 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     // each plugin's load() re-imports the package (at heads) on this thread.
     options.importModulesInWorker === false
       ? undefined
-      : importAutomergePackageViaWorker
+      : importAutomergePackageViaWorker,
+    // Look packages up through the automerge worker and watch them through
+    // the sync node, so their docs never load into this tab's Repo.
+    trackPackagesViaServiceWorker(watchDocument)
   );
 
   const accountDocHandle = (await resolveAccountHandle(repo, {

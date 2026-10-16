@@ -15,6 +15,10 @@
 // - What peers send, the node persists through the same bridge and forwards
 //   to the Repos holding that document, which apply it the way they'd apply a
 //   commit from their own connection.
+// - A Repo can also watch a document it doesn't hold. The node keeps it
+//   subscribed with the server and says `changed` when anything arrives for
+//   it, without sending the data, so the Repo can leave it unloaded until it
+//   wants the new heads.
 //
 // On keyhive sites the documents are encrypted and the node never decrypts
 // them: it stores and forwards the ciphertext the Repos wrote and the server
@@ -54,6 +58,8 @@ type Client = {
   port: MessagePort;
   /** Sedimentrees this Repo holds, which it wants to hear about. */
   interests: Set<string>;
+  /** Sedimentrees this Repo wants `changed` for, held or not. */
+  watching: Set<string>;
   ephemeral: Set<string>;
   keyhive: boolean;
   /** Per sedimentree, the tick of this Repo's last write the node heard of. */
@@ -77,6 +83,9 @@ const sedimentreeId = (sid: string): SedimentreeId =>
   SedimentreeId.fromBytes(
     Uint8Array.from(sid.match(/../g) ?? [], (byte) => parseInt(byte, 16))
   );
+
+// A watched document's round has no Repo waiting on it to pick a deadline.
+const WATCH_SYNC_TIMEOUT_MS = 60_000;
 
 const topic = (sid: string) => Topic.fromBytes(sedimentreeId(sid).toBytes());
 
@@ -106,6 +115,12 @@ export class SyncNode {
   #tick = 0;
   /** Per sedimentree, the round queued behind it, shared by every asker. */
   readonly #queued = new Map<string, Promise<SyncResult[]>>();
+  /**
+   * Sedimentrees the server has said it will push to us, since we last
+   * connected. A round subscribes; a dropped connection forgets them all.
+   */
+  readonly #subscribed = new Set<string>();
+  #connected = false;
 
   constructor({
     signer,
@@ -182,6 +197,7 @@ export class SyncNode {
       const state = this.#state();
       this.#log("sync node connection state", state);
       for (const client of this.#clients) this.#send(client, state);
+      this.#handleConnectionChange();
     });
     for (const endpoint of endpoints) {
       void this.#connections.manageConnection(
@@ -197,6 +213,7 @@ export class SyncNode {
     const client: Client = {
       port,
       interests: new Set(),
+      watching: new Set(),
       ephemeral: new Set(),
       wrote: new Map(),
       keyhive: false,
@@ -246,6 +263,55 @@ export class SyncNode {
     for (const client of this.#clients) {
       if (client.keyhive) this.#send(client, message);
     }
+  }
+
+  /** Tell every Repo watching `sid` that it may have new heads. */
+  #sendChanged(sid: string) {
+    const message: NodeMessage = { type: "changed", sid };
+    for (const client of this.#clients) {
+      if (client.watching.has(sid)) this.#send(client, message);
+    }
+  }
+
+  /**
+   * The Repos holding a document resync it themselves when the connection
+   * comes back. Nobody holds a watched one, so the node resubscribes it.
+   */
+  #handleConnectionChange() {
+    const connected = this.#connections.isConnected();
+    if (connected === this.#connected) return;
+    this.#connected = connected;
+    if (!connected) {
+      this.#subscribed.clear();
+      return;
+    }
+    const watched = new Set<string>();
+    for (const client of this.#clients) {
+      for (const sid of client.watching) watched.add(sid);
+    }
+    for (const sid of watched) this.#subscribe(sid);
+  }
+
+  /**
+   * Run a round for `sid` unless the server is already pushing it to us. A
+   * round already running may have started before the connection was up, so
+   * look again once it's done, but only once: a round the server turns down
+   * would otherwise be asked for again forever.
+   */
+  #subscribe(sid: string, waitForRunning = true) {
+    if (this.#subscribed.has(sid)) return;
+    const running = this.#rounds.get(sid);
+    if (running) {
+      if (waitForRunning) {
+        void running.result
+          .catch(() => {})
+          .then(() => this.#subscribe(sid, false));
+      }
+      return;
+    }
+    this.#startRound(sid, WATCH_SYNC_TIMEOUT_MS).catch((error) =>
+      this.#log(`couldn't subscribe to ${sid}`, error)
+    );
   }
 
   #sendToInterested(sid: string, message: NodeMessage, except?: Client) {
@@ -298,6 +364,13 @@ export class SyncNode {
       case "release":
         client.interests.delete(request.sid);
         client.wrote.delete(request.sid);
+        return;
+      case "watch":
+        client.watching.add(request.sid);
+        this.#subscribe(request.sid);
+        return;
+      case "unwatch":
+        client.watching.delete(request.sid);
         return;
       case "ephemeral-subscribe":
         if (client.ephemeral.has(request.sid)) return;
@@ -396,7 +469,7 @@ export class SyncNode {
     // The Repo reads what arrived out of the database as soon as we reply.
     await this.#bridge.awaitSettled([sid]);
     this.#flush(sid);
-    return results.entries().map((result) => ({
+    const mapped = results.entries().map((result) => ({
       success: result.success,
       transportErrors: result.transportErrors?.map(String),
       stats: result.stats && {
@@ -404,6 +477,8 @@ export class SyncNode {
         fragmentsReceived: result.stats.fragmentsReceived,
       },
     }));
+    if (mapped.some((result) => result.success)) this.#subscribed.add(sid);
+    return mapped;
   }
 
   #ingest(
@@ -459,6 +534,8 @@ export class SyncNode {
     // and rather than by reloading the whole document when the writer's
     // heads announcement lands.
     this.#sendToInterested(sid, { type: "data", sid, records: forward }, from);
+    // The writer too: what watches a document in a Repo isn't what holds it.
+    this.#sendChanged(sid);
 
     const keys = forward.map((record) => `${sid}:${record.id}`);
     for (const key of keys) this.#echoes.add(key);
@@ -525,6 +602,7 @@ export class SyncNode {
     if (!records) return;
     this.#outbound.delete(sid);
     this.#sendToInterested(sid, { type: "data", sid, records });
+    this.#sendChanged(sid);
   }
 
   async #subscribeEphemeral(sid: string) {
