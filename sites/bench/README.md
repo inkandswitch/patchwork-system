@@ -65,6 +65,14 @@ mode, so the shipped topology can be taken apart one piece at a time
 (`pertab-mesh` is `pertab&mesh=1`; `pertab-heads` is `patchwork`
 minus the service worker and the idle automerge worker).
 
+`patchwork` can be taken apart the same way: `?heads=0` drops the Repo's
+heads channel, so the other tabs hear about an edit only from the sync node;
+`?bc=1` adds classic automerge sync between the tabs over a BroadcastChannel;
+`?throttle=N` sets the Repo's `subductionSaveThrottle` (createRepo() uses
+20). Any of them builds the Repo here rather than with createRepo().
+`BENCH_QUERY="heads=0&bc=1"` passes options like these to every tab a spec
+opens.
+
 `pertab&mesh=1&signer=shared` and `pertab-mesh` differ in the signer. With the origin-wide signer
 every tab presents the same subduction peer id, and with three tabs open the
 third stops receiving a sibling's edits over the mesh and the server stops
@@ -106,6 +114,9 @@ server holds our heads" means that peer and not a sibling.
   offline over a local channel, and the reconnect → converged time only where
   they hadn't.
 - `churn.spec` — close the tab that booted everything, check the rest still sync.
+- `open.spec` — a doc only the server has, opened (`?open=<url>`) in tab after
+  tab of one context: navigation start → the doc in hand, for the first tab
+  and the tenth.
 - `storage-adapter.spec` — in `pertab`, IndexedDB worker vs in-thread: create
   40 docs × 20 edits and flush, edit → flushed latency, cold load of the 40
   from a fresh tab, three tabs flushing concurrently, sync latency with the

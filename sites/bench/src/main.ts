@@ -52,7 +52,9 @@ import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage
 import { BroadcastChannelNetworkAdapter } from "@automerge/automerge-repo-network-broadcastchannel";
 import { MemorySigner } from "@automerge/automerge-subduction/slim";
 import { createRepo, initWasm } from "@inkandswitch/patchwork";
-import setupServiceWorker from "@inkandswitch/patchwork-bootloader";
+import setupServiceWorker, {
+  getSyncRemote,
+} from "@inkandswitch/patchwork-bootloader";
 import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
 import { WorkerSubductionEndpoint } from "./worker-link.js";
 import type { ControlPort, NodeMessage, TabMessage } from "./protocol.js";
@@ -96,6 +98,15 @@ const siblings = params.has("siblings")
 const mesh = params.has("mesh")
   ? params.get("mesh") === "1"
   : mode === "pertab-mesh";
+// patchwork mode only: `?heads=0` drops the Repo's heads channel, `?bc=1`
+// adds classic automerge sync between the tabs over a BroadcastChannel.
+const headsChannel = params.get("heads") !== "0";
+const tabBroadcast = params.get("bc") === "1";
+// `?throttle=N`: the per-document subduction save throttle, in ms, for the
+// patchwork variants built here (createRepo() uses its own).
+const saveThrottle = params.has("throttle")
+  ? Number(params.get("throttle"))
+  : undefined;
 const sharedSigner = params.get("signer") === "shared" || mode === "pertab-heads";
 
 let serverBytes = 0;
@@ -144,9 +155,30 @@ async function buildTabNode(): Promise<Repo> {
     const sw = await setupServiceWorker();
     if (!sw) throw new Error("no service worker");
     mark("workers");
-    const tab = await createRepo();
-    repo = tab.repo;
-    ownPeerId = tab.signerIdentity!.peerId;
+    if (headsChannel && !tabBroadcast && saveThrottle === undefined) {
+      const tab = await createRepo();
+      repo = tab.repo;
+      ownPeerId = tab.signerIdentity!.peerId;
+    } else {
+      // createRepo() taken apart: the same Repo on the sync node, with or
+      // without its heads channel, plus classic automerge sync between tabs
+      // over a BroadcastChannel.
+      const storage = new IndexedDBStorageAdapter();
+      const signer = await loadOrCreateSigner(storage);
+      ownPeerId = signer.peerId().toString();
+      repo = new Repo({
+        signer,
+        storage,
+        peerId: `bench-tab-${crypto.randomUUID()}` as PeerId,
+        subductionRemote: getSyncRemote(),
+        subductionSaveThrottle: saveThrottle,
+        headsChannel: headsChannel ? "bench-heads" : undefined,
+        network: tabBroadcast
+          ? [new BroadcastChannelNetworkAdapter({ channelName: "bench-tabs" })]
+          : [],
+        enableRemoteHeadsGossiping: true,
+      });
+    }
   } else {
     const storage = storageAdapter();
     const signer = sharedSigner
@@ -476,6 +508,17 @@ const repo = await build();
 if (repo) window.repo = repo;
 mark("ready");
 document.body.textContent = `${mode}: ready in ${Math.round(marks.ready - marks.start)}ms`;
+// `?open=<automerge url>`: what a tab opened on a document does first. Marks
+// `doc` (from navigation start) once the document is in hand.
+if (repo && params.has("open")) {
+  void find(params.get("open")!).then(
+    ({ attempts }) => {
+      mark("doc");
+      marks.docAttempts = attempts;
+    },
+    (error) => console.error("[open]", error)
+  );
+}
 if (params.has("ui")) await import("./playground.js");
 
 declare global {

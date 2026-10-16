@@ -76,11 +76,20 @@ export function probeServerPeer(browser: Browser): Promise<string> {
 export async function openTab(
   context: BrowserContext,
   mode: Mode,
-  { server, storage }: { server?: string; storage?: Storage } = {}
+  {
+    server,
+    storage,
+    open,
+  }: { server?: string; storage?: Storage; open?: string } = {}
 ): Promise<Page> {
   const query = new URLSearchParams({ mode });
+  // Extra page options for every tab, e.g. BENCH_QUERY="heads=0&bc=1".
+  for (const [key, value] of new URLSearchParams(process.env.BENCH_QUERY ?? "")) {
+    query.set(key, value);
+  }
   if (server !== undefined) query.set("server", server);
   if (storage !== undefined) query.set("storage", storage);
+  if (open !== undefined) query.set("open", open);
   if (server !== "none") {
     query.set("serverPeer", await probeServerPeer(context.browser()!));
   }
