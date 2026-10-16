@@ -2,14 +2,20 @@ import {
   type AutomergeUrl,
   type DocHandle,
   isValidAutomergeUrl,
+  parseAutomergeUrl,
   type Repo,
+  stringifyAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
 import {
   importPackageFromFolderDocUrl,
   importPackageFromHttpUrl,
 } from "./packages.js";
-import { getType, type HasPatchworkMetadata } from "./metadata.js";
-import { BranchesDoc, FolderDoc } from "./types.js";
+import { type HasPatchworkMetadata } from "./metadata.js";
+import {
+  DEFAULT_BRANCH,
+  trackPackagesInRepo,
+  type PackageTracker,
+} from "./package-tracker.js";
 import debug from "debug";
 
 const log = debug("patchwork:modules");
@@ -20,17 +26,17 @@ export type ModuleSettingsDoc = {
     "@patchwork": { type: "patchwork:module-settings" };
   };
 
-// A single pushwork sync commits a burst of changes to a folder doc — the
+// A single pushwork sync commits a burst of changes to a package's doc — the
 // file-list write, an optional pin refresh, and a trailing `lastSyncAt` stamp —
 // and the file docs it references sync as independent documents. Coalesce that
-// burst into one reload by waiting for the folder doc's heads to stop moving
+// burst into one reload by waiting for the package doc's heads to stop moving
 // for this long before re-importing, so we pin to the settled, consistent
 // snapshot instead of an intermediate one.
 const RELOAD_DEBOUNCE_MS = 250;
 
 // A package can fail to import just because the automerge worker serving its
 // files is still coming up. Nothing else brings it back — setDocWatcher only
-// fires when the folder doc's own heads move — so back off and try again.
+// fires when the package doc's own heads move — so back off and try again.
 const RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 20_000];
 
 function getDocumentBaseUrl(): string {
@@ -71,12 +77,22 @@ async function fetchModuleManifest(url: string): Promise<ModuleSettingsDoc> {
 }
 
 type WatchedModule = {
-  handle?: DocHandle<FolderDoc>;
-  listener?: () => void;
+  /** The package doc being watched: a branches doc's is its default branch. */
+  packageUrl: AutomergeUrl;
+  unwatch: () => void;
+  onChange: () => void;
   timer?: ReturnType<typeof setTimeout>;
+  /** The url at heads this watch takes to be current. */
+  version?: string;
+  /** The first lookup only sets `version`, rather than reloading. */
+  baseline: boolean;
+  /** Bumped per lookup, so only the newest one's answer is acted on. */
+  lookups: number;
 };
 
-const DEFAULT_BRANCH = "default";
+/** The url of the document `url` names, without heads. */
+const stripHeads = (url: AutomergeUrl) =>
+  stringifyAutomergeUrl({ documentId: parseAutomergeUrl(url).documentId });
 
 function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
   console.warn(
@@ -92,8 +108,8 @@ function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
  * source URL may be either an Automerge module-settings doc (`automerge:...`,
  * live-reloaded) or an HTTP(S) URL to a static JSON manifest of the same shape
  * (fetched once at construction). The two kinds can be freely mixed, and the
- * module URLs *within* either kind can themselves point at Automerge folder
- * docs or plain HTTP(S) bundles.
+ * module URLs *within* either kind can themselves point at Automerge package
+ * docs (folders or directories) or plain HTTP(S) bundles.
  */
 export class ModuleWatcher {
   repo: Repo;
@@ -115,13 +131,20 @@ export class ModuleWatcher {
   onLoad: (name: string, mod: any) => void;
   onUnload?: (name: string) => void;
   /**
-   * How an Automerge folder-doc module (pinned to heads) is turned into the
+   * How an Automerge package doc (pinned to heads) is turned into the
    * `{ plugins }` shape `onLoad` consumes. Defaults to importing the package
    * entry point directly on this thread. The browser bootloader overrides this
    * to run the entry point in a worker for descriptor discovery and rebuild the
    * `{ plugins }` shape with main-thread `load()` functions.
    */
   importAutomergePackage: (urlAtHeads: string) => Promise<any>;
+  /**
+   * How a package's doc is looked up at its latest heads and watched for new
+   * ones. Defaults to holding each package doc in `repo`. The browser setup
+   * passes {@link trackPackagesViaServiceWorker} instead, so package docs stay
+   * out of this thread's memory.
+   */
+  tracker: PackageTracker;
 
   constructor(
     repo: Repo,
@@ -129,13 +152,15 @@ export class ModuleWatcher {
     callback: (name: string, mod: any) => void,
     onUnload?: (name: string) => void,
     importAutomergePackage: (urlAtHeads: string) => Promise<any> = (url) =>
-      importPackageFromFolderDocUrl(url as AutomergeUrl)
+      importPackageFromFolderDocUrl(url as AutomergeUrl),
+    tracker: PackageTracker = trackPackagesInRepo(repo)
   ) {
     this.repo = repo;
     this.urls = { ...urls };
     this.onLoad = callback;
     this.onUnload = onUnload;
     this.importAutomergePackage = importAutomergePackage;
+    this.tracker = tracker;
     this.doneLoading = this.init();
   }
 
@@ -209,30 +234,17 @@ export class ModuleWatcher {
 
   private async processModuleEntry(importName: string) {
     if (isValidAutomergeUrl(importName)) {
-      const handle =
-        await this.repo.find<Partial<HasPatchworkMetadata>>(importName);
-      if (getType(handle.doc()) === "branches") {
-        warnBranchesUnsupported(importName);
-        const branchesDoc = (handle as unknown as DocHandle<BranchesDoc>).doc();
-        const folderUrl = branchesDoc?.branches?.[DEFAULT_BRANCH];
-        if (!folderUrl) {
-          console.warn(
-            `branch "${DEFAULT_BRANCH}" not found in branches doc ${importName}`
-          );
-          return;
-        }
-        // Keyed by the branches doc URL — that's the settings entry, so
-        // removing it from settings unloads this module.
-        await this.watchAndAnnounce(
-          importName,
-          await this.repo.find<FolderDoc>(folderUrl)
-        );
-        return;
-      }
-      await this.watchAndAnnounce(
-        importName,
-        handle as unknown as DocHandle<FolderDoc>
-      );
+      // Watch before looking up, so a change landing in between still reloads.
+      // Keyed by the settings entry, a branches doc's included, so removing
+      // it from settings unloads this module.
+      const entry = this.watchPackage(importName, stripHeads(importName));
+      if (!entry) return;
+      const latest = await this.findLatestVersion(importName, entry);
+      // A newer lookup took over, and announces what it finds.
+      if (!latest) return;
+      entry.version = latest;
+      if (this.#lastAnnounced.get(importName) === latest) return;
+      await this.announce(latest, importName, latest);
       return;
     }
     this.setDocWatcher(importName);
@@ -240,28 +252,14 @@ export class ModuleWatcher {
     await this.announce(importName);
   }
 
-  // Pin heads once so the watcher's change baseline and the announced import
-  // come from the same snapshot — a change landing between two separate finds
-  // would otherwise be lost until the next change.
-  private async watchAndAnnounce(
-    importName: AutomergeUrl,
-    handle: DocHandle<FolderDoc>
-  ) {
-    const heads = handle.heads();
-    const headsKey = heads.join(",");
-    this.setDocWatcher(importName, handle, headsKey);
-    if (this.#lastAnnounced.get(importName) === headsKey) return;
-    await this.announce(handle.view(heads).url, importName, headsKey);
-  }
-
   private async importPackageSafe(importName: string): Promise<any> {
     try {
       if (isValidAutomergeUrl(importName)) {
         // Pin to heads so descriptor discovery and any later main-thread load
-        // resolve against the exact same version of the folder doc.
-        const handle = await this.repo.find(importName as AutomergeUrl);
-        const urlAtHeads = handle.view(handle.heads()).url;
-        return await this.importAutomergePackage(urlAtHeads);
+        // resolve against the exact same version of the package doc.
+        return await this.importAutomergePackage(
+          await this.tracker.findLatest(importName)
+        );
       }
       return await importPackageFromHttpUrl(importName);
     } catch (error) {
@@ -335,94 +333,102 @@ export class ModuleWatcher {
   // TODO: This is a bit janky and relies on a bunch of heuristics.
   // It would be better to watch all the files in the folder recursively
   // and to have some relationship with those other than just parsing the URL.
-  private setDocWatcher(
-    importName: string,
-    handle?: DocHandle<FolderDoc>,
-    headsKey?: string
-  ) {
-    if (this.#disposed) return;
-    if (this.#watchedModules.has(importName)) return;
-    const entry: WatchedModule = {};
-    this.#watchedModules.set(importName, entry);
-
-    if (handle) {
-      this.attachDocWatcher(
-        importName,
-        entry,
-        handle,
-        headsKey ?? handle.heads().join(",")
-      );
-      return;
-    }
-
+  private setDocWatcher(importName: string) {
     // Service-worker module URLs look like `origin/automerge%3A<id>/…` (the
     // encoded automerge URL as the first path segment).
     const encodedId = importName.match(/\/automerge%3A([^/]+)\//i)?.[1];
     const docUrl = encodedId && `automerge:${decodeURIComponent(encodedId)}`;
     if (!docUrl || !isValidAutomergeUrl(docUrl)) return;
-
-    this.repo
-      .find<FolderDoc>(docUrl)
-      .then((found) => {
-        if (this.#watchedModules.get(importName) !== entry) return;
-        this.attachDocWatcher(
-          importName,
-          entry,
-          found,
-          found.heads().join(",")
-        );
-      })
-      .catch((error) => {
-        console.warn(
-          `could not watch ${docUrl} for ${importName}; will retry on next load`,
-          error
-        );
-        if (this.#watchedModules.get(importName) === entry) {
-          this.#watchedModules.delete(importName);
-        }
-      });
+    this.watchPackage(importName, stripHeads(docUrl), true);
   }
 
-  private attachDocWatcher(
+  /**
+   * Reload `importName` when the package doc at `packageUrl` moves to new
+   * heads, debounced to the trailing edge so a push's burst of changes
+   * collapses into one import at the settled heads. This reacts to real
+   * content changes (including offline `save`, which never stamps
+   * lastSyncAt) rather than a magic timestamp field. With `baseline`, the
+   * current version is looked up now, and only what comes after it reloads.
+   */
+  private watchPackage(
     importName: string,
-    entry: WatchedModule,
-    handle: DocHandle<FolderDoc>,
-    initialHeadsKey: string
-  ) {
-    // Reload when the folder doc's heads actually change, debounced to the
-    // trailing edge so a push's burst of changes collapses into one import at
-    // the settled heads. This reacts to real content changes (including
-    // offline `save`, which never stamps lastSyncAt) rather than a magic
-    // timestamp field.
-    let importedHeads = initialHeadsKey;
-    const listener = () => {
-      if (handle.heads().join(",") === importedHeads) return;
+    packageUrl: AutomergeUrl,
+    baseline = false
+  ): WatchedModule | undefined {
+    if (this.#disposed) return undefined;
+    const watched = this.#watchedModules.get(importName);
+    if (watched) return watched;
+    const onChange = () => {
       if (entry.timer) clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
         entry.timer = undefined;
-        const heads = handle.heads();
-        const key = heads.join(",");
-        if (key === importedHeads) return;
-        importedHeads = key;
-        const versionedImport = handle.view(heads).url;
-        log(`change in ${importName}, reloading at ${versionedImport}`);
-        // Keyed by the stable importName so this reload supersedes any
-        // still-retrying announce of an older version of the same module.
-        this.announce(versionedImport, importName, key);
+        void this.reloadIfMoved(importName, entry);
       }, RELOAD_DEBOUNCE_MS);
     };
-    entry.handle = handle;
-    entry.listener = listener;
-    handle.on("change", listener);
+    const entry: WatchedModule = {
+      packageUrl,
+      onChange,
+      unwatch: this.tracker.watch(packageUrl, onChange),
+      baseline,
+      lookups: 0,
+    };
+    this.#watchedModules.set(importName, entry);
+    if (baseline) void this.reloadIfMoved(importName, entry);
+    return entry;
+  }
+
+  /**
+   * Look up the module's latest version, unless a later lookup for it starts
+   * meanwhile or it's unloaded. A branches doc is looked up through, since its
+   * default branch may have been pointed somewhere else, and the watch moves
+   * to whichever doc it names.
+   */
+  private async findLatestVersion(
+    importName: string,
+    entry: WatchedModule
+  ): Promise<AutomergeUrl | undefined> {
+    const lookup = ++entry.lookups;
+    const latest = await this.tracker.findLatest(
+      isValidAutomergeUrl(importName) ? importName : entry.packageUrl
+    );
+    if (this.#watchedModules.get(importName) !== entry) return undefined;
+    if (lookup !== entry.lookups) return undefined;
+    const packageUrl = stripHeads(latest);
+    if (packageUrl !== entry.packageUrl) {
+      warnBranchesUnsupported(importName as AutomergeUrl);
+      entry.unwatch();
+      entry.packageUrl = packageUrl;
+      entry.unwatch = this.tracker.watch(packageUrl, entry.onChange);
+    }
+    return latest;
+  }
+
+  private async reloadIfMoved(importName: string, entry: WatchedModule) {
+    let latest: AutomergeUrl | undefined;
+    try {
+      latest = await this.findLatestVersion(importName, entry);
+    } catch (error) {
+      console.warn(`couldn't look up the heads of ${importName}`, error);
+      return;
+    }
+    if (!latest || latest === entry.version) return;
+    entry.version = latest;
+    if (entry.baseline) {
+      entry.baseline = false;
+      return;
+    }
+    if (this.#lastAnnounced.get(importName) === latest) return;
+    log(`change in ${importName}, reloading at ${latest}`);
+    // Keyed by the stable importName so this reload supersedes any
+    // still-retrying announce of an older version of the same module.
+    void this.announce(latest, importName, latest);
   }
 
   private detachDocWatcher(importName: string) {
     const watched = this.#watchedModules.get(importName);
     if (!watched) return;
     if (watched.timer) clearTimeout(watched.timer);
-    if (watched.handle && watched.listener) {
-      watched.handle.off("change", watched.listener);
-    }
+    watched.unwatch();
     this.#watchedModules.delete(importName);
   }
 

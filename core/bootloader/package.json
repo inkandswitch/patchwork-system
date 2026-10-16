@@ -10,6 +10,7 @@
   "type": "module",
   "license": "MIT",
   "devDependencies": {
+    "vitest": "^3.2.6",
     "esbuild": "^0.23.1",
     "rollup": "^4.61.1"
   },
@@ -104,6 +105,7 @@
   },
   "scripts": {
     "build": "tsc && cp src/global.css dist/global.css",
+    "test": "vitest run",
     "dev": "tsc -w --preserveWatchOutput"
   }
 }

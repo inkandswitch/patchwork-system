@@ -1,12 +1,19 @@
 import type {
+  NewBuildInfo,
   SetupServiceWorkerOptions,
   SetupServiceWorkerResult,
 } from "./types.js";
+import { buildId, isNewerBuild } from "./build-id.js";
+import { promptForNewBuild } from "./new-build-prompt.js";
 import {
   readClassicSyncServer,
   DEFAULT_CLASSIC_SYNC_SERVER,
 } from "./sync-config.js";
 import debug from "debug";
+import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import { PortSyncRemote, getSedimentreeId } from "./sync-remote.js";
+import type { SyncConnectMessage } from "./sync-protocol.js";
+export { relayKeyhive, type PortSyncRemote } from "./sync-remote.js";
 import {
   forwardWorkerConsole,
   lifecycleLog,
@@ -56,11 +63,42 @@ function installServiceWorkerLogForwarding(): void {
   });
 }
 
+// ── New builds ─────────────────────────────────────────────────────────
+// After a deploy, open tabs are on the old build. The default response is to
+// say so and offer a reload, rather than reload out from under someone
+// mid-edit; an old page sharing IndexedDB with the new automerge worker is
+// still where storage-format changes bite, so it shouldn't stay that way long.
+
+let onNewBuild: ((info: NewBuildInfo) => void) | undefined;
+
+function newBuild(info: NewBuildInfo): void {
+  lifecycleLog("new build detected via %s", info.source);
+  (onNewBuild ?? promptForNewBuild)(info);
+}
+
+/**
+ * The build a service worker was compiled from, or undefined if it doesn't
+ * say (one from before this existed) within a couple of seconds.
+ */
+function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
+  const { port1, port2 } = new MessageChannel();
+  return new Promise<number | undefined>((resolve) => {
+    const timeout = setTimeout(() => resolve(undefined), 2_000);
+    port1.onmessage = (event) => {
+      clearTimeout(timeout);
+      resolve(
+        typeof event.data?.build === "number" ? event.data.build : undefined
+      );
+    };
+    sw.postMessage({ type: "build" }, [port2]);
+  }).finally(() => port1.close());
+}
+
 // ── The automerge worker ───────────────────────────────────────────────
 // A SharedWorker holding the Repo that resolves `automerge:` URLs for the
-// service worker. Tabs don't sync through it — each tab is its own node — but
-// each tab keeps it alive and heartbeats it, so it's here rather than in the
-// service worker, which can't own one.
+// service worker, and the sync node every tab's Repo syncs through. Each tab
+// keeps it alive and heartbeats it, so it's here rather than in the service
+// worker, which can't own one.
 
 let automergeProtocolHandlerWorkerPath =
   "/automerge-protocol-handler-worker.js";
@@ -73,11 +111,66 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
     onMessage(event) {
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
     },
+    onRestarting(message) {
+      // Ask the replacement for a sync port now: posts are held until it's
+      // up, and this one's sync node is going away with it.
+      syncRemote?.reconnect();
+      // The worker restarts because a newer tab connected. If that build is
+      // newer than ours too, we're the stale one.
+      if (isNewerBuild(message.build)) {
+        newBuild({
+          source: "shared-worker",
+          build: message.build,
+          current: buildId,
+        });
+      }
+    },
   }
 );
 
 export function getAutomergeProtocolHandlerWorker(): SharedWorker {
   return automergeProtocolHandlerWorker.get();
+}
+
+let syncRemote: PortSyncRemote | undefined;
+
+/**
+ * This tab's connection to the sync node in the automerge worker, to pass to
+ * its Repo as `subductionRemote`. One per tab: it follows the worker across
+ * restarts.
+ */
+export function getSyncRemote(): PortSyncRemote {
+  syncRemote ??= new PortSyncRemote(() => {
+    const { port1, port2 } = new MessageChannel();
+    automergeProtocolHandlerWorker.post(
+      { type: "sync-connect" } satisfies SyncConnectMessage,
+      [port2]
+    );
+    return port1;
+  });
+  return syncRemote;
+}
+
+/**
+ * Call `onChange` whenever the document at `url` may have new heads, until the
+ * returned function is called. Nothing is loaded for it: the sync node keeps
+ * the document subscribed with the server and says when something arrives for
+ * it, whether from the server or from another tab. That's the way to follow a
+ * document whose contents you only need now and then; find it again when
+ * `onChange` fires.
+ */
+export function watchDocument(
+  url: AutomergeUrl,
+  onChange: () => void
+): () => void {
+  return getSyncRemote().watch(getSedimentreeId(url), onChange);
+}
+
+/** Dev escape hatch: make the shared worker close so the next use respawns it. */
+export function restartAutomergeProtocolHandlerWorker(
+  reason = "restartAutomergeProtocolHandlerWorker() called"
+): void {
+  automergeProtocolHandlerWorker.restart(reason);
 }
 
 export function connectClassicSync(
@@ -136,6 +229,7 @@ export default async function setupServiceWorker(
   // activate markers are rendered here.
   installServiceWorkerLogForwarding();
   localStorage.removeItem(CACHE_VERSION_KEY);
+  onNewBuild = options?.onNewBuild;
 
   // Cache growth can otherwise trip origin-wide eviction, which would take the
   // Automerge IndexedDB — the user's documents — with it. Chrome/Safari decide
@@ -172,9 +266,18 @@ export default async function setupServiceWorker(
   }
 
   // A replacement worker boots with the default cache name, so reconfigure
-  // whenever a new one takes control.
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    configureServiceWorker(navigator.serviceWorker.controller);
+  // whenever a new one takes control. A new one taking control is also how a
+  // deploy shows up: the service worker skipWaiting()s and claims every open
+  // tab. But it also claims the tab whose load installed it, which is already
+  // on the new build, so only a worker from a newer build than ours counts.
+  navigator.serviceWorker.addEventListener("controllerchange", async () => {
+    const controller = navigator.serviceWorker.controller;
+    configureServiceWorker(controller);
+    if (!controller) return;
+    const build = await serviceWorkerBuild(controller);
+    if (isNewerBuild(build)) {
+      newBuild({ source: "service-worker", build, current: buildId });
+    }
   });
 
   console.log(
@@ -186,3 +289,5 @@ export default async function setupServiceWorker(
 }
 
 (window as any).bumpServiceWorkerCache = bumpServiceWorkerCache;
+(window as any).restartAutomergeProtocolHandlerWorker =
+  restartAutomergeProtocolHandlerWorker;

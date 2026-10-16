@@ -3,6 +3,11 @@ import type { Repo } from "@automerge/automerge-repo/slim";
 import { Repo as AutomergeRepo, type PeerId } from "@automerge/automerge-repo";
 import { ModuleWatcher } from "../src/module-watcher.js";
 import { importPackageFromHttpUrl } from "../src/packages.js";
+import {
+  fetchLatestViaServiceWorker,
+  trackPackagesInRepo,
+  type PackageTracker,
+} from "../src/package-tracker.js";
 
 /**
  * These tests exercise the static-HTTP-manifest source support added to
@@ -384,6 +389,210 @@ describe("ModuleWatcher module lifecycle", () => {
     } finally {
       await repo.shutdown().catch(() => {});
     }
+  });
+});
+
+describe("ModuleWatcher package trackers", () => {
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /**
+   * A PackageTracker the way the browser's works: the watcher only ever sees
+   * urls at heads and change calls, and the package docs live in a Repo of
+   * their own, standing in for the automerge worker's.
+   */
+  function trackElsewhere(repo: InstanceType<typeof AutomergeRepo>) {
+    const lookups: string[] = [];
+    const watching = new Map<string, () => void>();
+    const real = trackPackagesInRepo(repo);
+    const tracker: PackageTracker = {
+      async findLatest(url) {
+        lookups.push(url);
+        return real.findLatest(url);
+      },
+      watch(url, onChange) {
+        watching.set(url, onChange);
+        return () => watching.delete(url);
+      },
+    };
+    return { tracker, lookups, watching };
+  }
+
+  it("reloads a module when its tracker says the package moved", async () => {
+    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
+    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    try {
+      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
+      const settings = tab.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [folder.url],
+      });
+      const { tracker, watching } = trackElsewhere(folders);
+      const imported: string[] = [];
+      const watcher = new ModuleWatcher(
+        tab,
+        { system: settings.url },
+        () => {},
+        undefined,
+        async (url) => {
+          imported.push(url);
+          return { plugins: [] };
+        },
+        tracker
+      );
+      await watcher.doneLoading;
+      expect(imported).toEqual([folder.view(folder.heads()).url]);
+      // Only the settings doc was ever loaded on the watcher's side.
+      expect(Object.keys(tab.handles)).toEqual([settings.documentId]);
+
+      folder.change((d: any) => {
+        d.rev = 1;
+      });
+      watching.get(folder.url)!();
+      await pause(400);
+      expect(imported).toEqual([
+        imported[0],
+        folder.view(folder.heads()).url,
+      ]);
+
+      // A call with nothing new behind it costs a lookup, not an import.
+      watching.get(folder.url)!();
+      await pause(400);
+      expect(imported).toHaveLength(2);
+
+      watcher.dispose();
+      expect(watching.size).toBe(0);
+    } finally {
+      await Promise.all([folders.shutdown(), tab.shutdown()]).catch(() => {});
+    }
+  });
+
+  it("reloads for a change that lands while the first lookup is in flight", async () => {
+    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
+    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    try {
+      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
+      const settings = tab.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [folder.url],
+      });
+      const { tracker, watching } = trackElsewhere(folders);
+      const realFindLatest = tracker.findLatest;
+      let first = true;
+      tracker.findLatest = async (url) => {
+        const latest = await realFindLatest(url);
+        if (first) {
+          // The lookup has its answer; the package moves before it's back.
+          first = false;
+          folder.change((d: any) => {
+            d.rev = 1;
+          });
+          watching.get(folder.url)!();
+        }
+        return latest;
+      };
+      const imported: string[] = [];
+      const watcher = new ModuleWatcher(
+        tab,
+        { system: settings.url },
+        () => {},
+        undefined,
+        async (url) => {
+          imported.push(url);
+          return { plugins: [] };
+        },
+        tracker
+      );
+      await watcher.doneLoading;
+      await pause(400);
+      expect(imported.at(-1)).toBe(folder.view(folder.heads()).url);
+      watcher.dispose();
+    } finally {
+      await Promise.all([folders.shutdown(), tab.shutdown()]).catch(() => {});
+    }
+  });
+
+  it("watches a branches doc's default branch, and looks up through the branches doc", async () => {
+    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
+    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
+      const branches = folders.create<any>({
+        "@patchwork": { type: "branches" },
+        branches: { default: folder.url },
+      });
+      const settings = tab.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [branches.url],
+      });
+      const { tracker, lookups, watching } = trackElsewhere(folders);
+      const imported: string[] = [];
+      const watcher = new ModuleWatcher(
+        tab,
+        { system: settings.url },
+        () => {},
+        undefined,
+        async (url) => {
+          imported.push(url);
+          return { plugins: [] };
+        },
+        tracker
+      );
+      await watcher.doneLoading;
+      expect(imported).toEqual([folder.view(folder.heads()).url]);
+      expect([...watching.keys()]).toEqual([folder.url]);
+      expect(warn).toHaveBeenCalled();
+
+      folder.change((d: any) => {
+        d.rev = 1;
+      });
+      watching.get(folder.url)!();
+      await pause(400);
+      // The watch began from a lookup of the branches doc; the reload looks it
+      // up again rather than the folder, in case the branch moved.
+      expect(lookups.filter((url) => url === branches.url)).toHaveLength(2);
+      expect(imported.at(-1)).toBe(folder.view(folder.heads()).url);
+      watcher.dispose();
+    } finally {
+      warn.mockRestore();
+      await Promise.all([folders.shutdown(), tab.shutdown()]).catch(() => {});
+    }
+  });
+
+  it("finds the latest version through the service worker's redirect", async () => {
+    const repo = new AutomergeRepo({ peerId: "latest" as PeerId });
+    const doc = repo.create<any>({ rev: 0 });
+    const withoutHeads = doc.url;
+    const atHeads = doc.view(doc.heads()).url;
+    await repo.shutdown();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL) => {
+        expect(String(input)).toBe(
+          `http://example.test/${encodeURIComponent(withoutHeads)}/package.json`
+        );
+        return {
+          status: 200,
+          url: `http://example.test/${encodeURIComponent(atHeads)}/package.json`,
+        } as Response;
+      })
+    );
+    vi.stubGlobal("location", { origin: "http://example.test" });
+    expect(await fetchLatestViaServiceWorker(withoutHeads)).toBe(atHeads);
+    // Already at heads: nothing to ask.
+    expect(await fetchLatestViaServiceWorker(atHeads)).toBe(atHeads);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("says so when the service worker didn't redirect", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL) => ({ status: 404, url: String(input) }))
+    );
+    vi.stubGlobal("location", { origin: "http://example.test" });
+    await expect(fetchLatestViaServiceWorker(AUTOMERGE_URL)).rejects.toThrow(
+      /didn't redirect/
+    );
   });
 });
 

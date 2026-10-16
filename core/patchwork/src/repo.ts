@@ -1,6 +1,10 @@
 import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
+import {
+  getSyncRemote,
+  relayKeyhive,
+} from "@inkandswitch/patchwork-bootloader";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import type {
   AutomergeRepoKeyhive,
@@ -42,6 +46,11 @@ export function initWasm(): Promise<void> {
   return wasmReady;
 }
 
+// A tab tells the sync node about an edit only once it has saved it, so the
+// save throttle (automerge-repo's default is 100ms) is on the path from an
+// edit to the other tabs and the server.
+const SAVE_THROTTLE_MS = 20;
+
 export type TabRepo = {
   repo: Repo;
   hive?: AutomergeRepoKeyhive;
@@ -49,10 +58,11 @@ export type TabRepo = {
 };
 
 /**
- * The tab's own node: this origin's IndexedDB, opened on this thread, a socket
- * to the sync server, and the storage channel to every other Repo on the
- * origin. Nothing is shared with other tabs except the database underneath
- * and the identity every node on the origin signs with.
+ * The tab's own Repo: this origin's IndexedDB, opened on this thread, and the
+ * storage channel to every other Repo on the origin. It has no connection of
+ * its own; it syncs through the sync node in the automerge worker, which holds
+ * the origin's one socket to the sync server. Every Repo on the origin signs
+ * as the same identity.
  */
 export async function createRepo(): Promise<TabRepo> {
   if (syncServer.keyhive) {
@@ -60,14 +70,18 @@ export async function createRepo(): Promise<TabRepo> {
     const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
       await import("@automerge/automerge-repo-keyhive");
     initKeyhiveWasm();
+    const remote = getSyncRemote();
     const { hive, repo } = await initializeAutomergeRepoKeyhive({
       // ARK injects an `idFactory` deriving document ids from keyhive. A site
       // can opt out of it with `keyhive: { useIdFactory: false }`.
       createRepo: ({ idFactory, ...repoConfig }) =>
-        new Repo(
-          syncServer.useIdFactory === false
-            ? repoConfig
-            : { ...repoConfig, idFactory }
+        relayKeyhive(
+          new Repo(
+            syncServer.useIdFactory === false
+              ? repoConfig
+              : { ...repoConfig, idFactory }
+          ),
+          remote
         ),
       storage: new IndexedDBStorageAdapter(keyhiveStorageName),
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
@@ -77,7 +91,8 @@ export async function createRepo(): Promise<TabRepo> {
       syncServer: syncServer.keyhive,
       repo: {
         storage: new IndexedDBStorageAdapter(),
-        subductionWebsocketEndpoints: [syncServer.url],
+        subductionRemote: remote,
+        subductionSaveThrottle: SAVE_THROTTLE_MS,
         headsChannel: `${storagePrefix}-heads`,
         enableRemoteHeadsGossiping: true,
       },
@@ -96,7 +111,8 @@ export async function createRepo(): Promise<TabRepo> {
     storage,
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
-    subductionWebsocketEndpoints: [syncServer.url],
+    subductionRemote: getSyncRemote(),
+    subductionSaveThrottle: SAVE_THROTTLE_MS,
     headsChannel: `${storagePrefix}-heads`,
     enableRemoteHeadsGossiping: true,
   });

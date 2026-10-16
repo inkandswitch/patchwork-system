@@ -11,6 +11,11 @@ import {
 
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*" };
 
+// One id per build process. buildDefines runs several times in a build (the
+// page's define, dep pre-bundling, each dev worker context) and the page and
+// the shared worker have to agree on it, so it can't be computed per call.
+const DEFAULT_BUILD_ID = Date.now();
+
 /**
  * The build-time constants both the page bundle and the workers are compiled
  * against. Values are already JSON — the shape vite's `define` and esbuild's
@@ -30,12 +35,13 @@ export function buildDefines(
     __STORAGE_PREFIX__: JSON.stringify(
       options.storagePrefix ?? DEFAULT_STORAGE_PREFIX
     ),
+    __BUILD_ID__: JSON.stringify(options.buildId ?? DEFAULT_BUILD_ID),
   };
 }
 
 /**
- * Owns envPrefix, define (__SITE_TITLE__/__STORAGE_PREFIX__/sync-server
- * configuration),
+ * Owns envPrefix, define (__SITE_TITLE__/__STORAGE_PREFIX__/__BUILD_ID__/
+ * sync-server configuration),
  * server/preview CORS defaults, worker format + the wasm plugin, and build
  * defaults (firefox150 target, unminified, sourcemapped) — everything a site
  * used to hand-write in its own vite.config.ts. Each is switched off
