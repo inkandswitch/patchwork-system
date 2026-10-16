@@ -253,6 +253,23 @@ describe("sync node", () => {
     expect(counter.rounds).toBeLessThan(tabs.length);
   });
 
+  it("doesn't write a tab's records a second time", async () => {
+    const server = startServer();
+    const site = origin(server);
+    const tab = site.tab();
+    const handle = tab.create<Doc>({ count: 1 });
+    handle.change((doc) => {
+      doc.count = 2;
+    });
+    await seenElsewhere(server, handle.url, (doc) => doc.count === 2);
+
+    const records = [...site.storage.writes].filter(([key]) =>
+      /\u0000(commits|blobs|fragments|fragment-blobs)\u0000/.test(key)
+    );
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.filter(([, times]) => times > 1)).toEqual([]);
+  });
+
   it("follows the node across a worker restart", async () => {
     const server = startServer();
     const site = origin(server);

@@ -37,6 +37,7 @@ import {
   SubductionStorageBridge,
   WebSocketEndpoint,
   type StorageAdapterInterface,
+  type StorageKey,
   type WebSocketEndpointInterface,
 } from "@automerge/automerge-repo/slim";
 
@@ -84,6 +85,7 @@ export class SyncNode {
   readonly #bridge: SubductionStorageBridge;
   readonly #connections: SubductionConnections;
   readonly #log: (...args: unknown[]) => void;
+  readonly #storagePrefix: string | undefined;
   readonly #clients = new Set<Client>();
   /** Per sedimentree, the tail of the chain of reads-back of Repo writes. */
   readonly #ingesting = new Map<string, Promise<void>>();
@@ -93,6 +95,8 @@ export class SyncNode {
    * the read-back instead, so the Repo that wrote them can be left out.
    */
   readonly #echoes = new Set<string>();
+  /** Per sedimentree, how many reads-back are storing records into it. */
+  readonly #echoing = new Map<string, number>();
   /** Peer deliveries waiting for this microtask's flush, per sedimentree. */
   readonly #outbound = new Map<string, DataRecord[]>();
   readonly #ephemeralSubscribers = new Map<string, number>();
@@ -111,7 +115,11 @@ export class SyncNode {
     log,
   }: SyncNodeOptions) {
     this.#log = log;
-    this.#bridge = new SubductionStorageBridge(storage, storagePrefix);
+    this.#storagePrefix = storagePrefix;
+    this.#bridge = new SubductionStorageBridge(
+      this.#skippingEchoes(storage),
+      storagePrefix
+    );
     this.subduction = new Subduction({
       signer: signer as any,
       storage: this.#bridge,
@@ -449,15 +457,54 @@ export class SyncNode {
 
     const keys = forward.map((record) => `${sid}:${record.id}`);
     for (const key of keys) this.#echoes.add(key);
+    this.#echoing.set(sid, (this.#echoing.get(sid) ?? 0) + 1);
     try {
       await this.subduction.storeBuiltBatch(id, commits, fragments);
       await this.#bridge.awaitSettled([sid]);
     } finally {
       for (const key of keys) this.#echoes.delete(key);
+      const left = this.#echoing.get(sid)! - 1;
+      if (left) this.#echoing.set(sid, left);
+      else this.#echoing.delete(sid);
     }
     // The other Repos holding this document get it now rather than by
     // reloading the whole thing when the writer's heads announcement lands.
     this.#sendToInterested(sid, { type: "data", sid, records: forward }, from);
+  }
+
+  /**
+   * The bridge's storage, minus the writes of records being stored back.
+   * The Repo already wrote them, and this node signs as the same identity
+   * with deterministic signatures, so they'd be the same bytes under the
+   * same keys: what's left of storing back is getting them into this node's
+   * tree, without four sequential writes holding up the round behind it.
+   * The sedimentree's id marker is skipped too while it's being stored back
+   * into, since the Repo's save wrote it first.
+   */
+  #skippingEchoes(storage: StorageAdapterInterface): StorageAdapterInterface {
+    // The bridge's default prefix. Were it ever to drift, nothing would be
+    // skipped, which is only slower.
+    const prefix = this.#storagePrefix ?? "subduction";
+    const echoed = (key: StorageKey) => {
+      if (key[0] !== prefix) return false;
+      if (key.length === 4) return this.#echoes.has(`${key[2]}:${key[3]}`);
+      return key.length === 3 && key[1] === "ids" && this.#echoing.has(key[2]);
+    };
+    return {
+      load: (key) => storage.load(key),
+      loadRange: (prefix) => storage.loadRange(prefix),
+      remove: (key) => storage.remove(key),
+      removeRange: (prefix) => storage.removeRange(prefix),
+      save: async (key, data) => {
+        if (!echoed(key)) await storage.save(key, data);
+      },
+      saveBatch: async (entries) => {
+        const kept = entries.filter(([key]) => !echoed(key));
+        if (kept.length === 0) return;
+        if (storage.saveBatch) await storage.saveBatch(kept);
+        else for (const [key, data] of kept) await storage.save(key, data);
+      },
+    };
   }
 
   #saved(sid: string, kind: RecordKind, id: string, blob: Uint8Array) {

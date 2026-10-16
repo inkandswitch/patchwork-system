@@ -15,16 +15,25 @@ export const SERVICE = "sync.test";
 
 export class MemoryAdapter implements StorageAdapterInterface {
   readonly data = new Map<string, Uint8Array>();
+  /** How many times each key has been written. */
+  readonly writes = new Map<string, number>();
   #key = (key: StorageKey) => key.join("\u0000");
+  #wrote(key: string) {
+    this.writes.set(key, (this.writes.get(key) ?? 0) + 1);
+  }
 
   async load(key: StorageKey) {
     return this.data.get(this.#key(key));
   }
   async save(key: StorageKey, value: Uint8Array) {
     this.data.set(this.#key(key), value);
+    this.#wrote(this.#key(key));
   }
   async saveBatch(entries: Array<[StorageKey, Uint8Array]>) {
-    for (const [key, value] of entries) this.data.set(this.#key(key), value);
+    for (const [key, value] of entries) {
+      this.data.set(this.#key(key), value);
+      this.#wrote(this.#key(key));
+    }
   }
   async remove(key: StorageKey) {
     this.data.delete(this.#key(key));
