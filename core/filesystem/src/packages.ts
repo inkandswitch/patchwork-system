@@ -244,6 +244,61 @@ async function packageJsonContentsFromFolderDocUrl(
   return response.json();
 }
 
+const injectedImportMapScopes = new Set<string>();
+
+/**
+ * If the package at `folderDocUrl` (which should be pinned to heads) ships an
+ * `imports.json` — a plain specifier → URL map, found via the
+ * `"./imports.json"` entry in its `exports` if there is one, otherwise at the
+ * package root — inject it into the document as an import map scoped to the
+ * package's own service-worker path, so bare specifiers inside the package
+ * resolve without affecting anything outside it.
+ */
+export async function injectImportMapForPackage(
+  folderDocUrl: AutomergeUrl,
+  conditions: string[] = defaultImportConditions
+): Promise<void> {
+  if (typeof document === "undefined") return;
+  const base = new URL(
+    getImportableUrlFromAutomergeUrl(folderDocUrl),
+    documentBaseOrigin()
+  );
+  const scope = base.pathname;
+  if (injectedImportMapScopes.has(scope)) return;
+
+  const pkgJson = await packageJsonContentsFromFolderDocUrl(folderDocUrl);
+  let importsPath: string | undefined;
+  if (pkgJson.exports?.["./imports.json"] !== undefined) {
+    try {
+      importsPath = resolve(pkgJson, "./imports.json", { conditions })?.[0];
+    } catch {}
+  }
+  const importsUrl = new URL(importsPath ?? "imports.json", base).href;
+
+  const response = await fetch(importsUrl);
+  if (!response.ok) {
+    if (importsPath) {
+      console.warn(
+        `package ${folderDocUrl} exports "./imports.json" but fetching ${importsUrl} failed: HTTP ${response.status}`
+      );
+    }
+    return;
+  }
+  const imports = await response.json();
+  if (!imports || typeof imports !== "object" || Array.isArray(imports)) {
+    console.warn(`ignoring ${importsUrl}: not a specifier → URL map`);
+    return;
+  }
+
+  if (injectedImportMapScopes.has(scope)) return;
+  injectedImportMapScopes.add(scope);
+  const script = document.createElement("script");
+  script.type = "importmap";
+  script.textContent = JSON.stringify({ scopes: { [scope]: imports } });
+  document.head.append(script);
+  log(`injected importmap scope ${scope}`);
+}
+
 export function resolvePackageExport(
   pkgJson: Record<string, any>,
   subpath: string = ".",
