@@ -46,6 +46,11 @@ export function initWasm(): Promise<void> {
   return wasmReady;
 }
 
+// A tab tells the sync node about an edit only once it has saved it, so the
+// save throttle (automerge-repo's default is 100ms) is on the path from an
+// edit to the other tabs and the server.
+const SAVE_THROTTLE_MS = 20;
+
 export type TabRepo = {
   repo: Repo;
   hive?: AutomergeRepoKeyhive;
@@ -87,6 +92,7 @@ export async function createRepo(): Promise<TabRepo> {
       repo: {
         storage: new IndexedDBStorageAdapter(),
         subductionRemote: remote,
+        subductionSaveThrottle: SAVE_THROTTLE_MS,
         headsChannel: `${storagePrefix}-heads`,
         enableRemoteHeadsGossiping: true,
       },
@@ -106,6 +112,7 @@ export async function createRepo(): Promise<TabRepo> {
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
     subductionRemote: getSyncRemote(),
+    subductionSaveThrottle: SAVE_THROTTLE_MS,
     headsChannel: `${storagePrefix}-heads`,
     enableRemoteHeadsGossiping: true,
   });
