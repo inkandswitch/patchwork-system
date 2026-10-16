@@ -171,7 +171,7 @@ async function buildTabNode(): Promise<Repo> {
         storage,
         peerId: `bench-tab-${crypto.randomUUID()}` as PeerId,
         subductionRemote: getSyncRemote(),
-        subductionSaveThrottle: saveThrottle,
+        subductionSaveThrottle: saveThrottle ?? 20,
         headsChannel: headsChannel ? "bench-heads" : undefined,
         network: tabBroadcast
           ? [new BroadcastChannelNetworkAdapter({ channelName: "bench-tabs" })]
