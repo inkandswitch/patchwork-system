@@ -1,5 +1,42 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.8.2
+
+### Patch Changes
+
+- f515e50: The sync node in the automerge SharedWorker now shares sync rounds between tabs instead of running one per request. Every tab holding a document asks the node for its own rounds, and the node used to run each one against the server, so ten tabs opening the same document meant ten identical rounds queued on the origin's one connection.
+
+  A tab that hasn't written to the document since the running round started now shares that round, so any number of tabs opening a document costs one round. A tab that has written waits for the next round, because the running one read its tree before that write was stored, and every tab that writes meanwhile shares that next round.
+
+- 7ab0d68: A tab no longer keeps every package's doc in memory just to hear when a package changes. The ModuleWatcher used to hold each package's folder or directory doc in the tab's Repo for the life of the page, only to listen for new heads. It now finds a package's latest version by asking the service worker for its url without heads, which the automerge worker redirects to the url at the doc's latest heads (letting go of the doc 5s later, as it does for every request). It hears about new versions from the sync node, which keeps the doc subscribed with the server and says when something arrives for it, without the tab loading it.
+
+  The sync node takes `watch`/`unwatch` for a sedimentree and answers `changed`, with no data, whenever it gets something for it from the server or from a tab's write, the writing tab's watchers included. A watch subscribes the doc with the server if the node hasn't since it started, and again after the connection drops. `PortSyncRemote` gets `watch(sid, onChange)`, which sends its watches again after a worker restart and calls every watcher once, since the doc may have moved while there was no node. `@inkandswitch/patchwork-bootloader` exports this as `watchDocument(url, onChange)`, which returns the function that stops it, and `getSedimentreeId(url)` for the sedimentree id of a document.
+
+  `@inkandswitch/patchwork-filesystem` adds `PackageTracker`, how a ModuleWatcher finds a package's latest version (`findLatest`) and hears there may be a newer one (`watch`), as a new last argument to the `ModuleWatcher` constructor. The default, `trackPackagesInRepo(repo)`, holds the package docs in the Repo as before. `trackPackagesViaServiceWorker(watch)` is the browser one, and patchwork's `setup()` now passes it with `watchDocument`. `fetchLatestViaServiceWorker` and `getDefaultBranch` are exported too.
+
+  A deprecated branches doc in the module settings is now followed to its default branch by the automerge worker, on any url without heads, rather than by the tab.
+
+- 5faaf15: Restart the automerge shared worker, and offer stale tabs a reload, after a deploy.
+
+  A SharedWorker is keyed by url and name, so a tab opened after a deploy used to attach to whichever instance the older tabs were keeping alive: a new page on an old worker, sharing IndexedDB with it. The vite plugin now compiles a `__BUILD_ID__` define (`Date.now()` at build time, or the new `buildId` option) into both the page and the worker. Every tab sends its build id when it connects, and a worker that hears from a newer build announces it is restarting, finishes the handoffs it has in flight, flushes its repo, and closes itself; the tabs respawn it on the new script. The service worker re-broadcasts any handoff that got caught in between.
+
+  The service worker now carries the build id too, so every deploy installs a new one instead of only deploys that touched its code. When it takes control of an open tab, the tab asks it which build it is. A tab older than that build, or older than the one that triggered a worker restart, pops up a small box saying there's an updated patchwork system core, with a button to reload; it doesn't reload on its own, so nobody loses their place mid-edit. `setupServiceWorker({ onNewBuild })` replaces that with your own handling, say `() => location.reload()`. `restartAutomergeProtocolHandlerWorker()` is on `window` as a dev escape hatch, next to `bumpServiceWorkerCache()`.
+
+  Builds with a lower id than the running worker are left alone, so a rollback is a rebuild, not a republish of an old build.
+
+- a676dbb: The sync node now passes a tab's change on to the other tabs holding that document as soon as it has read it back, instead of after storing it into its own tree. The writing tab has already saved the change, so nothing waits on the node's store; with ten tabs open, the other tabs see an edit in roughly half the time.
+- dc36bdd: The sync node no longer writes a tab's records to IndexedDB a second time. When a tab stores a change, the node reads it back to add it to its own tree, and that used to write the same records again — four sequential IndexedDB writes per edit, byte for byte what the tab had just written, holding up the sync round that pushes the edit to the server. The node now skips those writes, which halves the writes per edit and keeps them off the path to the server when the database is busy.
+- 6030e24: Tabs now sync through one Subduction node in the automerge protocol handler SharedWorker instead of each opening its own socket to the sync server. The origin has one connection to the server, however many tabs are open.
+
+  Each tab's Repo still reads and writes the origin's IndexedDB directly; it passes the node a `subductionRemote` (from the new `getSyncRemote()` export of `@inkandswitch/patchwork-bootloader`) in place of `subductionWebsocketEndpoints`. The node reads back the records a tab stored, pushes them, persists what the server sends, and forwards it to the tabs holding that document. The tab follows the node across worker restarts. The worker's own resolver Repo syncs through the node the same way.
+
+  On keyhive sites the node signs as the keyhive identity and stores and forwards the encrypted documents without decrypting them. Each tab's keyhive keeps syncing with the server over the node's connection: `relayKeyhive(repo, remote)` (also new in `@inkandswitch/patchwork-bootloader`) points automerge-repo-keyhive at a relay for keyhive frames.
+
+  The shipped automerge-repo patch adds the `subductionRemote` option to `Repo` (the `SubductionRemote` interface), and exports `SubductionStorageBridge`, `INTERCEPTOR_PREFIX` and `SubductionConnections`.
+
+- Updated dependencies [7ab0d68]
+  - @inkandswitch/patchwork-filesystem@0.2.11
+
 ## 0.8.1
 
 ### Patch Changes
