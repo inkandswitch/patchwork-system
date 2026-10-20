@@ -125,6 +125,81 @@ export interface HandoffOnlineMessage {
 }
 
 /**
+ * The BroadcastChannel tools ask the automerge worker on how much memory a
+ * package's documents take to load. The worker is what loads them, to serve
+ * the package's files, so it measures them where they'd be loaded anyway
+ * rather than in the tab asking. A site whose worker doesn't listen never
+ * answers.
+ *
+ * Like {@link HANDOFF_CHANNEL}, the shapes can only change additively.
+ */
+export const PACKAGE_MEMORY_CHANNEL = "@patchwork/package-memory";
+
+/**
+ * Tool → automerge worker: how much memory does the package at `url` take?
+ *
+ * By default the answer is the package's documents the worker has loaded to
+ * serve its files since it started, each measured as it was loaded. That's
+ * what the package actually costs, and answering loads nothing.
+ *
+ * With `walk`, the worker loads every document in the package to measure it,
+ * fetching any it hasn't stored. That covers files nothing has asked for
+ * (READMEs, lockfiles, images), but it's slow, and loading a document with
+ * one huge change costs the worker that much memory: measuring can itself be
+ * the most expensive thing the worker does.
+ */
+export interface PackageMemoryRequestMessage {
+  id: string;
+  type: "request";
+  /** The package's root doc, at heads or without (for the latest). */
+  url: string;
+  walk?: boolean;
+}
+
+/**
+ * One document in a package. What it costs automerge to load grows faster
+ * than its ops: much faster for one big change than for the same ops spread
+ * over many. A file's text written as a plain string in one change is an op
+ * per character, all in that change; one of 585k characters took ~300 MB of
+ * wasm memory to load, where as an `ImmutableString` it took none.
+ */
+export interface PackageMemoryDocument {
+  url: string;
+  /** Where in the package it is, `""` for the root. */
+  path: string;
+  ops: number;
+  changes: number;
+  /** The ops in its biggest single change. */
+  largestChange: number;
+  /** How a file doc's `content` is stored, and how long it is. */
+  content?: {
+    kind: "text" | "immutable" | "bytes";
+    length: number;
+  };
+  /** Set if it couldn't be found, and the counts are 0. */
+  error?: string;
+}
+
+/**
+ * Automerge worker → tool: the request arrived and is queued behind any
+ * others. Sent straight away, so a tool can tell a worker that can't measure
+ * (it never hears this) from one that's still measuring.
+ */
+export interface PackageMemoryAcceptedMessage {
+  id: string;
+  type: "accepted";
+}
+
+/** Automerge worker → tool: the package's documents, root first. */
+export interface PackageMemoryReplyMessage {
+  id: string;
+  type: "reply";
+  documents: PackageMemoryDocument[];
+  /** Set if the package couldn't be measured; `documents` has what was. */
+  error?: string;
+}
+
+/**
  * Why a tab has decided a newer build of the site is live.
  *
  * - `service-worker`: a replacement service worker took control of this tab,

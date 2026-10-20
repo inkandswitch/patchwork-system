@@ -11,7 +11,12 @@
 // resolve the automerge URL, write the response into the service worker's
 // cache (keyed by a Request reconstructed to match the one it's holding), and
 // reply on the same channel.
-import { initializeWasm, hasHeads } from "@automerge/automerge/slim";
+import {
+  initializeWasm,
+  getChangesMetaSince,
+  hasHeads,
+  stats,
+} from "@automerge/automerge/slim";
 // eslint-disable-next-line
 // @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
 import initSubduction from "@automerge/automerge-subduction/slim";
@@ -19,16 +24,22 @@ import initSubduction from "@automerge/automerge-subduction/slim";
 import {
   INTERCEPTOR_PREFIX,
   Repo,
+  isImmutableString,
   isValidAutomergeUrl,
   parseAutomergeUrl,
   stringifyAutomergeUrl,
+  type AnyDocumentId,
   type AutomergeUrl,
   type DocHandle,
   type DocumentId,
   type PeerId,
   type StorageId,
 } from "@automerge/automerge-repo/slim";
-import { getDefaultBranch, resolvePath } from "@inkandswitch/patchwork-filesystem";
+import {
+  getDefaultBranch,
+  packageDocuments,
+  resolvePath,
+} from "@inkandswitch/patchwork-filesystem";
 
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import { WebSocketWorkerClientAdapter } from "@automerge/automerge-repo-network-websocket";
@@ -46,11 +57,16 @@ import { PortSyncRemote, relayKeyhive } from "./sync-remote.js";
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
+  PACKAGE_MEMORY_CHANNEL,
   type HandoffCachedMessage,
   type HandoffOnlineMessage,
   type HandoffAbortMessage,
   type HandoffRequestMessage,
   type HandoffResponseMessage,
+  type PackageMemoryAcceptedMessage,
+  type PackageMemoryDocument,
+  type PackageMemoryReplyMessage,
+  type PackageMemoryRequestMessage,
 } from "./types.js";
 
 declare const __SYNC_SERVER__: {
@@ -380,6 +396,15 @@ async function resolveAutomergeUrl(
   signal: AbortSignal
 ): Promise<Response> {
   const repo = await getRepo();
+  // What it finds, to record against the package.
+  const found: DocHandle<unknown>[] = [];
+  const find = async <T>(id: AnyDocumentId) => {
+    const handle = await repo.find<T>(id, { signal });
+    found.push(handle as DocHandle<unknown>);
+    return handle;
+  };
+  // `resolvePath` only finds documents.
+  const tracked: Repo = Object.create(repo, { find: { value: find } });
   const [maybeAutomergeUrl, ...path] = automergeURL.href.split("/");
 
   if (!isValidAutomergeUrl(maybeAutomergeUrl)) {
@@ -393,15 +418,16 @@ async function resolveAutomergeUrl(
   // todo, maybe a bad idea? maybe we should throw instead of es-module-caching
   // the headless req
   if (!heads) {
-    let folder = await repo.find(maybeAutomergeUrl, { signal });
+    let folder = await find(maybeAutomergeUrl);
     await caughtUpWithPeers(repo, folder, signal);
     // Packages used to be published as a branches doc, which stands for its
     // default branch. The tab's ModuleWatcher looks packages up through here,
     // so this is where that's followed.
     const branch = getDefaultBranch(folder.doc());
     if (branch) {
-      folder = await repo.find(branch, { signal });
+      folder = await find(branch);
       await caughtUpWithPeers(repo, folder, signal);
+      branchOf.set(documentId, folder.documentId);
     }
     const url = stringifyAutomergeUrl({
       documentId: folder.documentId,
@@ -411,9 +437,7 @@ async function resolveAutomergeUrl(
     return Response.redirect(location, 307);
   }
 
-  const baseHandle = await repo.find(stringifyAutomergeUrl({ documentId }), {
-    signal,
-  });
+  const baseHandle = await find(stringifyAutomergeUrl({ documentId }));
   if (!(await waitForHeads(baseHandle, hexHeads ?? [], signal))) {
     throw new AbortHandoff(
       `heads not found for ${maybeAutomergeUrl} within ${RESOLVE_TIMEOUT_MS}ms`
@@ -421,7 +445,7 @@ async function resolveAutomergeUrl(
   }
 
   const resolved = await resolvePath(
-    repo,
+    tracked,
     baseHandle.view(heads),
     path.map(decodeURIComponent)
   );
@@ -430,6 +454,7 @@ async function resolveAutomergeUrl(
       `couldn't resolve ${path.join("/")} in folder at ${maybeAutomergeUrl}`
     );
   }
+  recordLoaded(documentId, found, path.map(decodeURIComponent).join("/"));
 
   const body: BodyInit =
     resolved.content instanceof Uint8Array
@@ -636,3 +661,220 @@ handoffChannel.addEventListener("message", (event) => {
 void control.holding.then(() =>
   handoffChannel.postMessage({ type: "online" } satisfies HandoffOnlineMessage)
 );
+
+// ── Measuring packages ─────────────────────────────────────────────────
+
+/**
+ * What resolves have loaded of each package, by its root doc: each document
+ * measured when it was loaded (again only if its heads have moved), and the
+ * paths asked for through it.
+ */
+const loadedByPackage = new Map<
+  DocumentId,
+  Map<
+    DocumentId,
+    {
+      heads: string;
+      measured: PackageMemoryDocument;
+      through: Set<string>;
+      /** It's the file a path ended on, not a folder on the way. */
+      file: boolean;
+    }
+  >
+>();
+
+/** Branches docs followed to their default branch, which holds the package. */
+const branchOf = new Map<DocumentId, DocumentId>();
+
+/** `handles` were found in turn resolving `path`: the root first, the file last. */
+function recordLoaded(
+  packageId: DocumentId,
+  handles: DocHandle<unknown>[],
+  path: string
+) {
+  let documents = loadedByPackage.get(packageId);
+  if (!documents) loadedByPackage.set(packageId, (documents = new Map()));
+  handles.forEach((handle, i) => {
+    const heads = handle.heads().join(",");
+    let entry = documents.get(handle.documentId);
+    if (!entry || entry.heads !== heads) {
+      entry = {
+        heads,
+        measured: measureDocument("", handle),
+        through: entry?.through ?? new Set(),
+        file: entry?.file ?? false,
+      };
+      documents.set(handle.documentId, entry);
+    }
+    entry.through.add(path);
+    if (i > 0 && i === handles.length - 1) entry.file = true;
+  });
+}
+
+/** What's been loaded of the package at `url`, root first. */
+function loadedOf(url: string): PackageMemoryDocument[] {
+  if (!isValidAutomergeUrl(url)) return [];
+  const { documentId } = parseAutomergeUrl(url);
+  const packageId = branchOf.get(documentId) ?? documentId;
+  return [...(loadedByPackage.get(packageId) ?? [])].map(([id, entry]) => {
+    const paths = [...entry.through];
+    const path =
+      id === packageId
+        ? ""
+        : entry.file
+          ? paths[0]
+          : sharedDirectory(paths);
+    return { ...entry.measured, path };
+  });
+}
+
+/** The directory every one of `paths` is in. */
+function sharedDirectory(paths: string[]): string {
+  const dirs = paths.map((path) => path.split("/").slice(0, -1));
+  const shared = dirs[0] ?? [];
+  let n = shared.length;
+  for (const dir of dirs) {
+    while (n > 0 && dir.slice(0, n).join("/") !== shared.slice(0, n).join("/")) n--;
+  }
+  return shared.slice(0, n).join("/");
+}
+
+const MEASURE_TIMEOUT_MS = 300_000;
+// Most of a package's documents (READMEs, images) aren't stored here until
+// it's measured, since modules never import them; one that doesn't turn up
+// in this long is reported as unavailable.
+const MEASURE_FIND_TIMEOUT_MS = 15_000;
+const packageMemoryChannel = new BroadcastChannel(PACKAGE_MEMORY_CHANNEL);
+
+// One package at a time, so measuring them all doesn't load them all at once.
+let measuring: Promise<void> = Promise.resolve();
+
+packageMemoryChannel.addEventListener("message", (event) => {
+  const message = event.data as PackageMemoryRequestMessage;
+  // Only one instance answers: the one holding the lock.
+  if (message?.type !== "request" || draining || !holdingLock) return;
+  packageMemoryChannel.postMessage({
+    id: message.id,
+    type: "accepted",
+  } satisfies PackageMemoryAcceptedMessage);
+  if (!message.walk) {
+    packageMemoryChannel.postMessage({
+      id: message.id,
+      type: "reply",
+      documents: loadedOf(message.url),
+    } satisfies PackageMemoryReplyMessage);
+    return;
+  }
+  measuring = measuring.then(() => replyWithPackageMemory(message));
+});
+
+async function replyWithPackageMemory({ id, url }: PackageMemoryRequestMessage) {
+  const documents: PackageMemoryDocument[] = [];
+  let error: string | undefined;
+  // Holds off the eviction of everything loaded, as a handoff does; the
+  // documents measured are let go one at a time instead.
+  handoffStarted();
+  try {
+    await measurePackage(url, (document) => documents.push(document));
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e);
+  } finally {
+    handoffFinished();
+  }
+  packageMemoryChannel.postMessage({
+    id,
+    type: "reply",
+    documents,
+    error,
+  } satisfies PackageMemoryReplyMessage);
+}
+
+/**
+ * Find the package at `url` the way a resolve does, then each of its
+ * documents in turn, letting each go once it's measured unless a resolve is
+ * under way, which may be using it too. What's left goes with the rest once
+ * handoffs stop.
+ */
+async function measurePackage(
+  url: string,
+  found: (document: PackageMemoryDocument) => void
+) {
+  if (!isValidAutomergeUrl(url)) throw new Error(`not an automerge url: ${url}`);
+  const repo = await getRepo();
+  const signal = AbortSignal.timeout(MEASURE_TIMEOUT_MS);
+  const release = async (id: DocumentId) => {
+    // This measurement is the only handoff in flight.
+    if (handoffsInFlight === 1 && repo.handles[id]) {
+      await repo.removeFromCache(id);
+    }
+  };
+  const find = <T>(id: AnyDocumentId) => {
+    return repo.find<T>(id, {
+      signal: AbortSignal.any([
+        signal,
+        AbortSignal.timeout(MEASURE_FIND_TIMEOUT_MS),
+      ]),
+    });
+  };
+  const tracked: Repo = Object.create(repo, { find: { value: find } });
+  const { documentId, heads, hexHeads } = parseAutomergeUrl(url);
+  let root = await find(stringifyAutomergeUrl({ documentId }));
+  if (heads) {
+    if (!(await waitForHeads(root, hexHeads ?? [], signal))) {
+      throw new Error(`heads not found for ${url}`);
+    }
+    root = root.view(heads);
+  } else {
+    await caughtUpWithPeers(repo, root, signal);
+    const branch = getDefaultBranch(root.doc());
+    if (branch) {
+      await release(root.documentId);
+      root = await find(branch);
+      await caughtUpWithPeers(repo, root, signal);
+    }
+  }
+  for await (const document of packageDocuments(tracked, root)) {
+    if ("error" in document) {
+      const { path, url, error } = document;
+      found({
+        url,
+        path,
+        ops: 0,
+        changes: 0,
+        largestChange: 0,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      continue;
+    }
+    found(measureDocument(document.path, document.handle));
+    await release(document.handle.documentId);
+  }
+}
+
+function measureDocument(
+  path: string,
+  handle: DocHandle<unknown>
+): PackageMemoryDocument {
+  const doc = handle.fullDoc();
+  const { numOps, numChanges } = stats(doc);
+  let largestChange = 0;
+  for (const { startOp, maxOp } of getChangesMetaSince(doc, [])) {
+    largestChange = Math.max(largestChange, maxOp - startOp + 1);
+  }
+  const content = (doc as { content?: unknown } | undefined)?.content;
+  return {
+    url: handle.url,
+    path,
+    ops: numOps,
+    changes: numChanges,
+    largestChange,
+    content:
+      typeof content === "string"
+        ? { kind: "text", length: content.length }
+        : isImmutableString(content)
+          ? { kind: "immutable", length: String(content).length }
+          : content instanceof Uint8Array
+            ? { kind: "bytes", length: content.byteLength }
+            : undefined,
+  };
+}
