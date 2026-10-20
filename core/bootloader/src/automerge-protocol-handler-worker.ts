@@ -121,8 +121,10 @@ function getSyncNode(): Promise<SyncNode> {
       (self as any).syncNode = node;
       return node;
     })();
-    syncNodePromise.catch(() => {
+    // Nothing syncs without it: start again from scratch, as a new instance.
+    syncNodePromise.catch((error) => {
       syncNodePromise = null;
+      control.fail("the sync node failed to start", error);
     });
   }
   return syncNodePromise;
@@ -155,10 +157,11 @@ let repoPromise: Promise<Repo> | null = null;
 function getRepo(): Promise<Repo> {
   if (!repoPromise) {
     repoPromise = buildRepo();
-    // Don't cache a rejection (e.g. the wasm fetch failed): clear the slot so
-    // the next caller retries from scratch.
-    repoPromise.catch(() => {
+    // Nothing resolves without it (the wasm fetch failed, say): start again
+    // from scratch, as a new instance.
+    repoPromise.catch((error) => {
       repoPromise = null;
+      control.fail("the resolver's Repo failed to start", error);
     });
   }
   return repoPromise;

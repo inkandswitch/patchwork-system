@@ -39,6 +39,21 @@ export type ClosingMessage = { type: "closing" };
  */
 export type AliveMessage = { type: "alive"; lock: string };
 
+/**
+ * Whether `value` says a wasm instance has trapped: a `WebAssembly.RuntimeError`
+ * (an abort, which is what a panic is in a module built without unwinding, or
+ * running out of memory), or the panic hook's message. After a trap the
+ * instance's memory may be half-changed, so nothing that uses it can be
+ * trusted. A `PanicError` from a module built with unwinding (automerge) isn't
+ * one: its destructors ran, and the instance carries on.
+ */
+export function isWasmTrap(value: unknown): boolean {
+  return (
+    value instanceof WebAssembly.RuntimeError ||
+    (typeof value === "string" && value.includes("panicked at"))
+  );
+}
+
 export function postToPort(port: MessagePort, message: unknown): void {
   try {
     port.postMessage(message);
@@ -80,6 +95,11 @@ export function startWorkerControl(
 ): {
   log: (...args: unknown[]) => void;
   restart: (reason: string) => void;
+  /**
+   * This instance is broken past carrying on: report it, and restart. A wasm
+   * trap anywhere does this by itself, if it's thrown uncaught or logged.
+   */
+  fail: (reason: string, error?: unknown) => void;
   /** Resolves once this instance holds `lock` (straight away without one). */
   holding: Promise<void>;
 } {
@@ -109,6 +129,9 @@ export function startWorkerControl(
     console[level] = (...args: unknown[]) => {
       original(...args);
       forward(level, args);
+      // Code that catches a trap often only logs it.
+      const trap = level === "error" && args.find(isWasmTrap);
+      if (trap) fail("wasm trapped", trap);
     };
   }
 
@@ -118,6 +141,7 @@ export function startWorkerControl(
       `uncaught error: ${e.message}`,
       e.error instanceof Error ? e.error.stack : undefined,
     ]);
+    if (isWasmTrap(e.error)) fail("wasm trapped", e.error);
   });
 
   self.addEventListener("unhandledrejection", (event) => {
@@ -126,20 +150,25 @@ export function startWorkerControl(
       "unhandled rejection:",
       reason instanceof Error ? reason.stack || reason.message : reason,
     ]);
+    if (isWasmTrap(reason)) fail("wasm trapped", reason);
   });
 
   // A SharedWorker is keyed by url + name, so after a deploy a freshly loaded
   // tab attaches to whatever instance older tabs are keeping alive. Closing
   // ourselves is the only way to get the new script running: once the global's
   // closing flag is set, the next `new SharedWorker()` spawns a fresh one.
-  const restart = (reason: string, build?: number) => {
+  const restart = (
+    reason: string,
+    build?: number,
+    { drain = true }: { drain?: boolean } = {}
+  ) => {
     if (restarting) return;
     restarting = { type: "restarting", reason, build, from: buildId };
     console.warn(`[lifecycle] ${name} SharedWorker restarting: ${reason}`);
     for (const port of ports) postToPort(port, restarting);
 
     const drained = (async () => {
-      await handlers.onRestart?.();
+      if (drain) await handlers.onRestart?.();
     })();
     const deadline = new Promise<void>((resolve) =>
       setTimeout(resolve, RESTART_DRAIN_MS)
@@ -152,6 +181,25 @@ export function startWorkerControl(
         for (const port of ports) postToPort(port, closing);
         self.close();
       });
+  };
+
+  // Every failure is reported, so a worker that fails on every start shows up
+  // as one restart after another rather than as nothing.
+  let failed = false;
+  const fail = (reason: string, error?: unknown) => {
+    if (failed) return;
+    failed = true;
+    const detail =
+      error instanceof Error ? error.message : error === undefined ? "" : String(error);
+    console.error(
+      `${name} SharedWorker failed, restarting: ${reason}`,
+      error instanceof Error ? error.stack : detail
+    );
+    // Not drained: finishing work, or saving documents, with an instance
+    // that may be broken could write what's broken to storage.
+    restart(detail ? `${reason}: ${detail}` : reason, undefined, {
+      drain: false,
+    });
   };
 
   self.addEventListener("connect", (event) => {
@@ -234,6 +282,7 @@ export function startWorkerControl(
       if (debugging) console.log(`[${name}]`, ...args);
     },
     restart: (reason) => restart(reason),
+    fail,
     holding,
   };
 }
