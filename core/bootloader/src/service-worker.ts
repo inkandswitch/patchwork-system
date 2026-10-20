@@ -1,7 +1,9 @@
 /// <reference types="service-worker-types" />
 
 import {
+  AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
+  type AutomergeWorkerMissingMessage,
   type HandoffReplyMessage,
   type HandoffRequestMessage,
 } from "./types.js";
@@ -180,6 +182,31 @@ handoffChannel.addEventListener("message", (event) => {
   for (const { message } of stranded) handoffChannel.postMessage(message);
 });
 
+const MISSING_WORKER_NUDGE_MS = 5_000;
+let lastMissingWorkerNudge = 0;
+
+/**
+ * If nothing holds the automerge worker's lock, or is waiting for it (a
+ * replacement that hasn't started yet), there's no worker to answer: ask the
+ * tabs to start one, since only a page can. A worker that's been spawned but
+ * hasn't asked for the lock yet looks the same, which is why this only
+ * nudges, and spawning it again just reattaches to it.
+ */
+async function startWorkerIfMissing() {
+  if (!navigator.locks) return;
+  if (Date.now() - lastMissingWorkerNudge < MISSING_WORKER_NUDGE_MS) return;
+  const { held = [], pending = [] } = await navigator.locks.query();
+  const worker = [...held, ...pending].some(
+    (lock) => lock.name === AUTOMERGE_WORKER_LOCK && lock.mode === "exclusive"
+  );
+  if (worker) return;
+  lastMissingWorkerNudge = Date.now();
+  lifecycle("warn", "no automerge worker; asking tabs to start one");
+  await postToClients({
+    type: "automerge-worker-missing",
+  } satisfies AutomergeWorkerMissingMessage);
+}
+
 /** Signals that respondWith should reject; see {@link HandoffAbortMessage}. */
 class HandoffAborted extends Error {}
 
@@ -206,6 +233,7 @@ async function handoff(
   pendingHandoffs.set(id, { message, resolvers });
   log(`broadcasting handoff request for cache ${cachename}`, message);
   handoffChannel.postMessage(message);
+  void startWorkerIfMissing();
 
   const timeout = setTimeout(() => {
     lifecycle(

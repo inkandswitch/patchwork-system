@@ -7,6 +7,24 @@
 export const HANDOFF_CHANNEL = "@patchwork/handoff";
 
 /**
+ * The Web Lock the automerge worker holds for as long as it lives. The
+ * browser releases it when the instance goes, however it goes, so a
+ * replacement waits for it before starting (two never sync or resolve at
+ * once), tabs waiting on it hear the worker die, and the service worker can
+ * ask whether there's a worker at all.
+ */
+export const AUTOMERGE_WORKER_LOCK = "@patchwork/automerge-worker";
+
+/**
+ * Service worker → tabs: there's no automerge worker (nothing holds or is
+ * waiting for {@link AUTOMERGE_WORKER_LOCK}), so a handoff would go unanswered.
+ * Start one.
+ */
+export interface AutomergeWorkerMissingMessage {
+  type: "automerge-worker-missing";
+}
+
+/**
  * The special URL to resolve, plus enough of the {@link Request} the service
  * worker is holding that the automerge worker can construct one that
  * `cache.match`es it.

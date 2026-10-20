@@ -1,6 +1,10 @@
 import debug from "debug";
 import { buildId } from "./build-id.js";
-import type { ClosingMessage, RestartingMessage } from "./worker-control.js";
+import type {
+  AliveMessage,
+  ClosingMessage,
+  RestartingMessage,
+} from "./worker-control.js";
 
 export const lifecycleLog = debug("patchwork:lifecycle");
 
@@ -20,6 +24,12 @@ export type SharedWorkerHandle = {
   post(message: unknown, transfer?: Transferable[]): void;
   /** Ask the current instance to close itself; the next use spawns a fresh one. */
   restart(reason: string): void;
+  /**
+   * Something outside this tab says there's no instance. Unless this tab has
+   * heard its instance is alive, connect afresh: to the same one if it's
+   * still booting, to a new one if it's gone.
+   */
+  revive(): void;
 };
 
 /**
@@ -27,10 +37,13 @@ export type SharedWorkerHandle = {
  * browser terminates it (which it may, under memory pressure) or it restarts
  * itself because a tab from a newer build connected.
  *
- * Browser termination shows up as `close` on the control port. A self-restart
- * doesn't (Chromium never fires it for a worker that called `self.close()`),
- * so the worker announces it instead: `restarting` when it decides to, and
- * `closing` as its last word, which is when the replacement is spawned.
+ * Browser termination shows up as `close` on the control port, in Chromium.
+ * A self-restart doesn't (Chromium never fires it for a worker that called
+ * `self.close()`), so the worker announces it instead: `restarting` when it
+ * decides to, and `closing` as its last word, which is when the replacement
+ * is spawned. A worker that holds a Web Lock for its lifetime says so
+ * (`alive`), and the tab waits on that lock too: it's released when the
+ * worker goes, however it goes, in any browser.
  */
 export function sharedWorkerHandle(
   name: string,
@@ -41,15 +54,24 @@ export function sharedWorkerHandle(
     onMessage,
     onSpawn,
     onRestarting,
+    onGone,
   }: {
     debugging: boolean;
     onMessage: (event: MessageEvent) => void;
     onSpawn?: (worker: SharedWorker) => void;
     /** The worker announced it's closing to be replaced. */
     onRestarting?: (message: RestartingMessage) => void;
+    /**
+     * An instance went without saying so (its lock was released), and a
+     * replacement has been spawned. Anything else talking to it, on ports of
+     * its own, needs to reconnect.
+     */
+    onGone?: () => void;
   }
 ): SharedWorkerHandle {
   let current: SharedWorker | undefined;
+  // Instances that said they hold their lock, so are known to be running.
+  const alive = new WeakSet<SharedWorker>();
   // Between the current instance's `restarting` and its `closing`, posts
   // would go to a worker that's winding down; hold them for the replacement.
   let held: Array<[unknown, Transferable[]]> | undefined;
@@ -108,6 +130,21 @@ export function sharedWorkerHandle(
         replace(worker);
         return;
       }
+      if (type === "alive") {
+        const { lock } = event.data as AliveMessage;
+        alive.add(worker);
+        // Shared, so every tab waiting is told at once; it can't be granted
+        // while the worker holds the lock exclusively.
+        void navigator.locks?.request(lock, { mode: "shared" }, () => {
+          // A restart's `closing` got here first and replaced it.
+          if (current && current !== worker) return;
+          lifecycleLog("%s SharedWorker is gone, respawning", name);
+          if (current === worker) replace(worker);
+          else get();
+          onGone?.();
+        });
+        return;
+      }
       onMessage(event);
     });
     worker.port.postMessage({ type: "debug", debug: debugging });
@@ -130,6 +167,13 @@ export function sharedWorkerHandle(
       // Only an instance that exists can be restarted; spawning one to kill
       // it would be pointless.
       current?.port.postMessage({ type: "restart", reason });
+    },
+    revive() {
+      if (current && alive.has(current)) return;
+      lifecycleLog("%s SharedWorker missing, connecting afresh", name);
+      if (current) replace(current);
+      else get();
+      onGone?.();
     },
   };
 }

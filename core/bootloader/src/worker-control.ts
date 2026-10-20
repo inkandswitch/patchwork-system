@@ -30,6 +30,15 @@ export type RestartingMessage = {
  */
 export type ClosingMessage = { type: "closing" };
 
+/**
+ * Worker → every tab: this instance holds `lock`, and will until it's gone.
+ * The browser releases a Web Lock when its holder's global goes, however it
+ * goes (it closed itself, crashed, or was terminated), so a tab waiting on
+ * `lock` hears about it then: Chromium fires `close` on a dead worker's port,
+ * other browsers may not.
+ */
+export type AliveMessage = { type: "alive"; lock: string };
+
 export function postToPort(port: MessagePort, message: unknown): void {
   try {
     port.postMessage(message);
@@ -60,9 +69,22 @@ export function startWorkerControl(
      * RESTART_DRAIN_MS; the worker closes either way.
      */
     onRestart?: () => Promise<void> | void;
+    /**
+     * A Web Lock to hold for as long as this instance lives. A replacement
+     * waits for it before `holding` resolves, so two instances' work never
+     * overlaps however the first one goes; and tabs are told the name, so
+     * they can wait on it to hear when this one has gone.
+     */
+    lock?: string;
   } = {}
-): { log: (...args: unknown[]) => void; restart: (reason: string) => void } {
+): {
+  log: (...args: unknown[]) => void;
+  restart: (reason: string) => void;
+  /** Resolves once this instance holds `lock` (straight away without one). */
+  holding: Promise<void>;
+} {
   const ports = new Set<MessagePort>();
+  let alive: AliveMessage | undefined;
   let restarting: RestartingMessage | undefined;
   // Logs emitted before any tab connects (wasm boot) would otherwise be lost.
   const preConnect: Array<{ level: string; args: string[] }> = [];
@@ -174,6 +196,7 @@ export function startWorkerControl(
     for (const { level, args } of preConnect.splice(0)) {
       postToPort(port, { type: "console", level, args });
     }
+    if (alive) postToPort(port, alive);
     // A tab that connected mid-drain still needs to hear it, or it would wait
     // on this instance until the port closes.
     if (restarting) postToPort(port, restarting);
@@ -184,10 +207,33 @@ export function startWorkerControl(
       (buildId === undefined ? "" : ` (build ${buildId})`)
   );
 
+  const { lock } = handlers;
+  const holding =
+    lock && self.navigator?.locks
+      ? new Promise<void>((resolve) => {
+          const waiting = setTimeout(
+            () =>
+              console.warn(
+                `[lifecycle] ${name} SharedWorker waiting for the previous instance to go`
+              ),
+            1_000
+          );
+          void navigator.locks.request(lock, () => {
+            clearTimeout(waiting);
+            alive = { type: "alive", lock };
+            for (const port of ports) postToPort(port, alive);
+            resolve();
+            // Held until this global goes.
+            return new Promise<never>(() => {});
+          });
+        })
+      : Promise.resolve();
+
   return {
     log: (...args: unknown[]) => {
       if (debugging) console.log(`[${name}]`, ...args);
     },
     restart: (reason) => restart(reason),
+    holding,
   };
 }

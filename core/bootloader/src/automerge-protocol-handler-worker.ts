@@ -44,6 +44,7 @@ import { startWorkerControl } from "./worker-control.js";
 import { SyncNode } from "./sync-node.js";
 import { PortSyncRemote, relayKeyhive } from "./sync-remote.js";
 import {
+  AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
   type HandoffCachedMessage,
   type HandoffOnlineMessage,
@@ -70,7 +71,12 @@ const CACHEABLE_STATUSES = [200, 203, 204];
 const control = startWorkerControl("automerge-protocol-handler-worker", {
   onMessage: handleControlMessage,
   onRestart: drainForRestart,
+  lock: AUTOMERGE_WORKER_LOCK,
 });
+// The sync node and the Repo wait for the lock: until the previous instance
+// is gone, it's still syncing and resolving, against the same IndexedDB.
+let holdingLock = false;
+void control.holding.then(() => (holdingLock = true));
 const log = control.log;
 
 // ── The sync node ──────────────────────────────────────────────────────
@@ -96,6 +102,7 @@ let syncNodePromise: Promise<SyncNode> | null = null;
 function getSyncNode(): Promise<SyncNode> {
   if (!syncNodePromise) {
     syncNodePromise = (async () => {
+      await control.holding;
       await initWasm();
       const storage = new IndexedDBStorageAdapter();
       // On keyhive sites the Repos store encrypted documents under the
@@ -158,6 +165,7 @@ function getRepo(): Promise<Repo> {
 }
 
 async function buildRepo(): Promise<Repo> {
+  await control.holding;
   await initWasm();
 
   const { repo, hive } = syncServer.keyhive
@@ -614,9 +622,14 @@ handoffChannel.addEventListener("message", (event) => {
     log(`ignoring handoff ${event.data.id} while restarting`);
     return;
   }
+  // The previous instance is still answering; once it's gone, `online` gets
+  // the service worker to send us whatever it left unanswered.
+  if (!holdingLock) return;
   void handleHandoffRequest(event.data as HandoffRequestMessage);
 });
 
 // Announce ourselves so the service worker can re-broadcast handoff requests
-// sent while we were booting.
-handoffChannel.postMessage({ type: "online" } satisfies HandoffOnlineMessage);
+// sent while we were booting, or left by the instance before us.
+void control.holding.then(() =>
+  handoffChannel.postMessage({ type: "online" } satisfies HandoffOnlineMessage)
+);

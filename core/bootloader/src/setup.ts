@@ -58,6 +58,10 @@ function installServiceWorkerLogForwarding(): void {
   if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
   logForwardingInstalled = true;
   navigator.serviceWorker.addEventListener("message", (event: MessageEvent) => {
+    if (event.data?.type === "automerge-worker-missing") {
+      automergeProtocolHandlerWorker.revive();
+      return;
+    }
     if (event.data?.type !== "sw-lifecycle") return;
     lifecycleLog("[service-worker] %s", event.data.msg);
   });
@@ -96,9 +100,11 @@ function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
 
 // ── The automerge worker ───────────────────────────────────────────────
 // A SharedWorker holding the Repo that resolves `automerge:` URLs for the
-// service worker, and the sync node every tab's Repo syncs through. Each tab
-// keeps it alive and heartbeats it, so it's here rather than in the service
-// worker, which can't own one.
+// service worker, and the sync node every tab's Repo syncs through. Only a
+// page can start a SharedWorker, so each tab keeps it alive and starts a new
+// one when it goes: when it says it's closing, when its port closes, or when
+// the Web Lock it holds for its lifetime is released (see
+// AUTOMERGE_WORKER_LOCK).
 
 let automergeProtocolHandlerWorkerPath =
   "/automerge-protocol-handler-worker.js";
@@ -110,6 +116,10 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
     debugging: workerDebugging,
     onMessage(event) {
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
+    },
+    onGone() {
+      // Its sync node went with it, port and all.
+      syncRemote?.reconnect();
     },
     onRestarting(message) {
       // Ask the replacement for a sync port now: posts are held until it's
