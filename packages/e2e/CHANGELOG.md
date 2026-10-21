@@ -1,5 +1,11 @@
 # @inkandswitch/patchwork-e2e
 
+## 0.2.1
+
+### Patch Changes
+
+- a47121c: The install-tool test pastes the package URL into the Packages filter instead of typing it, since the install modal now only opens on a paste.
+
 ## 0.2.0
 
 ### Minor Changes
