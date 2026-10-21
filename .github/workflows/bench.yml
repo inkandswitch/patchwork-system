@@ -1,0 +1,106 @@
+name: bench
+
+on:
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  MARKER: "<!-- patchwork-bench -->"
+
+jobs:
+  bench:
+    name: benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      pull-requests: write
+    # main and the PR on the same runner, one after the other: runner numbers
+    # drift between runs, so a PR is only ever compared with main measured
+    # alongside it.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: pr
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: main
+
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: pr/package.json
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: |
+            pr/pnpm-lock.yaml
+            main/pnpm-lock.yaml
+
+      - name: build main
+        working-directory: main
+        run: pnpm install --frozen-lockfile && pnpm build
+
+      - name: build the PR
+        working-directory: pr
+        run: pnpm install --frozen-lockfile && pnpm build
+
+      - name: install chromium
+        run: |
+          (cd main/sites/bench && pnpm exec playwright install --with-deps chromium)
+          (cd pr/sites/bench && pnpm exec playwright install --with-deps chromium)
+
+      # Failed tests still record their rows, so both sides report whatever
+      # got measured. main failing shouldn't fail the PR.
+      - name: bench main
+        continue-on-error: true
+        working-directory: main/sites/bench
+        run: pnpm bench
+
+      - name: bench the PR
+        working-directory: pr/sites/bench
+        run: pnpm bench
+
+      - name: compare
+        if: always()
+        run: |
+          node pr/sites/bench/compare.ts main/sites/bench/bench-results pr/sites/bench/bench-results > compare.md
+          cat compare.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/github-script@v7
+        if: always()
+        with:
+          script: |
+            const fs = require("fs")
+            let compare = ""
+            try { compare = fs.readFileSync("compare.md", "utf8") } catch {}
+            if (!compare) return
+            const marker = process.env.MARKER
+            const { pull_request } = context.payload
+            const head = pull_request.head.sha.slice(0, 7)
+            const base = pull_request.base.sha.slice(0, 7)
+            const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
+            const body = [
+              marker,
+              `## Benchmarks: this PR against main`,
+              ``,
+              `\`${head}\` against main at \`${base}\`, measured one after the other on the same runner ([run](${run})). Lower is better throughout. The table is what moved by more than 20%, about what one run moves by on its own; every benchmark is below it.`,
+              ``,
+              compare,
+            ].join("\n")
+            const {owner, repo} = context.repo
+            const issue_number = context.issue.number
+            const comments = await github.rest.issues.listComments({owner, repo, issue_number})
+            const existing = comments.data.find(c => c.body.startsWith(marker))
+            if (existing) {
+              await github.rest.issues.updateComment({owner, repo, comment_id: existing.id, body})
+            } else {
+              await github.rest.issues.createComment({owner, repo, issue_number, body})
+            }

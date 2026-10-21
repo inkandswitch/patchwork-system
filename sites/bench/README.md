@@ -14,6 +14,11 @@ Results land in `bench-results/results.md` and `results.jsonl`. Port 5199 has
 to be free: a `vite preview` left behind by another checkout would otherwise be
 reused and serve its build, so the run refuses one instead.
 
+On a pull request, CI benches main and the PR one after the other on the same
+runner and comments only the comparison: `node compare.ts <main's
+bench-results> <the PR's bench-results>` puts two runs side by side, and
+flags what moved by more than 20%.
+
 ## Modes
 
 The page at `/` builds one Repo and nothing else — no shell, no account, no
