@@ -1,5 +1,34 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.8.4
+
+### Patch Changes
+
+- a38368e: The automerge worker holds a Web Lock (`AUTOMERGE_WORKER_LOCK`, `@patchwork/automerge-worker`) for as long as it lives, and the browser releases it when the worker goes, however it goes. Before, a tab only noticed its worker had gone when it said it was closing or when its port fired `close`, which Chromium doesn't do for a worker that closes itself and other browsers may not do at all; until then every `automerge:` request waited out the service worker's 35s and failed. A worker that closed itself without a word was replaced in 0.3s, where before the tab kept talking to it and package files failed after 35s.
+
+  - A replacement waits for the lock before it starts its sync node or Repo, or answers handoffs, so two instances never sync or resolve against the same IndexedDB at once. Once it has the lock it announces itself, and the service worker re-sends whatever the last one left unanswered.
+  - The worker tells its tabs it holds the lock, and each tab waits on it. When it's released, the tab spawns a replacement and reconnects its sync port.
+  - Before waiting on a handoff, the service worker checks whether anything holds or is waiting for the lock. If nothing is, it asks the open tabs to start a worker (`automerge-worker-missing`).
+  - `startWorkerControl` takes a `lock` to hold, and `sharedWorkerHandle` takes `onGone` and has `revive()`, so any SharedWorker can do the same.
+
+- 87f13ef: Tools can ask the automerge worker how much memory a package's documents take to load, so a packages view can show which packages are the expensive ones. The worker is what loads a package's documents to serve its files, so it measures them there rather than in the tab asking.
+
+  - `PACKAGE_MEMORY_CHANNEL` (`@patchwork/package-memory`, in `@inkandswitch/patchwork-bootloader/types`): post a `PackageMemoryRequestMessage` with the package's root URL. The worker answers `accepted` straight away, then a `PackageMemoryReplyMessage` listing documents with their path, ops, changes, the ops in their biggest single change, and how a file's `content` is stored (text, `ImmutableString` or bytes) and its length.
+  - By default the answer is what the worker has loaded of the package since it started, each document measured as it was loaded to serve a file: what the package actually costs, and asking loads nothing. With `walk: true` the worker loads every document in the package to measure it, a package at a time and a document at a time, letting each go once it's measured unless a file is being resolved meanwhile, and fetching any it hasn't stored. That covers files nothing has asked for, like READMEs and lockfiles, but it's slow, and measuring a document with one huge change costs the worker as much memory as loading it does. A document that can't be found within 15s is listed with the error and the walk goes on.
+  - The biggest change is the number to look at. What a load costs grows faster than its ops, and much faster for one big change: a file's text written as a plain string in one change is an op per character, all in that change, and one of 585k characters took ~300 MB of wasm memory to load.
+  - `packageDocuments(repo, root)` in `@inkandswitch/patchwork-filesystem` walks every document `resolvePath` can reach from a package's root (directory and folder docs, links as strings or `ImmutableString`s), root first, finding each only when it's reached.
+
+- d94ee22: The automerge worker restarts itself once it has gone 15s without a handoff while its automerge holds more than 64MB of wasm memory. A wasm memory never shrinks, so resolving packages at boot left the worker's automerge at 90–130MB for as long as any tab was open, though it had already let every document go. The restart is the one a new build gets: tabs spawn the replacement and reconnect their sync, the service worker re-sends any handoff still unanswered, and what was resolved is already in its cache. A worker connected to classic sync doesn't recycle, since a replacement wouldn't reconnect it.
+
+  What resolves have loaded of each package, which `@patchwork/package-memory` reports, now outlives the instance: a restarting worker saves it in Cache Storage and the next one takes it back.
+
+- 945827c: The automerge worker restarts itself when it's broken, rather than carrying on holding its lock while every request fails: when a wasm instance traps (`WebAssembly.RuntimeError`, which is how subduction's panics and running out of memory arrive, thrown uncaught or logged by whatever caught it, or the panic hook's `panicked at`), or when its sync node or Repo fails to start. Each time is reported in the tabs' consoles. A failing worker doesn't finish its in-flight work or save its documents first, since that would use an instance whose memory may be half-changed; it closes straight away and the tabs start a replacement, which took 0.2s. An automerge `PanicError` doesn't count: automerge unwinds, so the instance carries on.
+
+  `startWorkerControl` returns `fail(reason, error)`, and `isWasmTrap` is exported, for any SharedWorker to do the same.
+
+- Updated dependencies [87f13ef]
+  - @inkandswitch/patchwork-filesystem@0.2.13
+
 ## 0.8.3
 
 ### Patch Changes
