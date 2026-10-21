@@ -20,7 +20,10 @@ jobs:
       pull-requests: write
     # main and the PR on the same runner, one after the other: runner numbers
     # drift between runs, so a PR is only ever compared with main measured
-    # alongside it.
+    # alongside it. Only Patchwork as it ships (`patchwork` mode, whose tests
+    # are titled "patchwork: …" or "S5 patchwork, …"): the other modes and the
+    # storage adapters are alternatives the bench explores, not what merging
+    # changes.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,11 +65,11 @@ jobs:
       - name: bench main
         continue-on-error: true
         working-directory: main/sites/bench
-        run: pnpm bench
+        run: pnpm bench --grep "patchwork[:,]"
 
       - name: bench the PR
         working-directory: pr/sites/bench
-        run: pnpm bench
+        run: pnpm bench --grep "patchwork[:,]"
 
       - name: compare
         if: always()
@@ -89,9 +92,9 @@ jobs:
             const run = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`
             const body = [
               marker,
-              `## Benchmarks: this PR against main`,
+              `## Benchmarks: Patchwork with this PR against main`,
               ``,
-              `\`${head}\` against main at \`${base}\`, measured one after the other on the same runner ([run](${run})). Lower is better throughout. The table is what moved by more than 20%, about what one run moves by on its own; every benchmark is below it.`,
+              `\`${head}\` against main at \`${base}\`, Patchwork as it ships (\`patchwork\` mode), measured one after the other on the same runner ([run](${run})). Lower is better throughout. The table is what moved by more than 20%, about what one run moves by on its own; every benchmark is below it.`,
               ``,
               compare,
             ].join("\n")

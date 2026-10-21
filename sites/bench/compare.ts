@@ -2,8 +2,10 @@
 //
 //   node compare.ts <main's bench-results> <the PR's bench-results>
 //
-// Each side ran its own checkout's benchmarks, so a benchmark the PR adds or
-// renames shows – for main. Every number is lower-is-better.
+// Only Patchwork as it ships, `patchwork` mode: the other modes and the
+// storage adapters are alternatives the bench explores, not what merging the
+// PR changes. Each side ran its own checkout's benchmarks, so a benchmark the
+// PR adds or renames shows – for main. Every number is lower-is-better.
 import { readFileSync } from "node:fs";
 
 // A single run on a GitHub runner moves by about this much on its own.
@@ -22,16 +24,8 @@ type Result = {
 };
 type MemoryRow = { scenario: string; n: number; footprintMb?: number };
 
-type Row = { section: string; name: string; where: string; unit: Unit };
+type Row = { name: string; unit: Unit };
 type Side = Map<string, number | boolean | null>;
-
-const STORAGE_LABELS: Record<string, string> = {
-  worker: "idb worker",
-  direct: "idb in-thread",
-  opfs: "opfs in-thread",
-  sqlite: "sqlite worker",
-  redb: "redb worker",
-};
 
 function lines<T>(path: string): T[] {
   try {
@@ -49,28 +43,19 @@ const rows = new Map<string, Row>();
 function read(dir: string): Side {
   const side: Side = new Map();
   const add = (row: Row, value: number | boolean | null) => {
-    const key = [row.section, row.name, row.where].join("\0");
-    if (!rows.has(key)) rows.set(key, row);
-    side.set(key, value);
+    if (!rows.has(row.name)) rows.set(row.name, row);
+    side.set(row.name, value);
   };
   for (const r of lines<Result>(`${dir}/results.jsonl`)) {
+    if (r.mode !== "patchwork" || r.storage !== undefined) continue;
     const name =
       r.tabs === undefined ? r.metric : `${r.metric} (${r.tabs} tabs)`;
-    if (r.storage === undefined) {
-      add({ section: "Topology", name, where: r.mode, unit: r.unit }, r.value);
-    } else {
-      const where = STORAGE_LABELS[r.storage] ?? r.storage;
-      add({ section: "Storage adapter", name, where, unit: r.unit }, r.value);
-    }
+    add({ name, unit: r.unit }, r.value);
   }
   for (const r of lines<MemoryRow>(`${dir}/memory.jsonl`)) {
-    const row = {
-      section: "Renderer memory",
-      name: "renderer footprint, all processes",
-      where: `${r.scenario}, ${r.n} tab${r.n === 1 ? "" : "s"}`,
-      unit: "MB" as const,
-    };
-    add(row, r.footprintMb ?? null);
+    if (!/\bpatchwork\b/.test(r.scenario)) continue;
+    const name = `renderer memory, ${r.n} tab${r.n === 1 ? "" : "s"}`;
+    add({ name, unit: "MB" }, r.footprintMb ?? null);
   }
   return side;
 }
@@ -121,12 +106,12 @@ function change(
 
 function table(keys: string[], main: Side, pr: Side): string {
   return [
-    "| benchmark | | main | PR | change |",
-    "| --- | --- | --- | --- | --- |",
+    "| benchmark | main | PR | change |",
+    "| --- | --- | --- | --- |",
     ...keys.map((key) => {
-      const { name, where, unit } = rows.get(key)!;
+      const { name, unit } = rows.get(key)!;
       const { text } = change(main.get(key), pr.get(key), unit);
-      return `| ${name} | ${where} | ${cell(main.get(key), unit)} | ${cell(pr.get(key), unit)} | ${text} |`;
+      return `| ${name} | ${cell(main.get(key), unit)} | ${cell(pr.get(key), unit)} | ${text} |`;
     }),
   ].join("\n");
 }
@@ -154,21 +139,12 @@ else if (!main.size)
 else if (moved.length) out.push(table(moved, main, pr));
 else out.push(`Nothing moved by more than ${NOISE * 100}%.`);
 
-const sections = [...new Set(keys.map((key) => rows.get(key)!.section))];
 out.push(
   "",
   `<details><summary>every benchmark</summary>`,
   "",
-  ...sections.flatMap((section) => [
-    `#### ${section}`,
-    "",
-    table(
-      keys.filter((key) => rows.get(key)!.section === section),
-      main,
-      pr
-    ),
-    "",
-  ]),
+  table(keys, main, pr),
+  "",
   "</details>"
 );
 console.log(out.join("\n"));
