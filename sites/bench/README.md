@@ -15,10 +15,11 @@ to be free: a `vite preview` left behind by another checkout would otherwise be
 reused and serve its build, so the run refuses one instead.
 
 On a pull request, CI benches Patchwork as it ships (`patchwork` mode only),
-on main and on the PR, one after the other on the same runner, and comments
-only the comparison: `node compare.ts <main's bench-results> <the PR's
-bench-results>` puts two runs side by side, and flags what moved by more than
-20%.
+on main and on the PR, three rounds each, alternating, on the same runner, and
+comments only the comparison: `node compare.ts --main <bench-results>... --pr
+<bench-results>...` puts the runs side by side, a median and range per side,
+and flags a benchmark only when every run of the PR landed on the same side of
+every run of main, with the medians more than 20% apart.
 
 ## Modes
 

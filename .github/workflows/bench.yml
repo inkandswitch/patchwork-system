@@ -60,21 +60,33 @@ jobs:
           (cd main/sites/bench && pnpm exec playwright install --with-deps chromium)
           (cd pr/sites/bench && pnpm exec playwright install --with-deps chromium)
 
-      # Failed tests still record their rows, so both sides report whatever
-      # got measured. main failing shouldn't fail the PR.
-      - name: bench main
-        continue-on-error: true
-        working-directory: main/sites/bench
-        run: pnpm bench --grep "patchwork[:,]"
-
-      - name: bench the PR
-        working-directory: pr/sites/bench
-        run: pnpm bench --grep "patchwork[:,]"
+      # A single run of a benchmark can be off by more than the PR changes it,
+      # so each side runs ROUNDS times, alternating, so that the runner
+      # slowing down partway affects both. Failed tests still record their
+      # rows, so every round reports whatever got measured; main failing
+      # doesn't fail the PR, the PR failing does, once it's been reported.
+      - name: bench main and the PR, alternating
+        env:
+          ROUNDS: 3
+        run: |
+          for side in main pr; do (cd $side/sites/bench && pnpm exec vite build); done
+          for round in $(seq "$ROUNDS"); do
+            for side in main pr; do
+              echo "::group::$side, round $round"
+              rm -f $side/sites/bench/bench-results/*.jsonl
+              if ! (cd $side/sites/bench && pnpm exec playwright test -c bench.config.ts --grep "patchwork[:,]"); then
+                if [ "$side" = pr ]; then touch pr-failed; fi
+              fi
+              mkdir -p "runs/$side-$round"
+              cp $side/sites/bench/bench-results/*.jsonl "runs/$side-$round/" 2>/dev/null || true
+              echo "::endgroup::"
+            done
+          done
 
       - name: compare
         if: always()
         run: |
-          node pr/sites/bench/compare.ts main/sites/bench/bench-results pr/sites/bench/bench-results > compare.md
+          node pr/sites/bench/compare.ts --main runs/main-* --pr runs/pr-* > compare.md
           cat compare.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/github-script@v7
@@ -94,7 +106,7 @@ jobs:
               marker,
               `## Benchmarks: Patchwork with this PR against main`,
               ``,
-              `\`${head}\` against main at \`${base}\`, Patchwork as it ships (\`patchwork\` mode), measured one after the other on the same runner ([run](${run})). Lower is better throughout. The table is what moved by more than 20%, about what one run moves by on its own; every benchmark is below it.`,
+              `\`${head}\` against main at \`${base}\`, Patchwork as it ships (\`patchwork\` mode), measured one after the other on the same runner ([run](${run})). Lower is better throughout. A row is in the table when every run of the PR came out on the same side of every run of main, with the medians more than 20% apart; every benchmark is below it.`,
               ``,
               compare,
             ].join("\n")
@@ -107,3 +119,7 @@ jobs:
             } else {
               await github.rest.issues.createComment({owner, repo, issue_number, body})
             }
+
+      - name: fail if the PR's benchmarks failed
+        if: always()
+        run: test ! -e pr-failed
