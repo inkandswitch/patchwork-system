@@ -102,6 +102,7 @@ let wasmPromise: Promise<void> | null = null;
 function initWasm(): Promise<void> {
   if (!wasmPromise) {
     log("fetching wasm");
+    watchWasmMemories();
     wasmPromise = Promise.all([
       initializeWasm(new Request("/automerge.wasm")),
       initSubduction(new Request("/subduction.wasm")),
@@ -493,6 +494,7 @@ let evictTimer: ReturnType<typeof setTimeout> | undefined;
 function handoffStarted() {
   handoffsInFlight++;
   clearTimeout(evictTimer);
+  clearTimeout(recycleTimer);
 }
 
 function handoffFinished() {
@@ -501,6 +503,72 @@ function handoffFinished() {
   evictTimer = setTimeout(() => {
     evictLoaded().catch((error) => console.error("eviction failed", error));
   }, EVICT_IDLE_MS);
+  clearTimeout(recycleTimer);
+  recycleTimer = setTimeout(recycleIfHolding, RECYCLE_IDLE_MS);
+}
+
+// ── Recycling ──────────────────────────────────────────────────────────
+// A wasm memory grows and never shrinks: a module holds the most it ever
+// needed at once until its global goes. Resolving packages at boot takes the
+// resolver Repo's automerge to 90–130MB, and letting the documents go gives
+// none of it back. So once handoffs stop for RECYCLE_IDLE_MS, an instance whose
+// automerge holds more than RECYCLE_AT_MB restarts itself, as it does for a
+// new build: tabs spawn the replacement and reconnect their sync, the service
+// worker re-sends any handoff still unanswered, and what was resolved is in
+// its cache, so the replacement doesn't load it all again.
+
+const RECYCLE_AT_MB = 64;
+const RECYCLE_IDLE_MS = 15_000;
+let recycleTimer: ReturnType<typeof setTimeout> | undefined;
+
+/** Every wasm memory instantiated here, with the file it was compiled from. */
+const wasmMemories: Array<{ url: string; memory: WebAssembly.Memory }> = [];
+let watchingWasm = false;
+
+/**
+ * Note the memory of every wasm instance instantiated from a response from
+ * here on: automerge and subduction instantiate from their `Request`s that
+ * way, and don't hand back the instance.
+ */
+function watchWasmMemories() {
+  if (watchingWasm) return;
+  watchingWasm = true;
+  const wasm = WebAssembly as {
+    instantiateStreaming: typeof WebAssembly.instantiateStreaming;
+  };
+  const instantiateStreaming = wasm.instantiateStreaming;
+  wasm.instantiateStreaming = async (source, imports) => {
+    const response = await source;
+    const result = await instantiateStreaming(response, imports);
+    for (const value of Object.values(result.instance.exports)) {
+      if (value instanceof WebAssembly.Memory) {
+        wasmMemories.push({ url: response.url, memory: value });
+      }
+    }
+    return result;
+  };
+}
+
+function automergeMemoryMb(): number {
+  let bytes = 0;
+  for (const { url, memory } of wasmMemories) {
+    if (new URL(url, self.location.href).pathname.endsWith("/automerge.wasm")) {
+      bytes += memory.buffer.byteLength;
+    }
+  }
+  return Math.round(bytes / 1048576);
+}
+
+function recycleIfHolding() {
+  if (handoffsInFlight > 0 || draining) return;
+  // A replacement doesn't connect to it again; whoever asked for it would
+  // have to.
+  if (classicSyncConnect) return;
+  const mb = automergeMemoryMb();
+  if (mb <= RECYCLE_AT_MB) return;
+  control.restart(
+    `recycling: automerge holds ${mb}MB of wasm memory with nothing to resolve`
+  );
 }
 
 async function evictLoaded() {
@@ -640,6 +708,9 @@ async function drainForRestart(): Promise<void> {
   }
   const repo = await repoPromise?.catch(() => null);
   await repo?.flush();
+  await saveLoaded().catch((error) =>
+    console.warn("couldn't keep the package records for the next instance", error)
+  );
   const node = await syncNodePromise?.catch(() => null);
   await node?.shutdown();
 }
@@ -685,6 +756,72 @@ const loadedByPackage = new Map<
 
 /** Branches docs followed to their default branch, which holds the package. */
 const branchOf = new Map<DocumentId, DocumentId>();
+
+// What's been loaded outlives the instance: a restart (a recycle, or a new
+// build) saves it for the replacement, which resolves from the service
+// worker's cache rather than loading the packages again.
+const LOADED_CACHE = "patchwork-package-memory";
+const LOADED_KEY = "/loaded-by-package";
+
+type SavedLoaded = {
+  packages: Array<
+    [
+      DocumentId,
+      Array<
+        [
+          DocumentId,
+          {
+            heads: string;
+            measured: PackageMemoryDocument;
+            through: string[];
+            file: boolean;
+          },
+        ]
+      >,
+    ]
+  >;
+  branches: Array<[DocumentId, DocumentId]>;
+};
+
+async function saveLoaded() {
+  await restored;
+  const saved: SavedLoaded = {
+    packages: [...loadedByPackage].map(([packageId, documents]) => [
+      packageId,
+      [...documents].map(([id, entry]) => [
+        id,
+        { ...entry, through: [...entry.through] },
+      ]),
+    ]),
+    branches: [...branchOf],
+  };
+  const cache = await caches.open(LOADED_CACHE);
+  await cache.put(LOADED_KEY, new Response(JSON.stringify(saved)));
+}
+
+/** Settles once what the instance before saved has been taken back. */
+const restored: Promise<void> = (async () => {
+  try {
+    const cache = await caches.open(LOADED_CACHE);
+    const response = await cache.match(LOADED_KEY);
+    if (!response) return;
+    const saved = (await response.json()) as SavedLoaded;
+    for (const [packageId, documents] of saved.packages) {
+      const into = loadedByPackage.get(packageId) ?? new Map();
+      for (const [id, entry] of documents) {
+        // Loaded since by this instance: that's newer.
+        if (into.has(id)) continue;
+        into.set(id, { ...entry, through: new Set(entry.through) });
+      }
+      loadedByPackage.set(packageId, into);
+    }
+    for (const [from, to] of saved.branches) {
+      if (!branchOf.has(from)) branchOf.set(from, to);
+    }
+  } catch (error) {
+    console.warn("couldn't take back the package records", error);
+  }
+})();
 
 /** `handles` were found in turn resolving `path`: the root first, the file last. */
 function recordLoaded(
@@ -758,11 +895,13 @@ packageMemoryChannel.addEventListener("message", (event) => {
     type: "accepted",
   } satisfies PackageMemoryAcceptedMessage);
   if (!message.walk) {
-    packageMemoryChannel.postMessage({
-      id: message.id,
-      type: "reply",
-      documents: loadedOf(message.url),
-    } satisfies PackageMemoryReplyMessage);
+    void restored.then(() =>
+      packageMemoryChannel.postMessage({
+        id: message.id,
+        type: "reply",
+        documents: loadedOf(message.url),
+      } satisfies PackageMemoryReplyMessage)
+    );
     return;
   }
   measuring = measuring.then(() => replyWithPackageMemory(message));
