@@ -207,8 +207,11 @@ async function startWorkerIfMissing(id: string) {
   if (await automergeWorkerExists()) return;
   await new Promise((resolve) => setTimeout(resolve, MISSING_WORKER_GRACE_MS));
   if (!pendingHandoffs.has(id)) return;
-  if (Date.now() - lastMissingWorkerNudge < MISSING_WORKER_NUDGE_MS) return;
   if (await automergeWorkerExists()) return;
+  // Check and claim the throttle with no await in between: every handoff that
+  // raced the same cold start comes through here at once, and would all pass a
+  // check made before the lock query.
+  if (Date.now() - lastMissingWorkerNudge < MISSING_WORKER_NUDGE_MS) return;
   lastMissingWorkerNudge = Date.now();
   lifecycle("warn", "no automerge worker; asking tabs to start one");
   await postToClients({
