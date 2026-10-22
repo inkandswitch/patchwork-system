@@ -1,0 +1,71 @@
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SHELL_REPO: inkandswitch/patchwork.inkandswitch.com
+  SITE_DIR: sites/patchwork.inkandswitch.com
+
+jobs:
+  e2e:
+    name: e2e (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    # Firefox's page sometimes never finishes its own wasm init and the boot
+    # times out, on main too. Its failures show here without failing the run
+    # until that's fixed.
+    continue-on-error: ${{ matrix.browser == 'firefox' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SHELL_REPO }}
+          path: ${{ env.SITE_DIR }}
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      # The same build the preview deploys: the shell, against this branch's
+      # packages.
+      - name: build the shell against this branch's packages
+        run: |
+          node .github/scripts/use-workspace-packages.mjs "$GITHUB_WORKSPACE/$SITE_DIR"
+          pnpm install --no-frozen-lockfile
+          pnpm build
+
+      - name: install ${{ matrix.browser }}
+        working-directory: packages/e2e
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+
+      - name: run the suite
+        working-directory: packages/e2e
+        env:
+          PATCHWORK_E2E_SITE_DIR: ${{ github.workspace }}/${{ env.SITE_DIR }}
+        run: pnpm exec playwright test --project=${{ matrix.browser }}
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-${{ matrix.browser }}
+          path: |
+            packages/e2e/playwright-report/
+            packages/e2e/test-results/
+          retention-days: 7
