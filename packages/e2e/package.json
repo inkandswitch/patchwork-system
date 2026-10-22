@@ -5,7 +5,7 @@
     "url": "git+https://github.com/inkandswitch/patchwork-system.git",
     "directory": "packages/e2e"
   },
-  "version": "0.2.1",
+  "version": "0.2.2",
   "type": "module",
   "description": "Browser + Service-Worker end-to-end sync tests (Playwright) for a Patchwork site.",
   "bin": {

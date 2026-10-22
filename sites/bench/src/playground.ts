@@ -5,8 +5,7 @@ type Doc = { items: Item[] };
 
 const params = new URLSearchParams(location.search);
 const tabName =
-  params.get("name") ??
-  `tab-${Math.random().toString(36).slice(2, 6)}`;
+  params.get("name") ?? `tab-${Math.random().toString(36).slice(2, 6)}`;
 
 const css = `
   body { margin: 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -54,11 +53,13 @@ async function start() {
   };
   await handle.whenReady();
 
-  document.head.append(Object.assign(document.createElement("style"), { textContent: css }));
+  document.head.append(
+    Object.assign(document.createElement("style"), { textContent: css })
+  );
   document.body.innerHTML = `
     <header>
-      <b>${bench.mode}</b>
-      <span>${tabName}</span>
+      <b id="mode"></b>
+      <span id="tab-name"></span>
       <span><span class="dot off" id="dot"></span> <span id="net">…</span></span>
       <button id="cut">go offline</button>
       <a id="another" target="_blank">open another tab</a>
@@ -85,9 +86,10 @@ async function start() {
   `;
 
   const $ = (id: string) => document.getElementById(id)!;
-  ($("another") as HTMLAnchorElement).href = `?${params}&name=tab-${Math.random()
-    .toString(36)
-    .slice(2, 6)}`;
+  $("mode").textContent = bench.mode;
+  $("tab-name").textContent = tabName;
+  ($("another") as HTMLAnchorElement).href =
+    `?${params}&name=tab-${Math.random().toString(36).slice(2, 6)}`;
   $("docid").textContent = handle.documentId;
 
   $("say").addEventListener("submit", (event) => {
@@ -110,13 +112,14 @@ async function start() {
 
   const renderItems = () => {
     const items = handle.doc()?.items ?? [];
-    $("items").innerHTML = items
-      .map(
-        (item) =>
-          `<li class="${item.from === tabName ? "me" : ""}">${item.from}: ${item.text
-            .replace(/</g, "&lt;")}</li>`
-      )
-      .join("");
+    $("items").replaceChildren(
+      ...items.map((item) => {
+        const element = document.createElement("li");
+        if (item.from === tabName) element.className = "me";
+        element.textContent = `${item.from}: ${item.text}`;
+        return element;
+      })
+    );
     $("count").textContent = String(items.length);
   };
   handle.on("change", renderItems);

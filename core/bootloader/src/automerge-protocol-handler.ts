@@ -465,7 +465,12 @@ async function resolveAutomergeUrl(
 
   return new Response(body, {
     status: 200,
-    headers: { "content-type": resolved.type },
+    headers: {
+      "content-type": resolved.type,
+      "cache-control": resolved.pinned
+        ? "public, max-age=31536000, immutable"
+        : "no-store",
+    },
   });
 }
 
@@ -650,10 +655,15 @@ async function respondToHandoff(message: HandoffRequestMessage, handoff: URL) {
   }
 
   try {
-    if (!CACHEABLE_STATUSES.includes(response.status)) {
+    const immutable =
+      CACHEABLE_STATUSES.includes(response.status) &&
+      !/(^|,)\s*no-store(\s*,|$)/.test(
+        response.headers.get("cache-control") ?? ""
+      );
+    if (!immutable) {
       // Errors, redirects and the like go back inline for the service worker to
-      // serve directly, so they aren't cached forever (still in esmodulecache,
-      // cleared after a refresh)
+      // serve directly. Mutable responses aren't cached because the same URL
+      // can resolve to different content later.
       log(`responding inline to ${request.url} with ${response.status}`);
       handoffChannel.postMessage({
         id,
@@ -661,7 +671,9 @@ async function respondToHandoff(message: HandoffRequestMessage, handoff: URL) {
         response: {
           status: response.status,
           headers: Object.fromEntries(response.headers.entries()),
-          body: response.body ? await response.text() : undefined,
+          body: response.body
+            ? new Uint8Array(await response.arrayBuffer())
+            : undefined,
         },
       } satisfies HandoffResponseMessage);
       return;
