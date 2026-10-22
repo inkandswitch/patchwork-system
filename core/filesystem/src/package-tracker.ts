@@ -104,8 +104,12 @@ export async function fetchLatestViaServiceWorker(
     new URL(response.url).pathname.split("/")[1] ?? ""
   );
   if (!isValidAutomergeUrl(latest) || !parseAutomergeUrl(latest).heads) {
+    // The automerge worker's 557 carries why it couldn't resolve the doc.
+    const reason = (await response.text?.().catch(() => ""))
+      ?.split("\n")[0]
+      ?.trim();
     throw new Error(
-      `the service worker didn't redirect ${url} to its heads (HTTP ${response.status} from ${response.url})`
+      `the service worker didn't redirect ${url} to its heads (HTTP ${response.status} from ${response.url})${reason ? `: ${reason}` : ""}`
     );
   }
   return latest;

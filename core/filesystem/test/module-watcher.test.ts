@@ -584,6 +584,21 @@ describe("ModuleWatcher package trackers", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("passes on the automerge worker's reason when it couldn't resolve", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: URL) => ({
+        status: 557,
+        url: String(input),
+        text: async () => "Document 2Jts is unavailable\n\nError: ...stack",
+      }))
+    );
+    vi.stubGlobal("location", { origin: "http://example.test" });
+    await expect(fetchLatestViaServiceWorker(AUTOMERGE_URL)).rejects.toThrow(
+      /HTTP 557 .*: Document 2Jts is unavailable$/
+    );
+  });
+
   it("says so when the service worker didn't redirect", async () => {
     vi.stubGlobal(
       "fetch",
