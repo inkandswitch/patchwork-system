@@ -4,6 +4,7 @@
 // worker's own business and arrives through `onMessage`.
 
 import { buildId, isNewerBuild } from "./build-id.js";
+import { takeEarly } from "./worker-early.js";
 
 const MAX_BUFFER = 200;
 // How long a restart waits on `onRestart` before closing regardless.
@@ -190,7 +191,11 @@ export function startWorkerControl(
     if (failed) return;
     failed = true;
     const detail =
-      error instanceof Error ? error.message : error === undefined ? "" : String(error);
+      error instanceof Error
+        ? error.message
+        : error === undefined
+          ? ""
+          : String(error);
     console.error(
       `${name} SharedWorker failed, restarting: ${reason}`,
       error instanceof Error ? error.stack : detail
@@ -202,8 +207,8 @@ export function startWorkerControl(
     });
   };
 
-  self.addEventListener("connect", (event) => {
-    const port = (event as MessageEvent).ports[0];
+  const connect = (event: MessageEvent) => {
+    const port = event.ports[0];
     handlers.onConnect?.(port);
 
     port.addEventListener("message", (messageEvent) => {
@@ -248,34 +253,46 @@ export function startWorkerControl(
     // A tab that connected mid-drain still needs to hear it, or it would wait
     // on this instance until the port closes.
     if (restarting) postToPort(port, restarting);
-  });
+  };
+
+  // The worker's script may have asked for the lock already, and held on to
+  // tabs that connected while the rest of it loaded (see worker-early.ts).
+  const early = takeEarly();
+  self.addEventListener("connect", (event) => connect(event as MessageEvent));
+  for (const event of early?.take() ?? []) connect(event);
 
   console.warn(
     `[lifecycle] ${name} SharedWorker started` +
       (buildId === undefined ? "" : ` (build ${buildId})`)
   );
 
-  const { lock } = handlers;
-  const holding =
-    lock && self.navigator?.locks
+  // Asking again for a lock the script already asked for would wait on itself.
+  const lock = early ? early.lock : handlers.lock;
+  const holding = early
+    ? early.holding
+    : lock && self.navigator?.locks
       ? new Promise<void>((resolve) => {
-          const waiting = setTimeout(
-            () =>
-              console.warn(
-                `[lifecycle] ${name} SharedWorker waiting for the previous instance to go`
-              ),
-            1_000
-          );
           void navigator.locks.request(lock, () => {
-            clearTimeout(waiting);
-            alive = { type: "alive", lock };
-            for (const port of ports) postToPort(port, alive);
             resolve();
             // Held until this global goes.
             return new Promise<never>(() => {});
           });
         })
       : Promise.resolve();
+  if (lock && self.navigator?.locks) {
+    const waiting = setTimeout(
+      () =>
+        console.warn(
+          `[lifecycle] ${name} SharedWorker waiting for the previous instance to go`
+        ),
+      1_000
+    );
+    void holding.then(() => {
+      clearTimeout(waiting);
+      alive = { type: "alive", lock };
+      for (const port of ports) postToPort(port, alive);
+    });
+  }
 
   return {
     log: (...args: unknown[]) => {

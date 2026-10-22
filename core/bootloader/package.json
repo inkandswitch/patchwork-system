@@ -43,6 +43,10 @@
       "import": "./dist/automerge-protocol-handler-worker.js",
       "types": "./dist/automerge-protocol-handler-worker.d.ts"
     },
+    "./automerge-protocol-handler": {
+      "import": "./dist/automerge-protocol-handler.js",
+      "types": "./dist/automerge-protocol-handler.d.ts"
+    },
     "./module-loader": {
       "import": "./dist/module-loader.js",
       "types": "./dist/module-loader.d.ts"

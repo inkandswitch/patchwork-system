@@ -183,23 +183,32 @@ handoffChannel.addEventListener("message", (event) => {
 });
 
 const MISSING_WORKER_NUDGE_MS = 5_000;
+// A worker that's been spawned only asks for the lock once its imports have
+// evaluated, so on a cold start it looks missing for a while.
+const MISSING_WORKER_GRACE_MS = 3_000;
 let lastMissingWorkerNudge = 0;
+
+async function automergeWorkerExists(): Promise<boolean> {
+  const { held = [], pending = [] } = await navigator.locks.query();
+  return [...held, ...pending].some(
+    (lock) => lock.name === AUTOMERGE_WORKER_LOCK && lock.mode === "exclusive"
+  );
+}
 
 /**
  * If nothing holds the automerge worker's lock, or is waiting for it (a
  * replacement that hasn't started yet), there's no worker to answer: ask the
  * tabs to start one, since only a page can. A worker that's been spawned but
- * hasn't asked for the lock yet looks the same, which is why this only
- * nudges, and spawning it again just reattaches to it.
+ * hasn't asked for the lock yet looks the same, so this waits out its boot
+ * first, and only nudges if handoff `id` is still unanswered by then.
  */
-async function startWorkerIfMissing() {
+async function startWorkerIfMissing(id: string) {
   if (!navigator.locks) return;
+  if (await automergeWorkerExists()) return;
+  await new Promise((resolve) => setTimeout(resolve, MISSING_WORKER_GRACE_MS));
+  if (!pendingHandoffs.has(id)) return;
   if (Date.now() - lastMissingWorkerNudge < MISSING_WORKER_NUDGE_MS) return;
-  const { held = [], pending = [] } = await navigator.locks.query();
-  const worker = [...held, ...pending].some(
-    (lock) => lock.name === AUTOMERGE_WORKER_LOCK && lock.mode === "exclusive"
-  );
-  if (worker) return;
+  if (await automergeWorkerExists()) return;
   lastMissingWorkerNudge = Date.now();
   lifecycle("warn", "no automerge worker; asking tabs to start one");
   await postToClients({
@@ -233,7 +242,7 @@ async function handoff(
   pendingHandoffs.set(id, { message, resolvers });
   log(`broadcasting handoff request for cache ${cachename}`, message);
   handoffChannel.postMessage(message);
-  void startWorkerIfMissing();
+  void startWorkerIfMissing(id);
 
   const timeout = setTimeout(() => {
     lifecycle(

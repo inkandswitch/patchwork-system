@@ -23,6 +23,12 @@ export const workers = [
       "@inkandswitch/patchwork-bootloader/automerge-protocol-handler-worker",
     fileName: "automerge-protocol-handler-worker.js",
   },
+  // What that worker's script imports once it has the lock: a separate file,
+  // so the script itself has next to nothing to load first.
+  {
+    specifier: "@inkandswitch/patchwork-bootloader/automerge-protocol-handler",
+    fileName: "automerge-protocol-handler.js",
+  },
   {
     specifier: "@inkandswitch/patchwork-bootloader/module-loader-worker",
     fileName: "module-loader-worker.js",
