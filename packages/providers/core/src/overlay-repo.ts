@@ -9,12 +9,13 @@ import {
   type DocumentId,
   type DocumentProgress,
   type QueryState,
-  type Repo,
+  Repo,
 } from "@automerge/automerge-repo/slim";
 
 import { subscribe } from "./index.js";
 import { forwardingProxy } from "./forwarding-proxy.js";
 import { OverlayHandle } from "./overlay-handle.js";
+import { LayeredDoc, type PatchDoc } from "./patch-layers.js";
 import type { RepoLike } from "./types.js";
 
 /**
@@ -35,6 +36,12 @@ import type { RepoLike } from "./types.js";
  * consumers keep the same wrapper and see a `change` with
  * `scopeReplaced: true`. One-shot providers remain fully supported.
  *
+ * `layers`, when present, names patch docs (see `patch-layers.ts`) to lay over
+ * the backing, front first. A provider adding layers asks its own ancestors
+ * first and puts its layers in front of theirs, so remappers stack instead of
+ * the nearest one hiding the rest. Layers sit over the live document only: a
+ * backing pinned to heads is shown as it was, unpatched.
+ *
  * The descriptor crosses the `patchwork:subscribe` channel structured-cloned,
  * which is why it carries plain `AutomergeUrl` strings and never a live
  * `DocHandle`/`Repo`.
@@ -42,6 +49,16 @@ import type { RepoLike } from "./types.js";
 export type DocHandleDescriptor = {
   url: AutomergeUrl;
   cloneUrl?: AutomergeUrl;
+  layers?: AutomergeUrl[];
+};
+
+export type OverlayRepoOptions = {
+  /**
+   * Where layered documents live. They're never saved or synced, so any
+   * storage-less, network-less repo will do. Defaults to one shared per realm,
+   * made the first time a descriptor carries layers.
+   */
+  scratchRepo?: Repo;
 };
 
 // The only members whose behavior an overlay repo changes; everything else
@@ -88,8 +105,12 @@ export class OverlayRepo implements RepoLike {
   >();
   // Live descriptor subscriptions, one per presented url.
   readonly #subscriptions = new Map<AutomergeUrl, () => void>();
-  // Applied backing url per presented url; skips no-op re-emissions.
-  readonly #backingUrls = new Map<AutomergeUrl, AutomergeUrl>();
+  // Applied backing (url, plus layers) per presented url; skips no-op
+  // re-emissions.
+  readonly #backingUrls = new Map<AutomergeUrl, string>();
+  // The layered doc a presented url is backed by, while it has layers.
+  readonly #leases = new Map<AutomergeUrl, Lease>();
+  readonly #scratchRepo: Repo | undefined;
   // Progress subscribers per presented url, mapped to their unsubscribe from
   // the current inner; re-wired on swap.
   readonly #progressDispatchers = new Map<
@@ -98,9 +119,14 @@ export class OverlayRepo implements RepoLike {
   >();
   #disposed = false;
 
-  constructor(baseRepo: Repo, element: HTMLElement) {
+  constructor(
+    baseRepo: Repo,
+    element: HTMLElement,
+    options: OverlayRepoOptions = {}
+  ) {
     this.baseRepo = baseRepo;
     this.#element = element;
+    this.#scratchRepo = options.scratchRepo;
     return forwardingProxy<OverlayRepo>(this, baseRepo, OVERLAY_REPO_OWNED);
   }
 
@@ -249,6 +275,8 @@ export class OverlayRepo implements RepoLike {
     this.#progressDispatchers.clear();
     for (const wrapped of this.#wrapped.values()) wrapped.dispose();
     this.#wrapped.clear();
+    for (const lease of this.#leases.values()) lease.release();
+    this.#leases.clear();
     this.#inner.clear();
     this.#resolving.clear();
     this.#backingUrls.clear();
@@ -283,18 +311,52 @@ export class OverlayRepo implements RepoLike {
         // A remapper may pin the backing to specific heads by stamping them
         // onto the returned url; honor them, but presented-url heads win.
         const parsedBacking = parseAutomergeUrl(backingRoot);
+        const pinned = heads ?? parsedBacking.heads;
         const backingUrl = stringifyAutomergeUrl({
           documentId: parsedBacking.documentId,
           segments,
-          heads: heads ?? parsedBacking.heads,
+          heads: pinned,
         });
-        if (this.#backingUrls.get(presented) === backingUrl) return;
+        const layers = pinned ? [] : (descriptor.layers ?? []);
+        const backingKey =
+          layers.length > 0 ? `${backingUrl}|${layers.join(",")}` : backingUrl;
+        if (this.#backingUrls.get(presented) === backingKey) return;
 
-        const inner = this.baseRepo.findWithProgress<T>(backingUrl);
-        const backing = await this.baseRepo.find<T>(backingUrl);
-        if (mySeq !== seq || this.#disposed) return;
+        let lease: Lease | undefined;
+        let inner: DocumentProgress<T>;
+        let backing: DocHandle<T>;
+        if (layers.length > 0) {
+          // The layered doc covers the whole backing document; the path is
+          // reapplied inside the scratch repo, where it lives.
+          const scratch = this.#scratchRepo ?? defaultScratchRepo();
+          lease = await leaseLayeredDoc(
+            this.baseRepo,
+            scratch,
+            stringifyAutomergeUrl({ documentId: parsedBacking.documentId }),
+            layers
+          );
+          const layeredUrl = stringifyAutomergeUrl({
+            documentId: lease.doc.handle.documentId,
+            segments,
+          });
+          inner = scratch.findWithProgress<T>(layeredUrl);
+          backing = await scratch.find<T>(layeredUrl);
+        } else {
+          inner = this.baseRepo.findWithProgress<T>(backingUrl);
+          backing = await this.baseRepo.find<T>(backingUrl);
+        }
+        if (mySeq !== seq || this.#disposed) {
+          lease?.release();
+          return;
+        }
 
-        this.#backingUrls.set(presented, backingUrl);
+        this.#backingUrls.set(presented, backingKey);
+        // The old lease is released only once nothing forwards to it:
+        // releasing deletes its layered doc, and a delete reaching the
+        // wrapper would tell consumers the document itself was deleted.
+        const previous = this.#leases.get(presented);
+        if (lease) this.#leases.set(presented, lease);
+        else this.#leases.delete(presented);
         this.#setInner(presented, inner as DocumentProgress<unknown>);
 
         const wrapped = this.#wrapped.get(presented) as
@@ -302,8 +364,10 @@ export class OverlayRepo implements RepoLike {
           | undefined;
         if (wrapped) {
           wrapped.swapBackingDocHandle(backing);
+          previous?.release();
           return;
         }
+        previous?.release();
         const created = new OverlayHandle<T>({
           presentedUrl: presented,
           backing,
@@ -398,4 +462,96 @@ function presentedUrlOf(id: AnyDocumentId): AutomergeUrl {
     return stringifyAutomergeUrl({ documentId, segments, heads });
   }
   return stringifyAutomergeUrl({ documentId: interpretAsDocumentId(id) });
+}
+
+// Layered docs, shared by every overlay repo in the realm that lays the same
+// layers over the same document from the same base repo (a nested view's base
+// is its parent view's overlay, which may remap the document), and kept while
+// any of them holds a lease.
+type Lease = { doc: LayeredDoc<unknown>; release: () => void };
+type LayeredEntry = { doc: Promise<LayeredDoc<unknown>>; holders: number };
+
+let scratchRepo: Repo | undefined;
+const layeredDocs = new WeakMap<Repo, WeakMap<Repo, Map<string, LayeredEntry>>>();
+
+function defaultScratchRepo(): Repo {
+  scratchRepo ??= new Repo();
+  return scratchRepo;
+}
+
+function rootRepoOf(repo: Repo): Repo {
+  while (repo instanceof OverlayRepo) repo = repo.baseRepo;
+  return repo;
+}
+
+async function leaseLayeredDoc(
+  baseRepo: Repo,
+  scratch: Repo,
+  rootUrl: AutomergeUrl,
+  layers: AutomergeUrl[]
+): Promise<Lease> {
+  let byScratch = layeredDocs.get(baseRepo);
+  if (!byScratch) {
+    byScratch = new WeakMap();
+    layeredDocs.set(baseRepo, byScratch);
+  }
+  let byKey = byScratch.get(scratch);
+  if (!byKey) {
+    byKey = new Map();
+    byScratch.set(scratch, byKey);
+  }
+  const key = `${rootUrl}|${layers.join(",")}`;
+  let entry = byKey.get(key);
+  if (!entry) {
+    const doc = (async () => {
+      const base = await baseRepo.find<unknown>(rootUrl);
+      // Patch docs are configuration, not content: they're found in the
+      // realm's own repo, under no remapping, so a draft or a parent view
+      // never swaps them for copies. One that can't be found (not synced
+      // yet, no access) is left out rather than failing the document it
+      // would have patched.
+      const root = rootRepoOf(baseRepo);
+      const found = await Promise.allSettled(
+        layers.map((url) => root.find<PatchDoc>(url))
+      );
+      const handles: DocHandle<PatchDoc>[] = [];
+      found.forEach((result, i) => {
+        if (result.status === "fulfilled") handles.push(result.value);
+        else {
+          console.warn(
+            `[patchwork-providers] patch ${layers[i]} unavailable:`,
+            result.reason
+          );
+        }
+      });
+      return new LayeredDoc(base, handles, scratch);
+    })();
+    entry = { doc, holders: 0 };
+    byKey.set(key, entry);
+    // Don't keep a failed attempt: the next lease tries again.
+    doc.catch(() => {
+      if (byKey.get(key) === entry) byKey.delete(key);
+    });
+  }
+  entry.holders++;
+  const held = entry;
+  let doc: LayeredDoc<unknown>;
+  try {
+    doc = await held.doc;
+  } catch (err) {
+    held.holders--;
+    throw err;
+  }
+  let released = false;
+  return {
+    doc,
+    release: () => {
+      if (released) return;
+      released = true;
+      if (--held.holders > 0) return;
+      if (byKey.get(key) === held) byKey.delete(key);
+      doc.dispose();
+      scratch.delete(doc.handle.documentId);
+    },
+  };
 }

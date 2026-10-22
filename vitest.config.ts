@@ -6,6 +6,7 @@ export default defineConfig({
       "core/bootloader",
       "core/filesystem",
       "packages/edge-handles",
+      "packages/providers/core",
     ],
   },
 });

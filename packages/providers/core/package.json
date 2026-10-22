@@ -16,16 +16,22 @@
   ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsc -w --preserveWatchOutput"
+    "dev": "tsc -w --preserveWatchOutput",
+    "test": "vitest run"
   },
   "author": "Ink & Switch",
   "license": "ISC",
   "peerDependencies": {
+    "@automerge/automerge": "*",
     "@automerge/automerge-repo": "*"
   },
   "devDependencies": {
+    "@automerge/automerge": "catalog:",
     "@automerge/automerge-repo": "catalog:",
-    "typescript": "^5.9.3"
+    "@automerge/automerge-subduction": "catalog:",
+    "happy-dom": "^20.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.6"
   },
   "repository": {
     "type": "git",

@@ -196,4 +196,36 @@ export {
 } from "./repo-provider.js";
 export type { RepoLike } from "./types.js";
 export { OverlayHandle, type OverlayHandleOpts } from "./overlay-handle.js";
-export { OverlayRepo, type DocHandleDescriptor } from "./overlay-repo.js";
+export {
+  OverlayRepo,
+  type DocHandleDescriptor,
+  type OverlayRepoOptions,
+} from "./overlay-repo.js";
+export {
+  LayeredDoc,
+  createPatch,
+  fromAutomergePatches,
+  isEntryStale,
+  isMarkPatch,
+  isPatchStale,
+  isPathPatch,
+  isTextPatch,
+  landPatch,
+  markPatch,
+  patchHighlights,
+  readEntry,
+  textPatch,
+  type EntryReading,
+  type Layer,
+  type MarkPatch,
+  type OpsError,
+  type PatchDoc,
+  type PatchEntry,
+  type PatchHighlight,
+  type PathPatch,
+  type TextPatch,
+} from "./patch-layers.js";
+export {
+  providePatchLayers,
+  type PatchProviderOptions,
+} from "./patch-provider.js";
