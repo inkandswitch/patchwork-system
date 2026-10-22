@@ -18,10 +18,6 @@ jobs:
   e2e:
     name: e2e (${{ matrix.browser }})
     runs-on: ubuntu-latest
-    # Firefox's page sometimes never finishes its own wasm init and the boot
-    # times out, on main too. Its failures show here without failing the run
-    # until that's fixed.
-    continue-on-error: ${{ matrix.browser == 'firefox' }}
     strategy:
       fail-fast: false
       matrix:
