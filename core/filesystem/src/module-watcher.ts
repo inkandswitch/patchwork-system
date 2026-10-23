@@ -424,11 +424,13 @@ export class ModuleWatcher {
   }
 
   /**
-   * One lookup at a time per package. A package doc that's still syncing in
-   * says it changed with every batch, and a lookup can take as long as the
-   * automerge worker's resolve timeout; starting one per change piles them up
-   * on a worker that's slow because it's busy. Changes that land meanwhile
-   * collapse into one more lookup once this one's back.
+   * One lookup and import at a time per package. A package doc that's still
+   * syncing in says it changed with every batch, and a lookup or an import
+   * can take as long as the automerge worker's resolve timeout; starting one
+   * per change piles them up on a worker that's slow because it's busy.
+   * Changes that land meanwhile collapse into one more once this one's back.
+   * When the tracker says the heads, there's no lookup, so it's the import
+   * that has to wait.
    */
   private async reloadIfMoved(importName: string, entry: WatchedModule) {
     if (entry.looking) {
@@ -464,7 +466,7 @@ export class ModuleWatcher {
     log(`change in ${importName}, reloading at ${latest}`);
     // Keyed by the stable importName so this reload supersedes any
     // still-retrying announce of an older version of the same module.
-    void this.announce(latest, importName, latest);
+    await this.announce(latest, importName, latest);
   }
 
   private detachDocWatcher(importName: string) {
