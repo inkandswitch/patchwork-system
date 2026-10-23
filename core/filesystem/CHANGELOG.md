@@ -1,5 +1,16 @@
 # @inkandswitch/patchwork-filesystem
 
+## 0.2.14
+
+### Patch Changes
+
+- 3d2d0b0: Package heads lookups no longer pile up on a busy automerge worker. A package doc that's still syncing, as everything is on a fresh login, reports a change with every batch that arrives. The `ModuleWatcher` started a lookup for each one, and the automerge worker ran each as a full resolve with its own 30-second timeout. A worker slowed by the login sync then timed them all out, and each logged its own 557.
+
+  The `ModuleWatcher` now runs one change-triggered lookup per package at a time. Changes that land while one is in flight collapse into a single lookup after it. The automerge worker shares one resolve between concurrent requests for the same package url without heads, so tabs asking at once wait on the same lookup.
+
+- 3d2d0b0: When the service worker can't redirect a package url to its heads, the error now includes the automerge worker's reason (the first line of its 557 body — e.g. the doc is unavailable, or the resolve timed out) instead of only the status.
+- Only cache resolved paths when the root and every followed link pin their document heads.
+
 ## 0.2.13
 
 ### Patch Changes

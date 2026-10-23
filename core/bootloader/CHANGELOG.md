@@ -1,5 +1,25 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.8.5
+
+### Patch Changes
+
+- 3d2d0b0: The service worker no longer mistakes a booting automerge worker for a missing one. The worker only asked for its lock once its whole import graph (most of a megabyte) had loaded, so asset requests made in that window found no lock and logged "no automerge worker; asking tabs to start one". Each tab then dropped its connection to the booting worker and reconnected sync. In a single tab that happened on every reload.
+
+  The worker's script, `automerge-protocol-handler-worker.js`, is now a small module that takes the lock and holds on to connecting tabs before it imports the worker itself, now `@inkandswitch/patchwork-bootloader/automerge-protocol-handler`. The vite plugin emits that as a second file, `automerge-protocol-handler.js`, beside the first. As a backstop, the service worker waits three seconds before nudging, and only nudges if the request is still unanswered and there's still no lock. The nudge is throttled to once every five seconds, however many requests are waiting. Before, every request that raced the same cold start got past the throttle and logged its own nudge.
+
+  The e2e suite gains `automerge-worker.spec.ts`, which checks that the worker holds its lock once a tab is up and that a request racing a cold worker boot isn't reported as a missing worker.
+
+- 3d2d0b0: Package heads lookups no longer pile up on a busy automerge worker. A package doc that's still syncing, as everything is on a fresh login, reports a change with every batch that arrives. The `ModuleWatcher` started a lookup for each one, and the automerge worker ran each as a full resolve with its own 30-second timeout. A worker slowed by the login sync then timed them all out, and each logged its own 557.
+
+  The `ModuleWatcher` now runs one change-triggered lookup per package at a time. Changes that land while one is in flight collapse into a single lookup after it. The automerge worker shares one resolve between concurrent requests for the same package url without heads, so tabs asking at once wait on the same lookup.
+
+- Only cache resolved paths when the root and every followed link pin their document heads.
+- Updated dependencies [3d2d0b0]
+- Updated dependencies [3d2d0b0]
+- Updated dependencies
+  - @inkandswitch/patchwork-filesystem@0.2.14
+
 ## 0.8.4
 
 ### Patch Changes
