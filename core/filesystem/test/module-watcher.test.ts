@@ -466,7 +466,7 @@ describe("ModuleWatcher package trackers", () => {
     }
   });
 
-  it("takes the version the tracker says, rather than looking it up", async () => {
+  it("looks the package up only when what the tracker holds changes", async () => {
     const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
     const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
     try {
@@ -489,23 +489,29 @@ describe("ModuleWatcher package trackers", () => {
         tracker
       );
       await watcher.doneLoading;
+      const said = watching.get(folder.url)!;
+      // What it holds, once it's watching.
+      said("a");
+      await pause(400);
       lookups.length = 0;
+      // One with heads is answered without going anywhere.
       const headless = () => lookups.filter((url) => !url.includes("#"));
 
-      // Where it already is: nothing to do.
-      watching.get(folder.url)!(folder.view(folder.heads()).url);
+      // A restarted tracker saying the same: nothing arrived.
+      said("a");
       await pause(400);
       expect(headless()).toEqual([]);
       expect(imported).toHaveLength(1);
 
+      // Something arrived. What it says isn't the version to import: the
+      // lookup finds that.
       folder.change((d: any) => {
         d.rev = 1;
       });
-      const moved = folder.view(folder.heads()).url;
-      watching.get(folder.url)!(moved);
+      said("b");
       await pause(400);
-      expect(headless()).toEqual([]);
-      expect(imported).toEqual([imported[0], moved]);
+      expect(headless()).toEqual([folder.url]);
+      expect(imported).toEqual([imported[0], folder.view(folder.heads()).url]);
       watcher.dispose();
     } finally {
       await Promise.all([folders.shutdown(), tab.shutdown()]).catch(() => {});

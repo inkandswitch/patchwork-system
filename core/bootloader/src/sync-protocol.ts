@@ -52,9 +52,10 @@ export type NodeMessage =
     }
   | { type: "heads"; sid: string; peerId: string; heads: string[] }
   /**
-   * `heads` are the node's own heads for the sedimentree, which are the
-   * document's automerge heads, as hex. Absent from a node that doesn't know
-   * them (or predates them), in which case the Repo has to look.
+   * `heads` are the node's own heads for the sedimentree, as hex. They're
+   * Subduction's heads, not the document's: they can include ancestors of
+   * its automerge heads. The same heads twice means nothing arrived. Absent
+   * from a node that doesn't know them (or predates them).
    */
   | { type: "changed"; sid: string; heads?: string[] }
   | { type: "ephemeral"; sid: string; senderId: string; payload: Uint8Array }

@@ -248,7 +248,7 @@ export class PortSyncRemote implements SubductionRemote {
    * Call `onChange` whenever the sedimentree `sid` may have new heads, whether
    * or not this Repo holds it, until the returned function is called. The
    * node keeps it subscribed with the server meanwhile. It's called with the
-   * node's heads for it (hex automerge heads), which may not have moved,
+   * node's heads for it (hex sedimentree heads), which may not have moved,
    * straight after watching and after a worker restart too; without them
    * when the node doesn't say.
    */

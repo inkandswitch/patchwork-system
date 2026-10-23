@@ -80,12 +80,12 @@ type WatchedModule = {
   /** The package doc being watched: a branches doc's is its default branch. */
   packageUrl: AutomergeUrl;
   unwatch: () => void;
-  onChange: (latest?: AutomergeUrl) => void;
+  onChange: (seen?: string) => void;
   timer?: ReturnType<typeof setTimeout>;
   /** The url at heads this watch takes to be current. */
   version?: string;
-  /** Where the tracker last said the package is, for the next lookup. */
-  latest?: AutomergeUrl;
+  /** What the tracker last said it holds of the package doc. */
+  seen?: string;
   /** The first lookup only sets `version`, rather than reloading. */
   baseline: boolean;
   /** Bumped per lookup, so only the newest one's answer is acted on. */
@@ -364,10 +364,16 @@ export class ModuleWatcher {
     if (this.#disposed) return undefined;
     const watched = this.#watchedModules.get(importName);
     if (watched) return watched;
-    const onChange = (latest?: AutomergeUrl) => {
-      // The tracker says it's where we are: nothing to look up.
-      if (latest && latest === entry.version) return;
-      entry.latest = latest;
+    const onChange = (seen?: string) => {
+      if (seen !== undefined) {
+        // The tracker holds what it did: nothing arrived.
+        if (seen === entry.seen) return;
+        const first = entry.seen === undefined;
+        entry.seen = seen;
+        // The lookup that settles the version is still to come, and finds
+        // whatever this is.
+        if (first && entry.version === undefined) return;
+      }
       if (entry.timer) clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
         entry.timer = undefined;
@@ -399,18 +405,9 @@ export class ModuleWatcher {
     entry: WatchedModule
   ): Promise<AutomergeUrl | undefined> {
     const lookup = ++entry.lookups;
-    const said = entry.latest;
-    entry.latest = undefined;
-    // What the tracker said is only the package once a lookup has found
-    // which doc that is: before then, a branches doc's own heads would be.
-    const latest =
-      said &&
-      entry.version &&
-      stripHeads(said) === stripHeads(entry.version as AutomergeUrl)
-        ? said
-        : await this.tracker.findLatest(
-            isValidAutomergeUrl(importName) ? importName : entry.packageUrl
-          );
+    const latest = await this.tracker.findLatest(
+      isValidAutomergeUrl(importName) ? importName : entry.packageUrl
+    );
     if (this.#watchedModules.get(importName) !== entry) return undefined;
     if (lookup !== entry.lookups) return undefined;
     const packageUrl = stripHeads(latest);
@@ -418,6 +415,8 @@ export class ModuleWatcher {
       warnBranchesUnsupported(importName as AutomergeUrl);
       entry.unwatch();
       entry.packageUrl = packageUrl;
+      // What the tracker said it held was of the other doc.
+      entry.seen = undefined;
       entry.unwatch = this.tracker.watch(packageUrl, entry.onChange);
     }
     return latest;
@@ -429,8 +428,6 @@ export class ModuleWatcher {
    * can take as long as the automerge worker's resolve timeout; starting one
    * per change piles them up on a worker that's slow because it's busy.
    * Changes that land meanwhile collapse into one more once this one's back.
-   * When the tracker says the heads, there's no lookup, so it's the import
-   * that has to wait.
    */
   private async reloadIfMoved(importName: string, entry: WatchedModule) {
     if (entry.looking) {

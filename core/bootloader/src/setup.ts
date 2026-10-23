@@ -10,12 +10,7 @@ import {
   DEFAULT_CLASSIC_SYNC_SERVER,
 } from "./sync-config.js";
 import debug from "debug";
-import {
-  encodeHeads,
-  parseAutomergeUrl,
-  stringifyAutomergeUrl,
-  type AutomergeUrl,
-} from "@automerge/automerge-repo/slim";
+import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
 import { PortSyncRemote, getSedimentreeId } from "./sync-remote.js";
 import type { SyncConnectMessage } from "./sync-protocol.js";
 export { relayKeyhive, type PortSyncRemote } from "./sync-remote.js";
@@ -173,20 +168,19 @@ export function getSyncRemote(): PortSyncRemote {
  * it, whether from the server or from another tab. That's the way to follow a
  * document whose contents you only need now and then.
  *
- * `latest` is the document's url at the heads the sync node has for it, so
- * there's no need to find it to tell whether it moved. It comes straight
- * after watching, and after the automerge worker restarts, whether or not it
- * moved. It's absent when the node doesn't say: find the document then.
+ * `seen` sums up what the sync node holds of the document: the same `seen`
+ * twice means nothing arrived in between. It comes straight after watching,
+ * and after the automerge worker restarts, whether or not anything moved. It
+ * isn't a version of the document: the node's heads are Subduction's, which
+ * can include ancestors of the Automerge heads, so find the document to know
+ * where it is. It's absent when the node doesn't say.
  */
 export function watchDocument(
   url: AutomergeUrl,
-  onChange: (latest?: AutomergeUrl) => void
+  onChange: (seen?: string) => void
 ): () => void {
-  const { documentId } = parseAutomergeUrl(url);
   return getSyncRemote().watch(getSedimentreeId(url), (heads) =>
-    onChange(
-      heads && stringifyAutomergeUrl({ documentId, heads: encodeHeads(heads) })
-    )
+    onChange(heads && [...heads].sort().join("|"))
   );
 }
 
