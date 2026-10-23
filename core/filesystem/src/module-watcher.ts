@@ -88,6 +88,10 @@ type WatchedModule = {
   baseline: boolean;
   /** Bumped per lookup, so only the newest one's answer is acted on. */
   lookups: number;
+  /** A change-triggered lookup is in flight. */
+  looking: boolean;
+  /** A change landed while `looking`, so look again once it's back. */
+  stale: boolean;
 };
 
 /** The url of the document `url` names, without heads. */
@@ -371,6 +375,8 @@ export class ModuleWatcher {
       unwatch: this.tracker.watch(packageUrl, onChange),
       baseline,
       lookups: 0,
+      looking: false,
+      stale: false,
     };
     this.#watchedModules.set(importName, entry);
     if (baseline) void this.reloadIfMoved(importName, entry);
@@ -403,7 +409,30 @@ export class ModuleWatcher {
     return latest;
   }
 
+  /**
+   * One lookup at a time per package. A package doc that's still syncing in
+   * says it changed with every batch, and a lookup can take as long as the
+   * automerge worker's resolve timeout; starting one per change piles them up
+   * on a worker that's slow because it's busy. Changes that land meanwhile
+   * collapse into one more lookup once this one's back.
+   */
   private async reloadIfMoved(importName: string, entry: WatchedModule) {
+    if (entry.looking) {
+      entry.stale = true;
+      return;
+    }
+    entry.looking = true;
+    try {
+      do {
+        entry.stale = false;
+        await this.lookUpAndReload(importName, entry);
+      } while (entry.stale && this.#watchedModules.get(importName) === entry);
+    } finally {
+      entry.looking = false;
+    }
+  }
+
+  private async lookUpAndReload(importName: string, entry: WatchedModule) {
     let latest: AutomergeUrl | undefined;
     try {
       latest = await this.findLatestVersion(importName, entry);

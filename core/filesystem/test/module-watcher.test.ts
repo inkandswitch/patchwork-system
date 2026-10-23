@@ -511,6 +511,68 @@ describe("ModuleWatcher package trackers", () => {
     }
   });
 
+  it("looks up once more, not once per change, for changes during a slow lookup", async () => {
+    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
+    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    try {
+      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
+      const settings = tab.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [folder.url],
+      });
+      const { tracker, lookups, watching } = trackElsewhere(folders);
+      const realFindLatest = tracker.findLatest;
+      // Holds the next headless lookup until released.
+      let hold: Promise<void> | undefined;
+      tracker.findLatest = async (url) => {
+        if (hold && !url.includes("#")) await hold;
+        return realFindLatest(url);
+      };
+      const imported: string[] = [];
+      const watcher = new ModuleWatcher(
+        tab,
+        { system: settings.url },
+        () => {},
+        undefined,
+        async (url) => {
+          imported.push(url);
+          return { plugins: [] };
+        },
+        tracker
+      );
+      await watcher.doneLoading;
+      lookups.length = 0;
+
+      const { promise, resolve: release } = Promise.withResolvers<void>();
+      hold = promise;
+      folder.change((d: any) => {
+        d.rev = 1;
+      });
+      watching.get(folder.url)!();
+      // Past the debounce, so the first lookup is in flight.
+      await pause(400);
+      // Each past the debounce too, so each would start a lookup of its own.
+      for (let rev = 2; rev <= 6; rev++) {
+        folder.change((d: any) => {
+          d.rev = rev;
+        });
+        watching.get(folder.url)!();
+        await pause(300);
+      }
+      hold = undefined;
+      release();
+      await pause(400);
+
+      // Imports look up their pinned url too; only headless lookups reach the
+      // automerge worker.
+      expect(lookups.filter((url) => !url.includes("#"))).toHaveLength(2);
+      expect(imported.at(-1)).toBe(folder.view(folder.heads()).url);
+      watcher.dispose();
+    } finally {
+      await Promise.all([folders.shutdown(), tab.shutdown()]).catch(() => {});
+    }
+  });
+
   it("watches a branches doc's default branch, and looks up through the branches doc", async () => {
     const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
     const tab = new AutomergeRepo({ peerId: "tab" as PeerId });

@@ -623,17 +623,51 @@ async function handleHandoffRequest(message: HandoffRequestMessage) {
   }
 }
 
+function resolveWithin(handoff: URL): Promise<Response> {
+  const signal = AbortSignal.timeout(RESOLVE_TIMEOUT_MS);
+  return Promise.race([
+    resolveAutomergeUrl(handoff, signal),
+    impatience(RESOLVE_TIMEOUT_MS),
+  ]);
+}
+
+/** Lookups of a url without heads in flight, by that url. */
+const latestLookups = new Map<string, Promise<Response>>();
+
+/**
+ * Resolve `handoff`, sharing the lookup with any already in flight for the
+ * same url without heads. Every tab's ModuleWatcher asks for each package's
+ * latest heads, again each time it changes, and none of it is cached, since
+ * the answer moves; on a busy worker those pile up into one full resolve
+ * each. One that joins late gets the shared lookup's answer, or its timeout,
+ * a little sooner than it would have its own.
+ */
+function resolveHandoff(handoff: URL): Promise<Response> {
+  const [maybeAutomergeUrl] = handoff.href.split("/");
+  if (
+    !isValidAutomergeUrl(maybeAutomergeUrl) ||
+    parseAutomergeUrl(maybeAutomergeUrl).heads
+  ) {
+    return resolveWithin(handoff);
+  }
+  let lookup = latestLookups.get(handoff.href);
+  if (!lookup) {
+    lookup = resolveWithin(handoff).finally(() => {
+      latestLookups.delete(handoff.href);
+    });
+    latestLookups.set(handoff.href, lookup);
+  }
+  // A redirect, so there's no body to share; each reply gets its own anyway.
+  return lookup.then((response) => response.clone());
+}
+
 async function respondToHandoff(message: HandoffRequestMessage, handoff: URL) {
   const { id, cachename, request } = message;
 
   let response: Response;
   try {
     log(`resolving handoff ${id} for ${handoff}`);
-    const signal = AbortSignal.timeout(RESOLVE_TIMEOUT_MS);
-    response = await Promise.race([
-      resolveAutomergeUrl(handoff, signal),
-      impatience(RESOLVE_TIMEOUT_MS),
-    ]);
+    response = await resolveHandoff(handoff);
   } catch (error) {
     if (error instanceof AbortHandoff) {
       handoffChannel.postMessage({
