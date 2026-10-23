@@ -37,9 +37,14 @@ export type PackageTracker = {
   findLatest(url: AutomergeUrl): Promise<AutomergeUrl>;
   /**
    * Call `onChange` whenever the doc at `url` may have new heads, until the
-   * returned function is called. A spurious call costs a `findLatest`.
+   * returned function is called. A tracker that knows the heads passes
+   * `latest`, the doc's url at them, which may be the version the watcher
+   * already has; without it, a spurious call costs a `findLatest`.
    */
-  watch(url: AutomergeUrl, onChange: () => void): () => void;
+  watch(
+    url: AutomergeUrl,
+    onChange: (latest?: AutomergeUrl) => void
+  ): () => void;
 };
 
 /**
@@ -57,30 +62,33 @@ export function trackPackagesInRepo(repo: Repo): PackageTracker {
     watch(url, onChange) {
       let handle: DocHandle<unknown> | undefined;
       let stopped = false;
+      // The change event's payload isn't a url.
+      const changed = () => onChange();
       Promise.resolve()
         .then(() => repo.find(url))
         .then(
         (found) => {
           if (stopped) return;
           handle = found;
-          handle.on("change", onChange);
+          handle.on("change", changed);
         },
         (error) => console.warn(`couldn't watch ${url}`, error)
       );
       return () => {
         stopped = true;
-        handle?.off("change", onChange);
+        handle?.off("change", changed);
       };
     },
   };
 }
 
 /**
- * Package docs resolved by the service worker, so they never load on this
- * thread: the automerge worker redirects a package url without heads to the
- * one at the doc's latest heads, and lets go of the doc soon after. `watch`
- * is the sync node's (`watchDocument` from
- * `@inkandswitch/patchwork-bootloader`).
+ * Package docs that never load on this thread. `watch` is the sync node's
+ * (`watchDocument` from `@inkandswitch/patchwork-bootloader`), which says what
+ * the heads are, so a package that moved needs no lookup. Otherwise the
+ * service worker finds it: the automerge worker redirects a package url
+ * without heads to the one at the doc's latest heads, and lets go of the doc
+ * soon after.
  */
 export function trackPackagesViaServiceWorker(
   watch: PackageTracker["watch"]

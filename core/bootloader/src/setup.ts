@@ -10,7 +10,12 @@ import {
   DEFAULT_CLASSIC_SYNC_SERVER,
 } from "./sync-config.js";
 import debug from "debug";
-import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import {
+  encodeHeads,
+  parseAutomergeUrl,
+  stringifyAutomergeUrl,
+  type AutomergeUrl,
+} from "@automerge/automerge-repo/slim";
 import { PortSyncRemote, getSedimentreeId } from "./sync-remote.js";
 import type { SyncConnectMessage } from "./sync-protocol.js";
 export { relayKeyhive, type PortSyncRemote } from "./sync-remote.js";
@@ -166,14 +171,23 @@ export function getSyncRemote(): PortSyncRemote {
  * returned function is called. Nothing is loaded for it: the sync node keeps
  * the document subscribed with the server and says when something arrives for
  * it, whether from the server or from another tab. That's the way to follow a
- * document whose contents you only need now and then; find it again when
- * `onChange` fires.
+ * document whose contents you only need now and then.
+ *
+ * `latest` is the document's url at the heads the sync node has for it, so
+ * there's no need to find it to tell whether it moved. It comes straight
+ * after watching, and after the automerge worker restarts, whether or not it
+ * moved. It's absent when the node doesn't say: find the document then.
  */
 export function watchDocument(
   url: AutomergeUrl,
-  onChange: () => void
+  onChange: (latest?: AutomergeUrl) => void
 ): () => void {
-  return getSyncRemote().watch(getSedimentreeId(url), onChange);
+  const { documentId } = parseAutomergeUrl(url);
+  return getSyncRemote().watch(getSedimentreeId(url), (heads) =>
+    onChange(
+      heads && stringifyAutomergeUrl({ documentId, heads: encodeHeads(heads) })
+    )
+  );
 }
 
 /** Dev escape hatch: make the shared worker close so the next use respawns it. */

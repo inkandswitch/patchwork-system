@@ -402,7 +402,7 @@ describe("ModuleWatcher package trackers", () => {
    */
   function trackElsewhere(repo: InstanceType<typeof AutomergeRepo>) {
     const lookups: string[] = [];
-    const watching = new Map<string, () => void>();
+    const watching = new Map<string, Parameters<PackageTracker["watch"]>[1]>();
     const real = trackPackagesInRepo(repo);
     const tracker: PackageTracker = {
       async findLatest(url) {
@@ -461,6 +461,52 @@ describe("ModuleWatcher package trackers", () => {
 
       watcher.dispose();
       expect(watching.size).toBe(0);
+    } finally {
+      await Promise.all([folders.shutdown(), tab.shutdown()]).catch(() => {});
+    }
+  });
+
+  it("takes the version the tracker says, rather than looking it up", async () => {
+    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
+    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    try {
+      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
+      const settings = tab.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [folder.url],
+      });
+      const { tracker, lookups, watching } = trackElsewhere(folders);
+      const imported: string[] = [];
+      const watcher = new ModuleWatcher(
+        tab,
+        { system: settings.url },
+        () => {},
+        undefined,
+        async (url) => {
+          imported.push(url);
+          return { plugins: [] };
+        },
+        tracker
+      );
+      await watcher.doneLoading;
+      lookups.length = 0;
+      const headless = () => lookups.filter((url) => !url.includes("#"));
+
+      // Where it already is: nothing to do.
+      watching.get(folder.url)!(folder.view(folder.heads()).url);
+      await pause(400);
+      expect(headless()).toEqual([]);
+      expect(imported).toHaveLength(1);
+
+      folder.change((d: any) => {
+        d.rev = 1;
+      });
+      const moved = folder.view(folder.heads()).url;
+      watching.get(folder.url)!(moved);
+      await pause(400);
+      expect(headless()).toEqual([]);
+      expect(imported).toEqual([imported[0], moved]);
+      watcher.dispose();
     } finally {
       await Promise.all([folders.shutdown(), tab.shutdown()]).catch(() => {});
     }

@@ -25,6 +25,7 @@ export type RemoteRequest =
   /**
    * Hear when a sedimentree may have new heads, without holding it: the node
    * says `changed` and sends no data, so the Repo needn't load the document.
+   * It says so straight away too, with the heads it has, if it has any.
    */
   | { type: "watch"; sid: string }
   | { type: "unwatch"; sid: string }
@@ -50,7 +51,12 @@ export type NodeMessage =
       records: Array<{ kind: RecordKind; id: string; blob: Uint8Array }>;
     }
   | { type: "heads"; sid: string; peerId: string; heads: string[] }
-  | { type: "changed"; sid: string }
+  /**
+   * `heads` are the node's own heads for the sedimentree, which are the
+   * document's automerge heads, as hex. Absent from a node that doesn't know
+   * them (or predates them), in which case the Repo has to look.
+   */
+  | { type: "changed"; sid: string; heads?: string[] }
   | { type: "ephemeral"; sid: string; senderId: string; payload: Uint8Array }
   | { type: "keyhive-frame"; peer: Uint8Array; payload: Uint8Array }
   | { type: "keyhive-peer-disconnected"; peer: Uint8Array };
