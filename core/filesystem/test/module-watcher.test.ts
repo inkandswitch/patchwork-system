@@ -402,7 +402,7 @@ describe("ModuleWatcher package trackers", () => {
    */
   function trackElsewhere(repo: InstanceType<typeof AutomergeRepo>) {
     const lookups: string[] = [];
-    const watching = new Map<string, () => void>();
+    const watching = new Map<string, Parameters<PackageTracker["watch"]>[1]>();
     const real = trackPackagesInRepo(repo);
     const tracker: PackageTracker = {
       async findLatest(url) {
@@ -461,6 +461,58 @@ describe("ModuleWatcher package trackers", () => {
 
       watcher.dispose();
       expect(watching.size).toBe(0);
+    } finally {
+      await Promise.all([folders.shutdown(), tab.shutdown()]).catch(() => {});
+    }
+  });
+
+  it("looks the package up only when what the tracker holds changes", async () => {
+    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
+    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    try {
+      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
+      const settings = tab.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [folder.url],
+      });
+      const { tracker, lookups, watching } = trackElsewhere(folders);
+      const imported: string[] = [];
+      const watcher = new ModuleWatcher(
+        tab,
+        { system: settings.url },
+        () => {},
+        undefined,
+        async (url) => {
+          imported.push(url);
+          return { plugins: [] };
+        },
+        tracker
+      );
+      await watcher.doneLoading;
+      const said = watching.get(folder.url)!;
+      // What it holds, once it's watching.
+      said("a");
+      await pause(400);
+      lookups.length = 0;
+      // One with heads is answered without going anywhere.
+      const headless = () => lookups.filter((url) => !url.includes("#"));
+
+      // A restarted tracker saying the same: nothing arrived.
+      said("a");
+      await pause(400);
+      expect(headless()).toEqual([]);
+      expect(imported).toHaveLength(1);
+
+      // Something arrived. What it says isn't the version to import: the
+      // lookup finds that.
+      folder.change((d: any) => {
+        d.rev = 1;
+      });
+      said("b");
+      await pause(400);
+      expect(headless()).toEqual([folder.url]);
+      expect(imported).toEqual([imported[0], folder.view(folder.heads()).url]);
+      watcher.dispose();
     } finally {
       await Promise.all([folders.shutdown(), tab.shutdown()]).catch(() => {});
     }

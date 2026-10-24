@@ -80,10 +80,12 @@ type WatchedModule = {
   /** The package doc being watched: a branches doc's is its default branch. */
   packageUrl: AutomergeUrl;
   unwatch: () => void;
-  onChange: () => void;
+  onChange: (seen?: string) => void;
   timer?: ReturnType<typeof setTimeout>;
   /** The url at heads this watch takes to be current. */
   version?: string;
+  /** What the tracker last said it holds of the package doc. */
+  seen?: string;
   /** The first lookup only sets `version`, rather than reloading. */
   baseline: boolean;
   /** Bumped per lookup, so only the newest one's answer is acted on. */
@@ -362,7 +364,16 @@ export class ModuleWatcher {
     if (this.#disposed) return undefined;
     const watched = this.#watchedModules.get(importName);
     if (watched) return watched;
-    const onChange = () => {
+    const onChange = (seen?: string) => {
+      if (seen !== undefined) {
+        // The tracker holds what it did: nothing arrived.
+        if (seen === entry.seen) return;
+        const first = entry.seen === undefined;
+        entry.seen = seen;
+        // The lookup that settles the version is still to come, and finds
+        // whatever this is.
+        if (first && entry.version === undefined) return;
+      }
       if (entry.timer) clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
         entry.timer = undefined;
@@ -404,17 +415,19 @@ export class ModuleWatcher {
       warnBranchesUnsupported(importName as AutomergeUrl);
       entry.unwatch();
       entry.packageUrl = packageUrl;
+      // What the tracker said it held was of the other doc.
+      entry.seen = undefined;
       entry.unwatch = this.tracker.watch(packageUrl, entry.onChange);
     }
     return latest;
   }
 
   /**
-   * One lookup at a time per package. A package doc that's still syncing in
-   * says it changed with every batch, and a lookup can take as long as the
-   * automerge worker's resolve timeout; starting one per change piles them up
-   * on a worker that's slow because it's busy. Changes that land meanwhile
-   * collapse into one more lookup once this one's back.
+   * One lookup and import at a time per package. A package doc that's still
+   * syncing in says it changed with every batch, and a lookup or an import
+   * can take as long as the automerge worker's resolve timeout; starting one
+   * per change piles them up on a worker that's slow because it's busy.
+   * Changes that land meanwhile collapse into one more once this one's back.
    */
   private async reloadIfMoved(importName: string, entry: WatchedModule) {
     if (entry.looking) {
@@ -450,7 +463,7 @@ export class ModuleWatcher {
     log(`change in ${importName}, reloading at ${latest}`);
     // Keyed by the stable importName so this reload supersedes any
     // still-retrying announce of an older version of the same module.
-    void this.announce(latest, importName, latest);
+    await this.announce(latest, importName, latest);
   }
 
   private detachDocWatcher(importName: string) {

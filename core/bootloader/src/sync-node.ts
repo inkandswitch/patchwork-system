@@ -118,6 +118,15 @@ export class SyncNode {
   readonly #echoing = new Map<string, number>();
   /** Peer deliveries waiting for this microtask's flush, per sedimentree. */
   readonly #outbound = new Map<string, DataRecord[]>();
+  /**
+   * Sedimentrees to tell watchers about shortly, each with whether to stay
+   * quiet when this node doesn't know its heads, and the records that moved
+   * it, which its heads have to include before they're worth sending.
+   */
+  readonly #changed = new Map<
+    string,
+    { ifKnown: boolean; records: Array<{ kind: RecordKind; id: string }> }
+  >();
   readonly #ephemeralSubscribers = new Map<string, number>();
   /** Per sedimentree, the round with the server in progress. */
   readonly #rounds = new Map<string, Round>();
@@ -278,11 +287,94 @@ export class SyncNode {
     }
   }
 
-  /** Tell every Repo watching `sid` that it may have new heads. */
-  #sendChanged(sid: string) {
-    const message: NodeMessage = { type: "changed", sid };
-    for (const client of this.#clients) {
-      if (client.watching.has(sid)) this.#send(client, message);
+  /**
+   * Tell every Repo watching `sid` that it may have new heads, and what they
+   * are, so it can tell for itself whether they've moved. With `ifKnown`
+   * (answering a watch), say nothing for a sedimentree this node has no
+   * heads for: there's nothing to report until a round brings some.
+   * `records` are what arrived, if anything did.
+   */
+  #sendChanged(
+    sid: string,
+    {
+      ifKnown = false,
+      records = [],
+    }: {
+      ifKnown?: boolean;
+      records?: Array<{ kind: RecordKind; id: string }>;
+    } = {}
+  ) {
+    if (![...this.#clients].some((client) => client.watching.has(sid))) return;
+    // Not a microtask: a record is stored before subduction adds it to the
+    // tree, and the heads are read from the tree.
+    if (this.#changed.size === 0) {
+      setTimeout(() =>
+        this.#announceChanged().catch((error) =>
+          this.#log("couldn't announce changes", error)
+        )
+      );
+    }
+    const queued = this.#changed.get(sid);
+    this.#changed.set(sid, {
+      ifKnown: ifKnown && (queued?.ifKnown ?? true),
+      records: [...(queued?.records ?? []), ...records],
+    });
+  }
+
+  /**
+   * Whether the tree has every one of `records` in it yet, so that its heads
+   * account for them. Heads read before then could be the ones from before
+   * they arrived, which would tell a watcher nothing moved.
+   */
+  async #treeHas(
+    sid: string,
+    records: Array<{ kind: RecordKind; id: string }>
+  ): Promise<boolean> {
+    if (records.length === 0) return true;
+    const id = sedimentreeId(sid);
+    const [commits, fragments] = await Promise.all([
+      this.subduction.getCommits(id),
+      this.subduction.getFragments(id),
+    ]);
+    const known = new Set([
+      ...(commits ?? []).map((commit) => commit.commitId.toHexString()),
+      ...(fragments ?? []).map((fragment) => fragment.head.toHexString()),
+    ]);
+    return records.every((record) => known.has(record.id));
+  }
+
+  // One getAllHeads for everything queued: a restarted worker's tabs watch
+  // every package again at once.
+  async #announceChanged() {
+    const changed = new Map(this.#changed);
+    this.#changed.clear();
+    const heads = new Map<string, string[]>();
+    // Without heads a change still goes out, and the Repo looks for itself.
+    const trees = await this.subduction.getAllHeads().catch((error) => {
+      this.#log("couldn't read heads", error);
+      return [];
+    });
+    for (const tree of trees) {
+      const sid = tree.id.toString();
+      // An empty list is a sedimentree with no heads yet.
+      if (changed.has(sid) && tree.heads.length > 0) {
+        heads.set(
+          sid,
+          tree.heads.map((head) => head.toHexString())
+        );
+      }
+    }
+    for (const [sid, { ifKnown, records }] of changed) {
+      let known = heads.get(sid);
+      if (!known && ifKnown) continue;
+      // Without heads the watcher looks for itself, which is right either way.
+      if (known && !(await this.#treeHas(sid, records).catch(() => false))) {
+        known = undefined;
+      }
+      const message: NodeMessage = { type: "changed", sid, heads: known };
+      for (const client of this.#clients) {
+        if (client.watching.has(sid)) this.#send(client, message);
+      }
     }
   }
 
@@ -380,6 +472,7 @@ export class SyncNode {
         return;
       case "watch":
         client.watching.add(request.sid);
+        this.#sendChanged(request.sid, { ifKnown: true });
         this.#subscribe(request.sid);
         return;
       case "unwatch":
@@ -562,7 +655,7 @@ export class SyncNode {
     // heads announcement lands.
     this.#sendToInterested(sid, { type: "data", sid, records: forward }, from);
     // The writer too: what watches a document in a Repo isn't what holds it.
-    this.#sendChanged(sid);
+    this.#sendChanged(sid, { records: forward });
 
     const keys = forward.map((record) => `${sid}:${record.id}`);
     for (const key of keys) this.#echoes.add(key);
@@ -629,7 +722,7 @@ export class SyncNode {
     if (!records) return;
     this.#outbound.delete(sid);
     this.#sendToInterested(sid, { type: "data", sid, records });
-    this.#sendChanged(sid);
+    this.#sendChanged(sid, { records });
   }
 
   async #subscribeEphemeral(sid: string) {

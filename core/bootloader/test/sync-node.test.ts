@@ -16,7 +16,7 @@ import {
   SedimentreeId,
   Subduction,
 } from "@automerge/automerge-subduction";
-import { parseAutomergeUrl } from "@automerge/automerge-repo";
+import { decodeHeads, parseAutomergeUrl } from "@automerge/automerge-repo";
 
 import { SyncNode } from "../src/sync-node.js";
 import { PortSyncRemote, getSedimentreeId } from "../src/sync-remote.js";
@@ -477,6 +477,52 @@ describe("watching a document", () => {
     await eventually(() => counter.rounds > before);
   });
 
+  it("says the document's heads, and the replacement answers a watch with them", async () => {
+    const server = startServer();
+    const other = elsewhere(server);
+    const theirs = other.create<Doc>({ count: 0 });
+    await other.flush();
+
+    const site = origin(server);
+    const remote = site.remote();
+    cleanup.push(async () => remote.shutdown());
+    const heard: Array<string[] | undefined> = [];
+    remote.watch(getSedimentreeId(theirs.url), (heads) => heard.push(heads));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    theirs.change((doc) => {
+      doc.count = 1;
+    });
+    const moved = decodeHeads(theirs.heads());
+    await eventually(() =>
+      heard.some((heads) => heads?.join() === moved.join())
+    );
+
+    const before = heard.length;
+    await site.restartNode();
+    await eventually(() => heard.length > before);
+    // Nothing moved, and every call since says so.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(heard.slice(before).map((heads) => heads?.join())).toEqual(
+      heard.slice(before).map(() => moved.join())
+    );
+
+    // A document the node already has: heads read before the edit is in its
+    // tree would be the old ones, and say nothing moved.
+    const since = heard.length;
+    theirs.change((doc) => {
+      doc.count = 2;
+    });
+    const movedAgain = decodeHeads(theirs.heads());
+    await eventually(() => heard.length > since);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(heard.slice(since).map((heads) => heads?.join())).not.toContain(
+      moved.join()
+    );
+    await eventually(() =>
+      heard.some((heads) => heads?.join() === movedAgain.join())
+    );
+  });
+
   it("keeps hearing the server across a worker restart", async () => {
     const server = startServer();
     const other = elsewhere(server);
@@ -487,7 +533,7 @@ describe("watching a document", () => {
     const heard = startWatching(site, theirs.url);
     await new Promise((resolve) => setTimeout(resolve, 500));
     await site.restartNode();
-    // Losing the node makes everyone look again, whether or not it moved.
+    // The replacement answers the watch with the heads it has.
     await eventually(() => heard.changes > 0);
     await new Promise((resolve) => setTimeout(resolve, 500));
     const before = heard.changes;

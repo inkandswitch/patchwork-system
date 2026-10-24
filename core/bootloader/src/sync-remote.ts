@@ -53,7 +53,7 @@ export class PortSyncRemote implements SubductionRemote {
   readonly #pending = new Map<number, Pending>();
   readonly #ephemeral = new Set<string>();
   /** Per sedimentree, who wants to hear it may have changed. */
-  readonly #watchers = new Map<string, Set<() => void>>();
+  readonly #watchers = new Map<string, Set<(heads?: string[]) => void>>();
   #keyhiveHandler: KeyhiveFrameHandler | null = null;
   /**
    * Writes the node hasn't heard about because there was no port to tell it
@@ -83,12 +83,11 @@ export class PortSyncRemote implements SubductionRemote {
     for (const sid of this.#ephemeral) {
       this.#post({ type: "ephemeral-subscribe", sid });
     }
-    // A replacement node only says `changed` for what reaches it after this,
-    // and a watched document may have moved while there was no node to say
-    // so. Everyone looks again.
-    for (const [sid, watchers] of this.#watchers) {
+    // A replacement node answers each watch with the heads it has, which
+    // include whatever the node before it stored, so a watcher whose
+    // document moved while there was no node to say so hears it then.
+    for (const sid of this.#watchers.keys()) {
       this.#post({ type: "watch", sid });
-      for (const onChange of watchers) onChange();
     }
     if (this.#keyhiveHandler) this.#post({ type: "keyhive-listen" });
     const unsent = this.#unsent;
@@ -158,7 +157,7 @@ export class PortSyncRemote implements SubductionRemote {
         return;
       case "changed":
         for (const onChange of this.#watchers.get(message.sid) ?? []) {
-          onChange();
+          onChange(message.heads);
         }
         return;
       case "ephemeral":
@@ -248,17 +247,21 @@ export class PortSyncRemote implements SubductionRemote {
   /**
    * Call `onChange` whenever the sedimentree `sid` may have new heads, whether
    * or not this Repo holds it, until the returned function is called. The
-   * node keeps it subscribed with the server meanwhile.
+   * node keeps it subscribed with the server meanwhile. It's called with the
+   * node's heads for it (hex sedimentree heads), which may not have moved,
+   * straight after watching and after a worker restart too; without them
+   * when the node doesn't say.
    */
-  watch(sid: string, onChange: () => void): () => void {
+  watch(sid: string, onChange: (heads?: string[]) => void): () => void {
     let watchers = this.#watchers.get(sid);
     if (!watchers) {
       watchers = new Set();
       this.#watchers.set(sid, watchers);
-      this.#post({ type: "watch", sid });
     }
+    // Again for a second watcher, so it hears the heads too.
+    this.#post({ type: "watch", sid });
     // Wrapped, so that watching twice with one function takes two unwatches.
-    const watcher = () => onChange();
+    const watcher = (heads?: string[]) => onChange(heads);
     watchers.add(watcher);
     return () => {
       if (!watchers.delete(watcher) || watchers.size > 0) return;

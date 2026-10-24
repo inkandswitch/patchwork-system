@@ -168,14 +168,22 @@ export function getSyncRemote(): PortSyncRemote {
  * returned function is called. Nothing is loaded for it: the sync node keeps
  * the document subscribed with the server and says when something arrives for
  * it, whether from the server or from another tab. That's the way to follow a
- * document whose contents you only need now and then; find it again when
- * `onChange` fires.
+ * document whose contents you only need now and then.
+ *
+ * `seen` sums up what the sync node holds of the document: the same `seen`
+ * twice means nothing arrived in between. It comes straight after watching,
+ * and after the automerge worker restarts, whether or not anything moved. It
+ * isn't a version of the document: the node's heads are Subduction's, which
+ * can include ancestors of the Automerge heads, so find the document to know
+ * where it is. It's absent when the node doesn't say.
  */
 export function watchDocument(
   url: AutomergeUrl,
-  onChange: () => void
+  onChange: (seen?: string) => void
 ): () => void {
-  return getSyncRemote().watch(getSedimentreeId(url), onChange);
+  return getSyncRemote().watch(getSedimentreeId(url), (heads) =>
+    onChange(heads && [...heads].sort().join("|"))
+  );
 }
 
 /** Dev escape hatch: make the shared worker close so the next use respawns it. */
