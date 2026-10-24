@@ -185,6 +185,16 @@ function getRepo(): Promise<Repo> {
   return repoPromise;
 }
 
+let builtRepo: Repo | undefined;
+
+// For the console. The Repo is only built once something has to be resolved,
+// so before then reading `repo` starts building it and gives its promise:
+// `await repo` works either way.
+Object.defineProperty(self, "repo", {
+  configurable: true,
+  get: () => builtRepo ?? getRepo(),
+});
+
 async function buildRepo(): Promise<Repo> {
   await control.holding;
   await initWasm();
@@ -193,7 +203,7 @@ async function buildRepo(): Promise<Repo> {
     ? await buildKeyhiveRepo(syncServer.keyhive)
     : { repo: await buildPlainRepo() };
 
-  (self as any).repo = repo;
+  builtRepo = repo;
   if (hive) (self as any).hive = hive;
   return repo;
 }
