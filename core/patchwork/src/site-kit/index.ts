@@ -21,4 +21,10 @@ export { resolveSyncServers, PRELOAD_WASM_ASSETS } from "./sync-servers.js";
 export { getIcons, ICON_SPECS, type IconSpec } from "./icons.js";
 export { buildHtml, escapeHtml } from "./html.js";
 export { buildManifest } from "./manifest.js";
-export { buildHeaders, REDIRECTS } from "./netlify.js";
+export {
+  buildHeaders,
+  buildRedirects,
+  REDIRECTS,
+  REVALIDATED_PATHS,
+  REVALIDATED_CACHE_CONTROL,
+} from "./netlify.js";

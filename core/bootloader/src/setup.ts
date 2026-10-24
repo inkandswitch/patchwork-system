@@ -118,13 +118,15 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
     },
     onGone() {
-      // Its sync node went with it, port and all.
+      // Its sync node went with it, port and all, and its classic sync.
       syncRemote?.reconnect();
+      reconnectClassicSync();
     },
     onRestarting(message) {
       // Ask the replacement for a sync port now: posts are held until it's
       // up, and this one's sync node is going away with it.
       syncRemote?.reconnect();
+      reconnectClassicSync();
       // The worker restarts because a newer tab connected. If that build is
       // newer than ours too, we're the stale one.
       if (isNewerBuild(message.build)) {
@@ -191,6 +193,17 @@ export function restartAutomergeProtocolHandlerWorker(
   automergeProtocolHandlerWorker.restart(reason);
 }
 
+// The server this tab asked the worker to classic-sync with, if any. A
+// replacement worker doesn't connect again by itself, so it's asked again.
+let classicSyncServer: string | undefined;
+
+function reconnectClassicSync() {
+  if (!classicSyncServer) return;
+  requestClassicSync(classicSyncServer).catch((error) =>
+    console.warn("couldn't reconnect classic sync", error)
+  );
+}
+
 export function connectClassicSync(
   server: string = readClassicSyncServer()
 ): Promise<void> {
@@ -200,7 +213,11 @@ export function connectClassicSync(
       new Error(`invalid classic sync server URL: ${server}`)
     );
   }
+  classicSyncServer = url;
+  return requestClassicSync(url);
+}
 
+function requestClassicSync(url: string): Promise<void> {
   const { port1, port2 } = new MessageChannel();
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {

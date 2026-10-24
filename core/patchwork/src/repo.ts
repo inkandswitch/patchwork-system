@@ -2,6 +2,10 @@ import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
 import {
+  AUTOMERGE_WASM,
+  SUBDUCTION_WASM,
+} from "@inkandswitch/patchwork-bootloader/emitted";
+import {
   getSyncRemote,
   relayKeyhive,
 } from "@inkandswitch/patchwork-bootloader";
@@ -39,8 +43,8 @@ let wasmReady: Promise<void> | undefined;
 export function initWasm(): Promise<void> {
   if (!wasmReady) {
     wasmReady = Promise.all([
-      initializeWasm(new Request("/automerge.wasm")),
-      initSubduction(new Request("/subduction.wasm")),
+      initializeWasm(new Request(AUTOMERGE_WASM)),
+      initSubduction(new Request(SUBDUCTION_WASM)),
     ]).then(() => undefined);
   }
   return wasmReady;

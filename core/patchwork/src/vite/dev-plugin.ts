@@ -28,8 +28,8 @@ const builtinPaths = new Map(chunks.map((id) => [builtins[id]!, id]));
 /**
  * Workers are `type: "module"` scripts the browser fetches directly, so import
  * maps don't apply to them and their heavy imports have to resolve to real
- * URLs. The build rewrites those to the `/packages/...` chunks it emits; here
- * they become the dev server's own optimized-dep URLs.
+ * URLs. A build links them to the chunks it emits for those; here they become
+ * the dev server's own optimized-dep URLs.
  */
 function externalBuiltins(): esbuild.Plugin {
   return {

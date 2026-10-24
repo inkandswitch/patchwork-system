@@ -16,6 +16,13 @@ export const HANDOFF_CHANNEL = "@patchwork/handoff";
 export const AUTOMERGE_WORKER_LOCK = "@patchwork/automerge-worker";
 
 /**
+ * The Cache Storage cache where a restarting automerge worker leaves what it
+ * had loaded, for its replacement. Not the service worker's own cache, so it
+ * has to survive the service worker clearing out every cache but its own.
+ */
+export const LOADED_CACHE = "patchwork-package-memory";
+
+/**
  * Service worker → tabs: there's no automerge worker (nothing holds or is
  * waiting for {@link AUTOMERGE_WORKER_LOCK}), so a handoff would go unanswered.
  * Start one.

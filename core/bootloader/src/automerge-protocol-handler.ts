@@ -54,10 +54,12 @@ import { loadKeyhiveSigner, loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
 import { SyncNode } from "./sync-node.js";
+import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
 import { PortSyncRemote, relayKeyhive } from "./sync-remote.js";
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
+  LOADED_CACHE,
   PACKAGE_MEMORY_CHANNEL,
   type HandoffCachedMessage,
   type HandoffOnlineMessage,
@@ -105,8 +107,8 @@ function initWasm(): Promise<void> {
     log("fetching wasm");
     watchWasmMemories();
     wasmPromise = Promise.all([
-      initializeWasm(new Request("/automerge.wasm")),
-      initSubduction(new Request("/subduction.wasm")),
+      initializeWasm(new Request(AUTOMERGE_WASM)),
+      initSubduction(new Request(SUBDUCTION_WASM)),
     ]).then(() => log("wasm initialized"));
     wasmPromise.catch(() => {
       wasmPromise = null;
@@ -528,10 +530,10 @@ function handoffFinished() {
 // needed at once until its global goes. Resolving packages at boot takes the
 // resolver Repo's automerge to 90–130MB, and letting the documents go gives
 // none of it back. So once handoffs stop for RECYCLE_IDLE_MS, an instance whose
-// automerge holds more than RECYCLE_AT_MB restarts itself, as it does for a
-// new build: tabs spawn the replacement and reconnect their sync, the service
-// worker re-sends any handoff still unanswered, and what was resolved is in
-// its cache, so the replacement doesn't load it all again.
+// wasm has grown by more than RECYCLE_AT_MB restarts itself, as it does for a
+// new build: tabs spawn the replacement and reconnect their sync (classic sync
+// too), the service worker re-sends any handoff still unanswered, and what was
+// resolved is in its cache, so the replacement doesn't load it all again.
 
 const RECYCLE_AT_MB = 64;
 const RECYCLE_IDLE_MS = 15_000;
@@ -565,25 +567,35 @@ function watchWasmMemories() {
   };
 }
 
-function automergeMemoryMb(): number {
-  let bytes = 0;
-  for (const { url, memory } of wasmMemories) {
-    if (new URL(url, self.location.href).pathname.endsWith("/automerge.wasm")) {
-      bytes += memory.buffer.byteLength;
-    }
-  }
+const wasmBytes = (file: string) =>
+  wasmMemories
+    .filter(
+      ({ url }) =>
+        new URL(url, self.location.href).pathname ===
+        new URL(file, self.location.href).pathname
+    )
+    .reduce((bytes, { memory }) => bytes + memory.buffer.byteLength, 0);
+
+// Subduction holds the sync node's trees, which a replacement holds again as
+// soon as it starts, so only what it grew past that counts. It's taken the
+// first time this instance looks, by when the node has loaded them.
+let subductionBaseline: number | undefined;
+
+/** How far this instance's wasm has grown past what a fresh one would hold. */
+function wasmGrowthMb(): number {
+  const subduction = wasmBytes(SUBDUCTION_WASM);
+  subductionBaseline ??= subduction;
+  const bytes =
+    wasmBytes(AUTOMERGE_WASM) + Math.max(0, subduction - subductionBaseline);
   return Math.round(bytes / 1048576);
 }
 
 function recycleIfHolding() {
   if (handoffsInFlight > 0 || draining) return;
-  // A replacement doesn't connect to it again; whoever asked for it would
-  // have to.
-  if (classicSyncConnect) return;
-  const mb = automergeMemoryMb();
+  const mb = wasmGrowthMb();
   if (mb <= RECYCLE_AT_MB) return;
   control.restart(
-    `recycling: automerge holds ${mb}MB of wasm memory with nothing to resolve`
+    `recycling: wasm memory has grown by ${mb}MB with nothing to resolve`
   );
 }
 
@@ -817,7 +829,6 @@ const branchOf = new Map<DocumentId, DocumentId>();
 // What's been loaded outlives the instance: a restart (a recycle, or a new
 // build) saves it for the replacement, which resolves from the service
 // worker's cache rather than loading the packages again.
-const LOADED_CACHE = "patchwork-package-memory";
 const LOADED_KEY = "/loaded-by-package";
 
 type SavedLoaded = {

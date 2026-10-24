@@ -31,6 +31,10 @@
       "import": "./dist/vite/dev-plugin.js",
       "types": "./dist/vite/dev-plugin.d.ts"
     },
+    "./vite/hashed": {
+      "import": "./dist/vite/hashed-plugin.js",
+      "types": "./dist/vite/hashed-plugin.d.ts"
+    },
     "./vite/html": {
       "import": "./dist/vite/html-plugin.js",
       "types": "./dist/vite/html-plugin.d.ts"
