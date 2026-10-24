@@ -3,6 +3,7 @@
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
+  LOADED_CACHE,
   type AutomergeWorkerMissingMessage,
   type HandoffReplyMessage,
   type HandoffRequestMessage,
@@ -83,7 +84,8 @@ async function clearOtherCaches() {
   const names = await caches.keys();
   await Promise.all(
     names
-      .filter((name) => name !== cachename)
+      // The automerge worker's, which a replacement restores from.
+      .filter((name) => name !== cachename && name !== LOADED_CACHE)
       .map((name) => caches.delete(name))
   );
 }

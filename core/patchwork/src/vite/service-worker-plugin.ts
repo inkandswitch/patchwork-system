@@ -1,6 +1,6 @@
-import type { Plugin } from "vite";
+import type { Plugin, ResolvedConfig } from "vite";
 import { fileURLToPath } from "node:url";
-import { builtins } from "./importmap-plugin.js";
+import { hashedFiles } from "./hashed-plugin.js";
 
 // Anchor resolution at this file (inside @inkandswitch/patchwork's own
 // installed directory) rather than the site root — these worker specifiers
@@ -10,10 +10,15 @@ import { builtins } from "./importmap-plugin.js";
 const self = fileURLToPath(import.meta.url);
 
 // The service worker and the automerge shared worker are emitted as their
-// own chunks. Their heavy imports are marked external and resolved to
-// /packages/... URLs (both workers are created with type:"module", so the
-// browser fetches those as regular network requests).
-export const workers = [
+// own chunks. `fileName` is where the dev server serves each one. In a build
+// the `hashed` ones are emitted under a hashed name instead (see
+// hashed-plugin.ts), and loaded by the URL in the bootloader's emitted.ts; the
+// others are started by URL from one build to the next, so they keep theirs.
+export const workers: {
+  specifier: string;
+  fileName: string;
+  hashed?: boolean;
+}[] = [
   {
     specifier: "@inkandswitch/patchwork-bootloader/service-worker",
     fileName: "service-worker.js",
@@ -28,16 +33,22 @@ export const workers = [
   {
     specifier: "@inkandswitch/patchwork-bootloader/automerge-protocol-handler",
     fileName: "automerge-protocol-handler.js",
+    hashed: true,
   },
   {
     specifier: "@inkandswitch/patchwork-bootloader/module-loader-worker",
     fileName: "module-loader-worker.js",
+    hashed: true,
   },
 ];
 
 export function serviceworker(): Plugin {
-  const entryIds = new Set<string>();
-  let serve = false;
+  // The files they were written to, which vite's module preloading has to
+  // leave alone: it adds <link> tags to a document a worker doesn't have.
+  const workerFiles = new Set(workers.map(({ fileName }) => fileName));
+  const refs: string[] = [];
+  let config: ResolvedConfig;
+  let added: (() => void) | undefined;
 
   return {
     name: "@patchwork/service-worker",
@@ -47,31 +58,42 @@ export function serviceworker(): Plugin {
         build: {
           modulePreload: {
             resolveDependencies: (_url, deps, { hostId }) =>
-              workers.some(({ fileName }) => fileName === hostId) ? [] : deps,
+              workerFiles.has(hostId) ? [] : deps,
           },
         },
       };
     },
-    configResolved(config) {
-      serve = config.command === "serve";
+    configResolved(resolved) {
+      config = resolved;
+      if (resolved.command === "build") added = hashedFiles(resolved).expect();
     },
     async buildStart() {
       // emitFile throws in serve mode.
-      if (serve) return;
-      for (const { specifier, fileName } of workers) {
+      if (config.command === "serve") return;
+      const files = hashedFiles(config);
+      refs.length = 0;
+      for (const { specifier, fileName, hashed } of workers) {
         const resolved = await this.resolve(specifier, self);
-        entryIds.add(resolved!.id);
-        this.emitFile({
+        const ref = this.emitFile({
           type: "chunk",
           id: resolved!.id,
-          fileName,
+          ...(hashed
+            ? { name: fileName.slice(0, -".js".length) }
+            : { fileName }),
         });
+        if (hashed) {
+          files.add(`/${fileName}`, ref);
+          refs.push(ref);
+        }
       }
+      added?.();
     },
-    resolveId(source, importer) {
-      if (importer && entryIds.has(importer) && source in builtins) {
-        return { id: builtins[source], external: true };
-      }
+    generateBundle: {
+      // Before vite's own generateBundle, which renders the preloads.
+      order: "pre",
+      handler() {
+        for (const ref of refs) workerFiles.add(this.getFileName(ref));
+      },
     },
   };
 }

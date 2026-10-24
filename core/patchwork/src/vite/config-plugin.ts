@@ -8,6 +8,11 @@ import {
   DEFAULT_SYNC_SERVERS,
   resolvePrimarySyncServer,
 } from "../site-kit/sync-servers.js";
+import {
+  REVALIDATED_CACHE_CONTROL,
+  REVALIDATED_PATHS,
+} from "../site-kit/netlify.js";
+import { builtHashedFiles } from "./hashed-plugin.js";
 
 const CORS_HEADERS = { "Access-Control-Allow-Origin": "*" };
 
@@ -97,17 +102,28 @@ export function config(options: PatchworkVitePluginOptions = {}): Plugin {
     // page's service worker, so offline boot needs the browser's HTTP cache to
     // serve them without revalidating. Content hashes make that safe; a new
     // build gets new URLs. Production gets this from the generated _headers
-    // file — vite preview doesn't read that, so mirror it here.
+    // and _redirects files — vite preview reads neither, so mirror them here.
+    // The redirects are mirrored either way: code a site bundles as its own
+    // worker still asks for the fixed paths (see hashed-plugin.ts).
     configurePreviewServer(server) {
-      if (
-        options.netlify === false ||
-        options.netlify?.immutableAssets === false
-      ) {
-        return;
-      }
+      const headers =
+        options.netlify !== false && options.netlify?.immutableAssets !== false;
+      let redirects: Map<string, string> | undefined;
       server.middlewares.use((req, res, next) => {
-        if (req.url?.startsWith("/assets/")) {
+        const path = req.url?.split("?")[0] ?? "";
+        redirects ??= builtHashedFiles(server.config);
+        const to = redirects.get(path);
+        if (to) {
+          res.statusCode = 302;
+          res.setHeader("Location", to);
+          res.end();
+          return;
+        }
+        if (headers && path.startsWith("/assets/")) {
           res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+        }
+        if (headers && REVALIDATED_PATHS.includes(path)) {
+          res.setHeader("Cache-Control", REVALIDATED_CACHE_CONTROL);
         }
         next();
       });
