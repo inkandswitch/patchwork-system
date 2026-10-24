@@ -23,6 +23,10 @@
       "import": "./dist/externals.js",
       "types": "./dist/externals.d.ts"
     },
+    "./emitted": {
+      "import": "./dist/emitted.js",
+      "types": "./dist/emitted.d.ts"
+    },
     "./externals-list": {
       "import": "./dist/externals-list.js",
       "types": "./dist/externals-list.d.ts"

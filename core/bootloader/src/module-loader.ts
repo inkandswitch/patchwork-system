@@ -9,14 +9,13 @@
 
 import { importPluginFromFolderDocUrl } from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import { MODULE_LOADER_WORKER } from "./emitted.js";
 
 type Descriptor = Record<string, unknown> & { id?: string; type?: string };
 
 type WorkerReply =
   | { type: "descriptors"; id: number; descriptors: Descriptor[] }
   | { type: "error"; id: number; error: string };
-
-const WORKER_PATH = "/module-loader-worker.js";
 
 let worker: Worker | undefined;
 let nextRequestId = 1;
@@ -27,7 +26,7 @@ const pending = new Map<
 
 function getWorker(): Worker {
   if (worker) return worker;
-  worker = new Worker(WORKER_PATH, {
+  worker = new Worker(MODULE_LOADER_WORKER, {
     type: "module",
     name: "patchwork-module-loader",
   });

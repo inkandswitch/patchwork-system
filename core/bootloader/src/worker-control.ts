@@ -168,9 +168,18 @@ export function startWorkerControl(
     console.warn(`[lifecycle] ${name} SharedWorker restarting: ${reason}`);
     for (const port of ports) postToPort(port, restarting);
 
-    const drained = (async () => {
-      if (drain) await handlers.onRestart?.();
-    })();
+    const drained = Promise.all([
+      drain && handlers.onRestart?.(),
+      // The browser may start the replacement from the copy of this script
+      // it has cached, which is still this build: the script is served
+      // stale-while-revalidate so it starts offline. The newer tab would then
+      // restart that one too, and the next. Fetching the script past the
+      // cache now puts the newer copy there before the tabs start another.
+      build !== undefined &&
+        fetch(self.location.href, { cache: "no-cache" })
+          .then((response) => response.arrayBuffer())
+          .catch(() => {}),
+    ]);
     const deadline = new Promise<void>((resolve) =>
       setTimeout(resolve, RESTART_DRAIN_MS)
     );

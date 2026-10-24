@@ -81,10 +81,14 @@ test("the app boots from the SW cache while offline and keeps its docs", async (
     .poll(
       () =>
         page.evaluate(async () => {
+          // The wasm is under hashed names; the page preloads it by them.
           const urls = [
             location.href,
-            new URL("/automerge.wasm", location.origin).href,
-            new URL("/subduction.wasm", location.origin).href,
+            ...[
+              ...document.querySelectorAll<HTMLLinkElement>(
+                'link[rel="preload"][as="fetch"]',
+              ),
+            ].map((link) => link.href),
           ];
           const matches = await Promise.all(urls.map((u) => caches.match(u)));
           return matches.filter((m) => !m).length;

@@ -9,6 +9,7 @@ import { icons } from "./icons.js";
 import { html } from "./html-plugin.js";
 import { manifest } from "./manifest-plugin.js";
 import { netlify } from "./netlify-plugin.js";
+import { hashed } from "./hashed-plugin.js";
 import { statics, type PatchworkStaticSource } from "./static-plugin.js";
 import { buildInfo } from "./build-info-plugin.js";
 import type { PatchworkSiteOptions } from "../site-kit/options.js";
@@ -45,6 +46,7 @@ export default function patchwork(options?: PatchworkVitePluginOptions) {
     importmap(options),
     patches(),
     serviceworker(),
+    hashed(),
     dev(options),
     statics(options),
     buildInfo(options),
@@ -60,6 +62,7 @@ export { icons } from "./icons.js";
 export { html } from "./html-plugin.js";
 export { manifest } from "./manifest-plugin.js";
 export { netlify } from "./netlify-plugin.js";
+export { hashed, hashedFiles, HashedFiles } from "./hashed-plugin.js";
 export { statics, resolveStatic } from "./static-plugin.js";
 export { buildInfo } from "./build-info-plugin.js";
 

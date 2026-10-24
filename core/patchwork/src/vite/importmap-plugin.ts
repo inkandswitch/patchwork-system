@@ -1,10 +1,11 @@
-import type { Plugin } from "vite";
+import type { Plugin, ResolvedConfig } from "vite";
 import type {
   ImportMap,
   PatchworkVitePluginOptions,
 } from "./patchwork-plugin.js";
 import { fileURLToPath } from "node:url";
 import { relative } from "node:path";
+import { hashedFiles } from "./hashed-plugin.js";
 
 /**
  * bootloader owns resolving/emitting its own dependencies (it's the one that
@@ -17,6 +18,8 @@ import externals, {
   emitWasmAssets,
 } from "@inkandswitch/patchwork-bootloader/externals";
 
+// The paths the dev server serves these at, and the import map's in a build
+// until the hashed plugin swaps in the hashed names they're emitted under.
 export const builtins = externals.reduce(
   (builtins, name) => (
     (builtins[name] = `/packages/${slim[name] ?? name}.js`),
@@ -82,6 +85,7 @@ export function devDependencyId(id: string): string {
 
 export function importmap(options?: PatchworkVitePluginOptions): Plugin {
   const { importmap, builtins } = createImportMap(options);
+  let config: ResolvedConfig;
   let serve = false;
   return {
     name: "@patchwork/vite",
@@ -92,22 +96,27 @@ export function importmap(options?: PatchworkVitePluginOptions): Plugin {
         },
       };
     },
-    configResolved(config) {
-      serve = config.command === "serve";
+    configResolved(resolved) {
+      config = resolved;
+      serve = resolved.command === "serve";
     },
     async buildStart() {
       if (serve) return;
+      const files = hashedFiles(config);
       for (const id of chunks) {
-        this.emitFile({
+        const path = builtins[id]!;
+        const ref = this.emitFile({
           type: "chunk",
-          fileName: builtins[id]!.slice(1),
+          name: path.slice("/packages/".length, -".js".length),
           id: await resolveBuiltin(this, id),
           preserveSignature: "strict",
         });
+        files.add(path, ref);
       }
 
-      // Emitted so the service worker can fetch them
-      emitWasmAssets.call(this);
+      for (const [fileName, ref] of emitWasmAssets.call(this)) {
+        files.add(`/${fileName}`, ref);
+      }
     },
     async resolveId(id) {
       if (id in builtins) {
