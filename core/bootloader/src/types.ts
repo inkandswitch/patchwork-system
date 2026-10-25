@@ -16,13 +16,6 @@ export const HANDOFF_CHANNEL = "@patchwork/handoff";
 export const AUTOMERGE_WORKER_LOCK = "@patchwork/automerge-worker";
 
 /**
- * The Cache Storage cache where a restarting automerge worker leaves what it
- * had loaded, for its replacement. Not the service worker's own cache, so it
- * has to survive the service worker clearing out every cache but its own.
- */
-export const LOADED_CACHE = "patchwork-package-memory";
-
-/**
  * Service worker → tabs: there's no automerge worker (nothing holds or is
  * waiting for {@link AUTOMERGE_WORKER_LOCK}), so a handoff would go unanswered.
  * Start one.
@@ -124,86 +117,39 @@ export type HandoffReplyMessage =
   HandoffCachedMessage | HandoffResponseMessage | HandoffAbortMessage;
 
 /**
+ * Service worker → a tab, posted to it with a port to reply on: resolve this
+ * request with your own Repo. The same fields as a
+ * {@link HandoffRequestMessage}. The tab answers with a
+ * {@link ResolveAcceptedMessage} or a {@link ResolveUnavailableMessage}
+ * straight away, and once it's resolved, the same reply the automerge worker
+ * would broadcast. A tab that doesn't answer at once is taken to be one that
+ * can't (from an older build, or frozen), and the service worker asks another.
+ */
+export interface ResolveRequestMessage extends Omit<HandoffRequestMessage, "type"> {
+  type: "resolve";
+}
+
+/**
+ * Tab → service worker: resolving. The tab holds the Web Lock `lock` until it
+ * has replied, so it's released either then or when the tab goes, however it
+ * goes; the service worker waits on it to tell the two apart.
+ */
+export interface ResolveAcceptedMessage {
+  type: "accepted";
+  lock?: string;
+}
+
+/** Tab → service worker: this tab can't resolve it (it has no Repo yet). */
+export interface ResolveUnavailableMessage {
+  type: "unavailable";
+}
+
+/**
  * Automerge worker → world: broadcast once on startup so the service worker
  * can re-send any handoff requests that raced the worker's boot.
  */
 export interface HandoffOnlineMessage {
   type: "online";
-}
-
-/**
- * The BroadcastChannel tools ask the automerge worker on how much memory a
- * package's documents take to load. The worker is what loads them, to serve
- * the package's files, so it measures them where they'd be loaded anyway
- * rather than in the tab asking. A site whose worker doesn't listen never
- * answers.
- *
- * Like {@link HANDOFF_CHANNEL}, the shapes can only change additively.
- */
-export const PACKAGE_MEMORY_CHANNEL = "@patchwork/package-memory";
-
-/**
- * Tool → automerge worker: how much memory does the package at `url` take?
- *
- * By default the answer is the package's documents the worker has loaded to
- * serve its files since it started, each measured as it was loaded. That's
- * what the package actually costs, and answering loads nothing.
- *
- * With `walk`, the worker loads every document in the package to measure it,
- * fetching any it hasn't stored. That covers files nothing has asked for
- * (READMEs, lockfiles, images), but it's slow, and loading a document with
- * one huge change costs the worker that much memory: measuring can itself be
- * the most expensive thing the worker does.
- */
-export interface PackageMemoryRequestMessage {
-  id: string;
-  type: "request";
-  /** The package's root doc, at heads or without (for the latest). */
-  url: string;
-  walk?: boolean;
-}
-
-/**
- * One document in a package. What it costs automerge to load grows faster
- * than its ops: much faster for one big change than for the same ops spread
- * over many. A file's text written as a plain string in one change is an op
- * per character, all in that change; one of 585k characters took ~300 MB of
- * wasm memory to load, where as an `ImmutableString` it took none.
- */
-export interface PackageMemoryDocument {
-  url: string;
-  /** Where in the package it is, `""` for the root. */
-  path: string;
-  ops: number;
-  changes: number;
-  /** The ops in its biggest single change. */
-  largestChange: number;
-  /** How a file doc's `content` is stored, and how long it is. */
-  content?: {
-    kind: "text" | "immutable" | "bytes";
-    length: number;
-  };
-  /** Set if it couldn't be found, and the counts are 0. */
-  error?: string;
-}
-
-/**
- * Automerge worker → tool: the request arrived and is queued behind any
- * others. Sent straight away, so a tool can tell a worker that can't measure
- * (it never hears this) from one that's still measuring.
- */
-export interface PackageMemoryAcceptedMessage {
-  id: string;
-  type: "accepted";
-}
-
-/** Automerge worker → tool: the package's documents, root first. */
-export interface PackageMemoryReplyMessage {
-  id: string;
-  type: "reply";
-  documents: PackageMemoryDocument[];
-  /** Set if the package couldn't be measured; `documents` has what was. */
-  error?: string;
 }
 
 /**
@@ -246,6 +192,4 @@ export type SetupServiceWorkerOptions = {
 export type SetupServiceWorkerResult = {
   shared?: SharedWorker;
   kill?: () => void;
-  /** Open a classic Automerge sync WebSocket from the automerge worker. */
-  connectClassicSync: (server?: string) => Promise<void>;
 };

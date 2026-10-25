@@ -47,7 +47,10 @@ import {
   unregisterPlugins,
 } from "@inkandswitch/patchwork-plugins";
 import * as plugins from "@inkandswitch/patchwork-plugins";
-import setupServiceWorker from "@inkandswitch/patchwork-bootloader";
+import setupServiceWorker, {
+  connectClassicSync,
+  resolveHandoffsWith,
+} from "@inkandswitch/patchwork-bootloader";
 import debug from "debug";
 
 import type {
@@ -136,6 +139,10 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     hive = options.hive;
   } else {
     ({ repo, hive, signerIdentity } = await createRepo());
+    // The service worker asks this tab to resolve its own `automerge:`
+    // requests, and leaves them to the automerge worker until now. A site's
+    // own Repo isn't asked: it may not be able to find them.
+    resolveHandoffsWith(repo);
   }
 
   // Dev-console / tool-runtime globals (e2e and loaded tools read these). The
@@ -232,7 +239,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     packages: moduleWatcher,
     plugins,
     sw: {
-      connectClassicSync: sw.connectClassicSync,
+      connectClassicSync: (server) => connectClassicSync(repo, server),
       subscribeSyncState: (documentId, listener) =>
         subscribeSyncState(repo, documentId, listener),
     },

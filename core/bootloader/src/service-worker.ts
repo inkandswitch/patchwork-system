@@ -3,10 +3,11 @@
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
-  LOADED_CACHE,
   type AutomergeWorkerMissingMessage,
   type HandoffReplyMessage,
   type HandoffRequestMessage,
+  type ResolveAcceptedMessage,
+  type ResolveRequestMessage,
 } from "./types.js";
 // Referenced so this script's bytes change with every build. The browser only
 // installs a replacement service worker when they do, and the controllerchange
@@ -22,8 +23,8 @@ let debugging = false;
 // same no-cors consumer. these are big, so unfortunate.
 const CACHEABLE_STATUSES = [0, 200, 203, 204];
 
-// The automerge worker times its own resolution out after 30s and replies with
-// an error, so this only fires when nobody is listening at all.
+// A tab or the automerge worker times its own resolution out after 30s and
+// replies with an error, so this only fires when nobody is answering at all.
 const HANDOFF_TIMEOUT_MS = 35_000;
 
 function log(...args: any[]) {
@@ -84,8 +85,7 @@ async function clearOtherCaches() {
   const names = await caches.keys();
   await Promise.all(
     names
-      // The automerge worker's, which a replacement restores from.
-      .filter((name) => name !== cachename && name !== LOADED_CACHE)
+      .filter((name) => name !== cachename)
       .map((name) => caches.delete(name))
   );
 }
@@ -224,14 +224,111 @@ async function startWorkerIfMissing(id: string) {
 /** Signals that respondWith should reject; see {@link HandoffAbortMessage}. */
 class HandoffAborted extends Error {}
 
+// How long a tab has to say it'll resolve a request before the service
+// worker asks the next one. A tab that hasn't been handed its Repo yet says it
+// can't at once, so this is for one that can't answer at all: a frozen
+// background tab, or one from a build before tabs resolved.
+const ACCEPT_TIMEOUT_MS = 250;
+// A tab posts its reply and then lets go of its lock, but the lock can be
+// granted here before the reply is delivered.
+const REPLY_AFTER_LOCK_MS = 100;
+
+type TabAnswer =
+  | { answered: HandoffReplyMessage }
+  | { declined: "unavailable" | "silent" | "gone" };
+
+/**
+ * The tabs that might resolve a request from `clientId`, best first: the tab
+ * that made it, which is likely to hold the documents already, then the
+ * focused tab, then visible ones. A request from a dedicated worker (the
+ * module loader) or a navigation has no window of its own.
+ */
+async function resolvingTabs(clientId: string): Promise<WindowClient[]> {
+  const windows = (await self.clients.matchAll({
+    type: "window",
+  })) as WindowClient[];
+  const rank = (client: WindowClient) =>
+    client.id === clientId
+      ? 0
+      : client.focused
+        ? 1
+        : client.visibilityState === "visible"
+          ? 2
+          : 3;
+  return windows.sort((a, b) => rank(a) - rank(b));
+}
+
+/**
+ * Ask `tab` to resolve `message`, and wait for its answer until `deadline`,
+ * which bounds a tab that accepted and then hangs.
+ */
+function askTab(
+  tab: WindowClient,
+  message: HandoffRequestMessage,
+  deadline: number
+): Promise<TabAnswer> {
+  const { port1, port2 } = new MessageChannel();
+  const sentAt = performance.now();
+  const timers: Array<ReturnType<typeof setTimeout>> = [];
+  const stopWaitingOnLock = new AbortController();
+  return new Promise<TabAnswer>((resolve) => {
+    let accepted = false;
+    const silent = setTimeout(
+      () => resolve({ declined: "silent" }),
+      ACCEPT_TIMEOUT_MS
+    );
+    timers.push(
+      silent,
+      setTimeout(() => resolve({ declined: "silent" }), deadline - Date.now())
+    );
+    port1.onmessage = ({ data }: MessageEvent) => {
+      if (data?.type === "unavailable") {
+        resolve({ declined: "unavailable" });
+        return;
+      }
+      if (data?.type === "accepted") {
+        clearTimeout(silent);
+        accepted = true;
+        log(
+          `tab ${tab.id} accepted handoff ${message.id} after ${Math.round(performance.now() - sentAt)}ms`
+        );
+        const { lock } = data as ResolveAcceptedMessage;
+        if (!lock || !navigator.locks) return;
+        navigator.locks
+          .request(lock, { signal: stopWaitingOnLock.signal }, () => {
+            timers.push(
+              setTimeout(() => resolve({ declined: "gone" }), REPLY_AFTER_LOCK_MS)
+            );
+          })
+          .catch(() => {});
+        return;
+      }
+      if (accepted && data?.id === message.id) {
+        resolve({ answered: data as HandoffReplyMessage });
+      }
+    };
+    tab.postMessage(
+      { ...message, type: "resolve" } satisfies ResolveRequestMessage,
+      [port2]
+    );
+  }).finally(() => {
+    for (const timer of timers) clearTimeout(timer);
+    stopWaitingOnLock.abort();
+    port1.close();
+  });
+}
+
+/**
+ * Get `request` resolved: by a tab if one can, since each tab is its own node
+ * with its own Repo, and failing that by the automerge worker.
+ */
 async function handoff(
-  request: Request,
+  fetchEvent: FetchEvent,
   handoffURL: URL
 ): Promise<HandoffReplyMessage> {
-  const id = crypto.randomUUID();
-  const resolvers = Promise.withResolvers<HandoffReplyMessage>();
+  const request = fetchEvent.request;
   const message: HandoffRequestMessage = {
-    id,
+    id: crypto.randomUUID(),
     type: "request",
     cachename,
     request: {
@@ -243,7 +340,23 @@ async function handoff(
       referrer: request.referrer,
     },
   };
+  const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
+  for (const tab of await resolvingTabs(fetchEvent.clientId)) {
+    const answer = await askTab(tab, message, deadline);
+    if ("answered" in answer) return answer.answered;
+    log(`tab ${tab.id} ${answer.declined} for handoff ${message.id}`);
+    if (Date.now() >= deadline) break;
+  }
+  return broadcastHandoff(message, Math.max(0, deadline - Date.now()));
+}
 
+/** Leave `message` to the automerge worker, over HANDOFF_CHANNEL. */
+async function broadcastHandoff(
+  message: HandoffRequestMessage,
+  timeoutMs: number
+): Promise<HandoffReplyMessage> {
+  const { id } = message;
+  const resolvers = Promise.withResolvers<HandoffReplyMessage>();
   pendingHandoffs.set(id, { message, resolvers });
   log(`broadcasting handoff request for cache ${cachename}`, message);
   handoffChannel.postMessage(message);
@@ -252,14 +365,14 @@ async function handoff(
   const timeout = setTimeout(() => {
     lifecycle(
       "warn",
-      `asset handoff ${id} stranded: no reply from the automerge worker after ${HANDOFF_TIMEOUT_MS}ms (${handoffURL.href})`
+      `asset handoff ${id} stranded: no reply from a tab or the automerge worker after ${HANDOFF_TIMEOUT_MS}ms (${message.request.handoffURL})`
     );
     resolvers.reject(
       new Error(
-        `no reply from the automerge worker after ${HANDOFF_TIMEOUT_MS}ms`
+        `no reply from a tab or the automerge worker after ${HANDOFF_TIMEOUT_MS}ms`
       )
     );
-  }, HANDOFF_TIMEOUT_MS);
+  }, timeoutMs);
 
   return resolvers.promise.finally(() => {
     clearTimeout(timeout);
@@ -352,8 +465,8 @@ async function serveHandoff(
     return cached;
   }
 
-  log(`handing ${handoffURL} off to the automerge worker`);
-  const replyPromise = handoff(fetchEvent.request, handoffURL);
+  log(`handing ${handoffURL} off`);
+  const replyPromise = handoff(fetchEvent, handoffURL);
   fetchEvent.waitUntil(replyPromise.catch(() => {}));
   const reply = await replyPromise;
 
@@ -375,7 +488,7 @@ async function serveHandoff(
   const stored = await cache.match(fetchEvent.request);
   if (!stored) {
     return new Response(
-      `the automerge worker reported ${handoffURL} cached, but it has no match in ${cachename}`,
+      `${handoffURL} was reported cached, but it has no match in ${cachename}`,
       { status: 555 }
     );
   }

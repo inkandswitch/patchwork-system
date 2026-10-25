@@ -5,11 +5,8 @@ import type {
 } from "./types.js";
 import { buildId, isNewerBuild } from "./build-id.js";
 import { promptForNewBuild } from "./new-build-prompt.js";
-import {
-  readClassicSyncServer,
-  DEFAULT_CLASSIC_SYNC_SERVER,
-} from "./sync-config.js";
 import debug from "debug";
+import { handleResolveRequest } from "./tab-resolver.js";
 import {
   forwardWorkerConsole,
   lifecycleLog,
@@ -17,6 +14,8 @@ import {
 } from "./shared-worker-lifecycle.js";
 
 export { lifecycleLog };
+export { resolveHandoffsWith } from "./tab-resolver.js";
+export { connectClassicSync } from "./classic-sync.js";
 
 const serviceWorkerDebugging = debug.enabled("patchwork:serviceworker");
 const workerDebugging = debug.enabled("patchwork:automergeworker");
@@ -47,13 +46,16 @@ export function bumpServiceWorkerCache(
 }
 
 // The service worker has no localStorage, so it can't read the debug config —
-// it always emits lifecycle markers and forwards them here to be filtered.
+// it always emits lifecycle markers and forwards them here to be filtered. It
+// also asks this tab to resolve requests (see tab-resolver.ts), which needs a
+// listener from the start so a tab without a Repo yet can say so.
 let logForwardingInstalled = false;
 function installServiceWorkerLogForwarding(): void {
   if (logForwardingInstalled) return;
   if (typeof navigator === "undefined" || !navigator.serviceWorker) return;
   logForwardingInstalled = true;
   navigator.serviceWorker.addEventListener("message", (event: MessageEvent) => {
+    if (handleResolveRequest(event)) return;
     if (event.data?.type === "automerge-worker-missing") {
       automergeProtocolHandlerWorker.revive();
       return;
@@ -61,6 +63,9 @@ function installServiceWorkerLogForwarding(): void {
     if (event.data?.type !== "sw-lifecycle") return;
     lifecycleLog("[service-worker] %s", event.data.msg);
   });
+  // A listener added with addEventListener only hears the service worker once
+  // the document has loaded; a request to resolve can't wait for that.
+  navigator.serviceWorker.startMessages();
 }
 
 // ── New builds ─────────────────────────────────────────────────────────
@@ -95,11 +100,11 @@ function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
 }
 
 // ── The automerge worker ───────────────────────────────────────────────
-// A SharedWorker holding the Repo that resolves `automerge:` URLs for the
-// service worker. Tabs don't sync through it — each tab is its own node — but
-// only a page can start a SharedWorker, so each tab keeps it alive and starts
-// a new one when it goes: when it says it's closing, when its port closes, or
-// when the Web Lock it holds for its lifetime is released (see
+// A SharedWorker holding a Repo that resolves `automerge:` URLs for the
+// service worker when no tab can. Tabs don't sync through it — each tab is its
+// own node — but only a page can start a SharedWorker, so each tab keeps it
+// alive and starts a new one when it goes: when it says it's closing, when its
+// port closes, or when the Web Lock it holds for its lifetime is released (see
 // AUTOMERGE_WORKER_LOCK).
 
 let automergeProtocolHandlerWorkerPath =
@@ -113,13 +118,7 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
     onMessage(event) {
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
     },
-    onGone() {
-      // Its classic sync went with it.
-      reconnectClassicSync();
-    },
     onRestarting(message) {
-      // Ask the replacement now: posts are held until it's up.
-      reconnectClassicSync();
       // The worker restarts because a newer tab connected. If that build is
       // newer than ours too, we're the stale one.
       if (isNewerBuild(message.build)) {
@@ -142,51 +141,6 @@ export function restartAutomergeProtocolHandlerWorker(
   reason = "restartAutomergeProtocolHandlerWorker() called"
 ): void {
   automergeProtocolHandlerWorker.restart(reason);
-}
-
-// The server this tab asked the worker to classic-sync with, if any. A
-// replacement worker doesn't connect again by itself, so it's asked again.
-let classicSyncServer: string | undefined;
-
-function reconnectClassicSync() {
-  if (!classicSyncServer) return;
-  requestClassicSync(classicSyncServer).catch((error) =>
-    console.warn("couldn't reconnect classic sync", error)
-  );
-}
-
-export function connectClassicSync(
-  server: string = readClassicSyncServer()
-): Promise<void> {
-  const url = server.trim() || DEFAULT_CLASSIC_SYNC_SERVER;
-  if (!/^wss?:\/\//.test(url)) {
-    return Promise.reject(
-      new Error(`invalid classic sync server URL: ${server}`)
-    );
-  }
-  classicSyncServer = url;
-  return requestClassicSync(url);
-}
-
-function requestClassicSync(url: string): Promise<void> {
-  const { port1, port2 } = new MessageChannel();
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      port1.close();
-      reject(new Error("connect-classic-sync timeout"));
-    }, 30_000);
-    port1.onmessage = (event) => {
-      clearTimeout(timeout);
-      port1.close();
-      if (event.data?.type === "connect-classic-sync-ready") resolve();
-      else
-        reject(new Error(event.data?.error ?? "connect-classic-sync failed"));
-    };
-    automergeProtocolHandlerWorker.post(
-      { type: "connect-classic-sync", server: url },
-      [port2]
-    );
-  });
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────
@@ -271,7 +225,7 @@ export default async function setupServiceWorker(
     "background: #fcf2f0; color: #333; border: 2px solid; border-radius: 4px"
   );
 
-  return { shared, connectClassicSync };
+  return { shared };
 }
 
 (window as any).bumpServiceWorkerCache = bumpServiceWorkerCache;

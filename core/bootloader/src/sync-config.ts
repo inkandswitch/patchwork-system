@@ -21,8 +21,3 @@ export function readClassicSyncServer(
   }
   return override;
 }
-
-export type ConnectClassicSyncMessage = {
-  type: "connect-classic-sync";
-  server: string;
-};
