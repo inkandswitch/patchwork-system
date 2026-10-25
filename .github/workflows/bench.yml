@@ -11,25 +11,15 @@ env:
   MARKER: "<!-- patchwork-bench -->"
 
 jobs:
-  bench:
-    name: benchmarks
+  # Say a run is under way, keeping the last results below it, marked as out
+  # of date, until this one replaces them.
+  announce:
+    name: mark the comment out of date
     runs-on: ubuntu-latest
-    timeout-minutes: 120
     permissions:
-      contents: read
       pull-requests: write
-    # main and the PR on the same runner, one after the other: runner numbers
-    # drift between runs, so a PR is only ever compared with main measured
-    # alongside it. Only Patchwork as it ships (`patchwork` mode, whose tests
-    # are titled "patchwork: …" or "S5 patchwork, …"): the other modes and the
-    # storage adapters are alternatives the bench explores, not what merging
-    # changes. Each side runs every browser its bench.config.ts has a project
-    # for: chromium, firefox and webkit.
     steps:
-      # Say a run is under way, keeping the last results below it, marked as
-      # out of date, until this one replaces them.
-      - name: mark the comment out of date
-        uses: actions/github-script@v7
+      - uses: actions/github-script@v7
         with:
           script: |
             const marker = process.env.MARKER
@@ -60,6 +50,24 @@ jobs:
               await github.rest.issues.createComment({ owner, repo, issue_number, body })
             }
 
+  # One runner per browser, so the browsers run at once without sharing a
+  # machine. On each, main and the PR run one after the other: runner numbers
+  # drift between runs, so a PR is only ever compared with main measured
+  # alongside it, in the same browser. Only Patchwork as it ships (`patchwork`
+  # mode, whose tests are titled "patchwork: …" or "S5 patchwork, …"): the
+  # other modes and the storage adapters are alternatives the bench explores,
+  # not what merging changes.
+  bench:
+    name: bench (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
       - uses: actions/checkout@v4
         with:
           path: pr
@@ -90,29 +98,31 @@ jobs:
         working-directory: pr
         run: pnpm install --frozen-lockfile && pnpm build
 
-      - name: install the browsers
+      - name: install ${{ matrix.browser }}
         run: |
-          (cd main/sites/bench && pnpm exec playwright install --with-deps chromium firefox webkit)
-          (cd pr/sites/bench && pnpm exec playwright install --with-deps chromium firefox webkit)
+          (cd main/sites/bench && pnpm exec playwright install --with-deps ${{ matrix.browser }})
+          (cd pr/sites/bench && pnpm exec playwright install --with-deps ${{ matrix.browser }})
 
       # A single run of a benchmark can be off by more than the PR changes it,
       # so each side runs ROUNDS times, alternating, so that the runner
       # slowing down partway affects both. Failed tests still record their
-      # rows, so every round reports whatever got measured; main failing
-      # doesn't fail the PR, the PR failing does, once it's been reported. So
-      # does a check (an "ok" row) that main passes failing in any round of
-      # the PR: see compare.ts.
+      # rows, so every round reports whatever got measured. A side whose
+      # bench.config.ts has no project for this browser records nothing.
+      # Whether the PR passes is the report's call, from what's uploaded: a
+      # PR whose tests threw leaves `threw` beside its runs.
       - name: bench main and the PR, alternating
         env:
           ROUNDS: 3
+          BROWSER: ${{ matrix.browser }}
         run: |
           for side in main pr; do (cd $side/sites/bench && pnpm exec vite build); done
+          mkdir -p runs
           for round in $(seq "$ROUNDS"); do
             for side in main pr; do
               echo "::group::$side, round $round"
               rm -f $side/sites/bench/bench-results/*.jsonl
-              if ! (cd $side/sites/bench && pnpm exec playwright test -c bench.config.ts --grep "patchwork[:,]"); then
-                if [ "$side" = pr ]; then touch pr-failed; fi
+              if ! (cd $side/sites/bench && pnpm exec playwright test -c bench.config.ts --project="$BROWSER" --grep "patchwork[:,]"); then
+                if [ "$side" = pr ]; then touch runs/threw; fi
               fi
               mkdir -p "runs/$side-$round"
               cp $side/sites/bench/bench-results/*.jsonl "runs/$side-$round/" 2>/dev/null || true
@@ -120,14 +130,61 @@ jobs:
             done
           done
 
-      - name: compare
+      - uses: actions/upload-artifact@v4
         if: always()
+        with:
+          name: bench-runs-${{ matrix.browser }}
+          path: runs/
+          retention-days: 7
+
+  # Every browser's runs side by side, in one comment, and the one check that
+  # says whether the PR passes: it fails when the PR's benchmarks threw in any
+  # browser, or a check (an "ok" row) that main passes failed in any round of
+  # the PR (see compare.ts). Main failing doesn't fail the PR.
+  report:
+    name: benchmarks
+    needs: bench
+    # Not for a run cancelled by a newer push: that one reports instead.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: sites/bench/compare.ts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bench-runs-*
+          path: runs
+
+      - name: compare
         run: |
-          node pr/sites/bench/compare.ts --main runs/main-* --pr runs/pr-* > compare.md || touch pr-regressed
+          threw=""
+          for browser in chromium firefox webkit; do
+            dir="runs/bench-runs-$browser"
+            if [ ! -d "$dir" ]; then
+              threw="$threw $browser (recorded nothing)"
+            elif [ -e "$dir/threw" ]; then
+              threw="$threw $browser"
+            fi
+          done
+          node sites/bench/compare.ts --main runs/*/main-* --pr runs/*/pr-* > compare.md || touch pr-regressed
+          if [ -n "$threw" ]; then
+            touch pr-failed
+            { echo "**The PR's benchmarks threw in:$threw.** See the run's logs."; echo; cat compare.md; } > compare.tmp
+            mv compare.tmp compare.md
+          fi
           cat compare.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/github-script@v7
-        if: always()
         with:
           script: |
             const fs = require("fs")
@@ -143,7 +200,7 @@ jobs:
               marker,
               `## Benchmarks: Patchwork with this PR against main`,
               ``,
-              `\`${head}\` against main at \`${base}\`, Patchwork as it ships (\`patchwork\` mode) in chromium, firefox and webkit, measured one after the other on the same runner ([run](${run})). Lower is better throughout. A row is in the table when every run of the PR came out on the same side of every run of main, with the medians more than 20% apart; every benchmark is below it.`,
+              `\`${head}\` against main at \`${base}\`, Patchwork as it ships (\`patchwork\` mode), in chromium, firefox and webkit, each on its own runner with main and the PR measured one after the other ([run](${run})). Lower is better throughout. A row is in the table when every run of the PR came out on the same side of every run of main, with the medians more than 20% apart; every benchmark is below it.`,
               ``,
               compare,
             ].join("\n")
@@ -158,5 +215,4 @@ jobs:
             }
 
       - name: fail if the PR's benchmarks failed
-        if: always()
         run: test ! -e pr-failed && test ! -e pr-regressed

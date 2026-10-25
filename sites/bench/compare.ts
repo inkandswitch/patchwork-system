@@ -77,12 +77,13 @@ function read(dirs: string[]): Side {
       const name = `renderer memory, ${r.n} tab${r.n === 1 ? "" : "s"}`;
       add({ name, unit: "MB", browser: "chromium" }, r.footprintMb);
     }
-    if (!run.size) continue;
-    side.runs++;
     for (const [name, value] of run) {
       side.values.set(name, [...(side.values.get(name) ?? []), value]);
     }
   }
+  // Each browser's runs are their own directories, so a side ran as many
+  // times as its most-measured row.
+  side.runs = Math.max(0, ...[...side.values.values()].map((v) => v.length));
   return side;
 }
 
