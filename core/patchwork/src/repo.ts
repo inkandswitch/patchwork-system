@@ -46,6 +46,12 @@ export function initWasm(): Promise<void> {
   return wasmReady;
 }
 
+/**
+ * The BroadcastChannel every Repo on the origin announces its saves and the
+ * server's heads on (automerge-repo's `headsChannel`).
+ */
+export const HEADS_CHANNEL = `${storagePrefix}-heads`;
+
 export type TabRepo = {
   repo: Repo;
   hive?: AutomergeRepoKeyhive;
@@ -82,7 +88,7 @@ export async function createRepo(): Promise<TabRepo> {
       repo: {
         storage: new IndexedDBStorageAdapter(),
         subductionWebsocketEndpoints: [syncServer.url],
-        headsChannel: `${storagePrefix}-heads`,
+        headsChannel: HEADS_CHANNEL,
         enableRemoteHeadsGossiping: true,
       },
     });
@@ -101,7 +107,7 @@ export async function createRepo(): Promise<TabRepo> {
     peerId:
       `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
     subductionWebsocketEndpoints: [syncServer.url],
-    headsChannel: `${storagePrefix}-heads`,
+    headsChannel: HEADS_CHANNEL,
     enableRemoteHeadsGossiping: true,
   });
   const signerIdentity = {

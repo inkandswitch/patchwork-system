@@ -31,7 +31,6 @@ import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerg
 
 import {
   ModuleWatcher,
-  trackPackagesInRepo,
   trackPackagesViaServiceWorker,
 } from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
@@ -59,6 +58,7 @@ import type {
   SyncStateDocMessage,
 } from "./types.js";
 import { createRepo, initWasm } from "./repo.js";
+import { watchDocument } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 
@@ -182,10 +182,12 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     options.importModulesInWorker === false
       ? undefined
       : importAutomergePackageViaWorker,
-    // Look packages up through the automerge worker, so the lookup lands on
-    // the package.json an import fetches first. Watching them holds their
-    // docs in this tab's Repo, which is its own node.
-    trackPackagesViaServiceWorker(trackPackagesInRepo(repo).watch)
+    // Look packages up through the automerge worker and watch them through
+    // this tab's Subduction subscriptions, so their docs never load into this
+    // tab's Repo.
+    trackPackagesViaServiceWorker((url, onChange) =>
+      watchDocument(repo, url, onChange)
+    )
   );
 
   const accountDocHandle = (await resolveAccountHandle(repo, {
@@ -408,6 +410,7 @@ function subscribeSyncState(
 // ── Named exports ────────────────────────────────────────────────────────
 
 export { createRepo, initWasm } from "./repo.js";
+export { watchDocument } from "./watch-document.js";
 export { createRouter } from "./router.js";
 export {
   showLoadingAnimation,
