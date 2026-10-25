@@ -83,6 +83,15 @@ const mark = (name: string) => (marks[name] ??= performance.now());
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const serverHeads = new Map<string, string[]>();
+// When the server was first seen holding each document's current heads, as
+// epoch ms, so serverConfirmed reports the event rather than when it polled.
+const serverHeadsAt = new Map<string, number>();
+function noteServerHeads(documentId: string, heads: string[]) {
+  const previous = serverHeads.get(documentId);
+  if (previous && sameHeads(previous, heads)) return;
+  serverHeads.set(documentId, heads);
+  serverHeadsAt.set(documentId, performance.timeOrigin + performance.now());
+}
 let serverPeerIds = new Set<string>();
 const online = Promise.withResolvers<number>();
 let isOnline: () => Promise<boolean> = async () => false;
@@ -225,24 +234,31 @@ async function buildTabNode(): Promise<Repo> {
 
   repo.on("subduction-remote-heads", ({ documentId, storageId, heads }) => {
     if (!isServer(storageId)) return;
-    serverHeads.set(documentId, [...heads]);
+    noteServerHeads(documentId, [...heads]);
   });
   isOnline = async () => (await connectedServers()).length > 0;
 
   if (serverUrl === "none") {
     online.resolve(performance.now());
   } else {
-    // Polled rather than taken from `subduction-connection`: that event is
-    // the aggregate over every peer, and a sibling can flip it before the
-    // server link is up.
+    // Checked on every `subduction-connection`, and polled as well: that event
+    // is the aggregate over every peer, so a sibling can flip it before the
+    // server link is up and the server's arrival then doesn't fire it. The
+    // event is what makes the time exact; the poll only makes sure.
+    let up = false;
+    const check = async () => {
+      if (up) return;
+      const servers = await connectedServers();
+      if (!servers.length || up) return;
+      up = true;
+      serverPeerIds = new Set(servers);
+      online.resolve(performance.now());
+      repo.off("subduction-connection", check);
+    };
+    repo.on("subduction-connection", check);
     void (async () => {
-      for (;;) {
-        const servers = await connectedServers();
-        if (servers.length) {
-          serverPeerIds = new Set(servers);
-          online.resolve(performance.now());
-          return;
-        }
+      while (!up) {
+        await check();
         await sleep(10);
       }
     })();
@@ -290,7 +306,7 @@ async function buildWorkerNode(): Promise<Repo> {
       case "remote-heads":
         remoteHeadsSeen.push(message);
         if (message.storageId !== serverPeer) return;
-        serverHeads.set(message.documentId, message.heads);
+        noteServerHeads(message.documentId, message.heads);
         return;
       case "ready":
         mark("node");
@@ -442,7 +458,8 @@ window.bench = {
   storageWrites: () => (bareTabMode ? storageWrites : null),
   syncRounds: () => syncRounds,
   // Resolves with the epoch time the server was seen holding exactly the heads
-  // the document has right now. Polled: a few ms of slop is fine here.
+  // the document has right now: when its heads event arrived (noteServerHeads),
+  // even if that was before this was called. Polled only to wait for it.
   async serverConfirmed(url, timeoutMs = 30_000) {
     const { handle } = await find(url);
     const target = [...handle.heads()];
@@ -450,7 +467,7 @@ window.bench = {
     for (;;) {
       const seen = serverHeads.get(handle.documentId);
       if (seen && sameHeads(seen, target)) {
-        return performance.timeOrigin + performance.now();
+        return serverHeadsAt.get(handle.documentId)!;
       }
       if (performance.now() > deadline) {
         throw new Error(`server never confirmed ${url}: saw ${seen}`);

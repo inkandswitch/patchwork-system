@@ -38,6 +38,11 @@ export type Result = {
   unit: "ms" | "MB" | "n" | "ok";
   /** The Playwright project it ran in: chromium, firefox or webkit. */
   browser?: string;
+  /**
+   * A check on the bench itself (did the offline switch hold?), not on
+   * Patchwork: shown, but a PR can't fail it.
+   */
+  harness?: true;
 };
 
 export function record(result: Result): void {
@@ -121,6 +126,12 @@ export function isOnline(page: Page): Promise<boolean> {
 export type OfflineSwitch = {
   /** Cut or restore the link to the sync server in every tab. */
   set(pages: Page[], offline: boolean): Promise<void>;
+  /**
+   * Messages a page sent the server through the proxy while offline: a
+   * reconnect the browser's offline emulation let through. Zero when the
+   * cut held.
+   */
+  leaked(): number;
 };
 
 /**
@@ -137,9 +148,14 @@ export async function offlineSwitch(
   context: BrowserContext
 ): Promise<OfflineSwitch> {
   const live = new Set<{ close(): void }>();
+  let offline = false;
+  let leaked = 0;
   await context.routeWebSocket(
     (url) => url.protocol === "wss:" || url.protocol === "ws:",
     (ws) => {
+      // The real socket is opened in the page, so whether this one gets
+      // anywhere is up to the browser's offline emulation.
+      if (offline) console.log(`[offline switch] ${ws.url()} opened while offline`);
       const server = ws.connectToServer();
       const link = {
         close() {
@@ -149,7 +165,12 @@ export async function offlineSwitch(
         },
       };
       live.add(link);
-      ws.onMessage((message) => server.send(message));
+      ws.onMessage((message) => {
+        if (offline && leaked++ === 0) {
+          console.log(`[offline switch] ${ws.url()} reached the server while offline`);
+        }
+        server.send(message);
+      });
       server.onMessage((message) => ws.send(message));
       ws.onClose((code, reason) => {
         live.delete(link);
@@ -162,15 +183,22 @@ export async function offlineSwitch(
     }
   );
   return {
-    async set(pages, offline) {
-      await context.setOffline(offline);
-      if (offline) for (const link of [...live]) link.close();
+    async set(pages, to) {
+      // Offline only once the live links are closed, so nothing they had in
+      // flight counts as a leak.
+      if (!to) offline = false;
+      await context.setOffline(to);
+      if (to) {
+        for (const link of [...live]) link.close();
+        offline = true;
+      }
       await Promise.all(
         pages.map((page) =>
-          page.evaluate((offline) => window.bench.setOffline(offline), offline)
+          page.evaluate((offline) => window.bench.setOffline(offline), to)
         )
       );
     },
+    leaked: () => leaked,
   };
 }
 

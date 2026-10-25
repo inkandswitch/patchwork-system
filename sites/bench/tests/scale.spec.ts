@@ -1,6 +1,7 @@
 import { test, type Page } from "@playwright/test";
 import {
   type Mode,
+  WORKER_MODES,
   awaitField,
   createDoc,
   marks,
@@ -193,7 +194,9 @@ for (const mode of MODES) {
       stallMaxMs: stall.maxMs,
       stallLongTasks: stall.longTasks,
       stallLongTaskMs: stall.longTaskMs,
-      workerErrors: workerErrors.length,
+      // Only the bench's own workers report errors; in the other modes the
+      // row would always say 0, so it says nothing.
+      workerErrors: WORKER_MODES.includes(mode) ? workerErrors.length : null,
       roundsPerSiblingEditInNonEditingTab: round(
         medianOrNull(roundsPerSiblingEdit),
         2

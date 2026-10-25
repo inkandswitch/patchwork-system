@@ -6,6 +6,7 @@ import {
   awaitOnline,
   createDoc,
   getField,
+  isOnline,
   offlineSwitch,
   online,
   openTab,
@@ -19,6 +20,11 @@ import {
 // cut is a WebSocket proxy closing a tab's own socket, and a control message
 // for a worker's (see offlineSwitch). Modes with a local channel converge
 // while offline; the reconnect timing is only meaningful where they didn't.
+//
+// The first two rows check the bench, not Patchwork: that the cut held for the
+// whole offline stretch. Where it didn't (a browser whose offline emulation
+// lets a reconnect through, a socket out of the switch's reach) the tabs were
+// never offline, so the rows after them record nothing rather than pass.
 for (const mode of MODES) {
   test(`${mode}: concurrent offline edits converge on reconnect`, async ({
     browser,
@@ -39,27 +45,51 @@ for (const mode of MODES) {
       awaitOnline(a, false),
       awaitOnline(b, false),
     ])).every(Boolean);
+    await setField(a, url, "x", 1);
+    await setField(b, url, "y", 1);
+    await a.waitForTimeout(2_000);
+
+    // Down at the start and still down now, with nothing sent through.
+    const stillDown = !(await Promise.all([isOnline(a), isOnline(b)])).some(
+      Boolean
+    );
+    const stayedDown = wentDown && stillDown && network.leaked() === 0;
     // In the worker modes the bench closes the socket itself, so this only
     // says something about the tab modes' proxy.
     if (!WORKER_MODES.includes(mode)) {
       record({
         metric: "server link seen down while offline",
         mode,
-        value: wentDown,
+        value: stayedDown,
         unit: "ok",
+        harness: true,
       });
     }
-    await setField(a, url, "x", 1);
-    await setField(b, url, "y", 1);
-    await a.waitForTimeout(2_000);
-
-    const leaked = await strangerSees(browser, url);
+    // A stranger that can't get the doc at all proves nothing either way.
+    const stranger = await strangerSees(browser, url);
+    const unseen =
+      stranger !== undefined && stranger.x !== 1 && stranger.y !== 1;
     record({
       metric: "…and the server did not see the offline edits",
       mode,
-      value: leaked?.x !== 1 && leaked?.y !== 1,
+      value: unseen,
       unit: "ok",
+      harness: true,
     });
+    const held = stayedDown && unseen;
+    if (!held) {
+      const why = [
+        !wentDown && "the link never went down",
+        wentDown && !stillDown && "a tab was back online before the end",
+        network.leaked() && `${network.leaked()} messages reached the server`,
+        stranger === undefined && "the stranger couldn't get the doc",
+        stranger && !unseen && "the server had the offline edits",
+      ].filter(Boolean);
+      const note = `offline switch didn't hold (${why.join("; ")}), so the offline rows record nothing`;
+      console.warn(`[${mode}] ${note}`);
+      test.info().annotations.push({ type: "warning", description: note });
+    }
+
     const [ay, bx] = await Promise.all([
       getField<number>(a, url, "y"),
       getField<number>(b, url, "x"),
@@ -68,7 +98,7 @@ for (const mode of MODES) {
     record({
       metric: "tabs converged while offline, over a local channel",
       mode,
-      value: local,
+      value: held ? local : null,
       unit: "ok",
     });
 
@@ -84,13 +114,13 @@ for (const mode of MODES) {
     record({
       metric: "offline edits in two tabs both survive reconnect",
       mode,
-      value: seenY && seenX && confirmed,
+      value: held ? seenY && seenX && confirmed : null,
       unit: "ok",
     });
     record({
       metric: "reconnect → tabs converged (only where they hadn't already)",
       mode,
-      value: !local && seenY && seenX ? converged : null,
+      value: held && !local && seenY && seenX ? converged : null,
       unit: "ms",
     });
 
@@ -102,7 +132,7 @@ for (const mode of MODES) {
     record({
       metric: "…and a fresh tab sees both",
       mode,
-      value: x === 1 && y === 1,
+      value: held ? x === 1 && y === 1 : null,
       unit: "ok",
     });
   });

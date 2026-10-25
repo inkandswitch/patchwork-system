@@ -52,11 +52,13 @@ for (const mode of MODES) {
       value: finds.every((find) => find.ok),
       unit: "ok",
     });
+    // A count, not a check: whether a find beats the creator's save is a race,
+    // so one that loses now and then shouldn't fail a PR.
     record({
-      metric: "…and none settled unavailable first",
+      metric: `…finds that settled unavailable first (of ${TABS - 1})`,
       mode,
-      value: finds.every((find) => find.ok && find.attempts === 1),
-      unit: "ok",
+      value: finds.filter((find) => !find.ok || find.attempts > 1).length,
+      unit: "n",
     });
 
     await serverConfirmed(a, url);

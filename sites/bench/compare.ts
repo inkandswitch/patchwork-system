@@ -27,12 +27,14 @@ type Result = {
   value: number | boolean | null;
   unit: Unit;
   browser?: string;
+  /** A check on the bench, not Patchwork (see bench.ts): never fails a PR. */
+  harness?: true;
 };
 type MemoryRow = { scenario: string; n: number; footprintMb?: number };
 
 const BROWSERS = ["chromium", "firefox", "webkit"];
 
-type Row = { name: string; unit: Unit; browser: string };
+type Row = { name: string; unit: Unit; browser: string; harness?: true };
 /** A side's measurements of each row, a value per run that measured it. */
 type Side = { runs: number; values: Map<string, Value[]> };
 
@@ -63,13 +65,18 @@ function read(dirs: string[]): Side {
     const add = (row: Row, value: unknown) => {
       const key = `${row.browser}: ${row.name}`;
       if (!rows.has(key)) rows.set(key, row);
+      // main's checkout may predate the flag.
+      if (row.harness) rows.get(key)!.harness = true;
       if (measured(value)) run.set(key, value);
     };
     for (const r of lines<Result>(`${dir}/results.jsonl`)) {
       if (r.mode !== "patchwork" || r.storage !== undefined) continue;
       const name =
         r.tabs === undefined ? r.metric : `${r.metric} (${r.tabs} tabs)`;
-      add({ name, unit: r.unit, browser: r.browser ?? "chromium" }, r.value);
+      add(
+        { name, unit: r.unit, browser: r.browser ?? "chromium", harness: r.harness },
+        r.value
+      );
     }
     // The memory ladder is chromium only.
     for (const r of lines<MemoryRow>(`${dir}/memory.jsonl`)) {
@@ -168,10 +175,13 @@ function table(keys: string[], main: Side, pr: Side): string {
     `| ${many ? "browser | " : ""}benchmark | main | PR | change |`,
     `| ${many ? "--- | " : ""}--- | --- | --- | --- |`,
     ...keys.map((key) => {
-      const { name, unit, browser } = rows.get(key)!;
+      const { name, unit, browser, harness } = rows.get(key)!;
       const before = main.values.get(key);
       const after = pr.values.get(key);
-      const { text } = change(before, after, unit);
+      let { text, breaks } = change(before, after, unit);
+      if (harness && breaks) {
+        text = `${text.replaceAll("**", "")} (the bench, not the PR)`;
+      }
       return `| ${many ? `${browser} | ` : ""}${name} | ${cell(before, unit)} | ${cell(after, unit)} | ${text} |`;
     }),
   ].join("\n");
@@ -212,7 +222,9 @@ const changes = new Map(
   ])
 );
 const moved = keys.filter((key) => changes.get(key)!.moved);
-const broken = keys.filter((key) => changes.get(key)!.breaks);
+const broken = keys.filter(
+  (key) => changes.get(key)!.breaks && !rows.get(key)!.harness
+);
 
 const out: string[] = [];
 if (broken.length) {
