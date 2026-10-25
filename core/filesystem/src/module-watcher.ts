@@ -147,8 +147,8 @@ export class ModuleWatcher {
   /**
    * How a package's doc is looked up at its latest heads and watched for new
    * ones. Defaults to holding each package doc in `repo`. The browser setup
-   * passes {@link trackPackagesViaServiceWorker} instead, so package docs stay
-   * out of this thread's memory.
+   * passes {@link trackPackagesViaServiceWorker}, looking them up through the
+   * service worker and watching them in `repo`.
    */
   tracker: PackageTracker;
 

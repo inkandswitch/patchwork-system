@@ -52,9 +52,7 @@ import { IndexedDBWorkerStorageAdapter } from "@automerge/automerge-repo-storage
 import { BroadcastChannelNetworkAdapter } from "@automerge/automerge-repo-network-broadcastchannel";
 import { MemorySigner } from "@automerge/automerge-subduction/slim";
 import { createRepo, initWasm } from "@inkandswitch/patchwork";
-import setupServiceWorker, {
-  getSyncRemote,
-} from "@inkandswitch/patchwork-bootloader";
+import setupServiceWorker from "@inkandswitch/patchwork-bootloader";
 import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
 import { WorkerSubductionEndpoint } from "./worker-link.js";
 import type { ControlPort, NodeMessage, TabMessage } from "./protocol.js";
@@ -160,7 +158,7 @@ async function buildTabNode(): Promise<Repo> {
       repo = tab.repo;
       ownPeerId = tab.signerIdentity!.peerId;
     } else {
-      // createRepo() taken apart: the same Repo on the sync node, with or
+      // createRepo() taken apart: the same Repo with its own socket, with or
       // without its heads channel, plus classic automerge sync between tabs
       // over a BroadcastChannel.
       const storage = new IndexedDBStorageAdapter();
@@ -170,8 +168,8 @@ async function buildTabNode(): Promise<Repo> {
         signer,
         storage,
         peerId: `bench-tab-${crypto.randomUUID()}` as PeerId,
-        subductionRemote: getSyncRemote(),
-        subductionSaveThrottle: saveThrottle ?? 20,
+        subductionWebsocketEndpoints: [__SYNC_SERVER__.url],
+        subductionSaveThrottle: saveThrottle,
         headsChannel: headsChannel ? "bench-heads" : undefined,
         network: tabBroadcast
           ? [new BroadcastChannelNetworkAdapter({ channelName: "bench-tabs" })]

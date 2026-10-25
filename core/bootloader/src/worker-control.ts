@@ -86,10 +86,10 @@ export function startWorkerControl(
      */
     onRestart?: () => Promise<void> | void;
     /**
-     * A Web Lock to hold for as long as this instance lives. A replacement
-     * waits for it before `holding` resolves, so two instances' work never
-     * overlaps however the first one goes; and tabs are told the name, so
-     * they can wait on it to hear when this one has gone.
+     * A Web Lock to hold for as long as this instance lives, so others can
+     * tell whether it's still around: tabs are told the name and wait on it
+     * to hear when this one has gone. Nothing waits for it before working; a
+     * replacement only says it's alive once its predecessor lets go.
      */
     lock?: string;
   } = {}
@@ -101,8 +101,6 @@ export function startWorkerControl(
    * trap anywhere does this by itself, if it's thrown uncaught or logged.
    */
   fail: (reason: string, error?: unknown) => void;
-  /** Resolves once this instance holds `lock` (straight away without one). */
-  holding: Promise<void>;
 } {
   const ports = new Set<MessagePort>();
   let alive: AliveMessage | undefined;
@@ -289,15 +287,7 @@ export function startWorkerControl(
         })
       : Promise.resolve();
   if (lock && self.navigator?.locks) {
-    const waiting = setTimeout(
-      () =>
-        console.warn(
-          `[lifecycle] ${name} SharedWorker waiting for the previous instance to go`
-        ),
-      1_000
-    );
     void holding.then(() => {
-      clearTimeout(waiting);
       alive = { type: "alive", lock };
       for (const port of ports) postToPort(port, alive);
     });
@@ -309,6 +299,5 @@ export function startWorkerControl(
     },
     restart: (reason) => restart(reason),
     fail,
-    holding,
   };
 }

@@ -30,36 +30,3 @@ export async function loadOrCreateSigner(
     return MemorySigner.fromBytes(seed);
   });
 }
-
-/** Where automerge-repo-keyhive keeps the identity's key pair, as JWK JSON. */
-const KEYHIVE_KEY_PAIR_KEY = ["active-key-pair-2"];
-
-/**
- * The Subduction signer every Repo on a keyhive site presents, read from the
- * keyhive database without starting keyhive: automerge-repo-keyhive signs
- * Subduction traffic with the keyhive identity's Ed25519 scalar
- * (`constructSubductionSigner`), and the sync node has to sign as that same
- * peer for the server to let it fetch and put.
- *
- * Every context that syncs through the node bootstraps keyhive first, which
- * creates the key pair if there isn't one, so it's normally there already;
- * otherwise this waits for it.
- */
-export async function loadKeyhiveSigner(
-  keyhiveStorage: StorageAdapterInterface
-): Promise<MemorySigner> {
-  for (;;) {
-    const stored = await keyhiveStorage.load(KEYHIVE_KEY_PAIR_KEY);
-    if (stored) {
-      const { privateKey } = JSON.parse(new TextDecoder().decode(stored));
-      const base64 = privateKey.d.replace(/-/g, "+").replace(/_/g, "/");
-      return MemorySigner.fromBytes(
-        Uint8Array.from(
-          atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, "=")),
-          (c) => c.charCodeAt(0)
-        )
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-}

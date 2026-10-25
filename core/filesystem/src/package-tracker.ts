@@ -82,12 +82,10 @@ export function trackPackagesInRepo(repo: Repo): PackageTracker {
 }
 
 /**
- * Package docs that never load on this thread. `watch` is the sync node's
- * (`watchDocument` from `@inkandswitch/patchwork-bootloader`), which says what
- * it holds, so a restarted node saying the same needs no lookup. The service
- * worker finds the latest version: the automerge worker redirects a package
- * url without heads to the one at the doc's latest heads, and lets go of the
- * doc soon after.
+ * Package docs looked up by the service worker: the automerge worker
+ * redirects a package url without heads to the one at the doc's latest heads,
+ * and lets go of the doc soon after. Whether they load on this thread is up
+ * to `watch`.
  */
 export function trackPackagesViaServiceWorker(
   watch: PackageTracker["watch"]

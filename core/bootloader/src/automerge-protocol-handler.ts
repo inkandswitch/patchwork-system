@@ -3,10 +3,8 @@
 // does. The worker's script is automerge-protocol-handler-worker.ts, which
 // takes the lock and then imports this.
 //
-// It also hosts the origin's sync node (sync-node.ts), the one Subduction node
-// with a connection to the sync server. Every tab's Repo syncs through it, and
-// so does the resolver Repo here, which is otherwise a Repo like any tab's: the
-// same IndexedDB and the storage channel to the tabs.
+// It is a node like any tab's: the same IndexedDB, its own sync-server socket,
+// and the storage channel to the tabs. Resolving requests is its whole job.
 // When the service worker misses the cache for a request that looks like a URL
 // encoded URL, it broadcasts a HandoffRequestMessage on HANDOFF_CHANNEL; we
 // resolve the automerge URL, write the response into the service worker's
@@ -23,7 +21,6 @@ import {
 import initSubduction from "@automerge/automerge-subduction/slim";
 
 import {
-  INTERCEPTOR_PREFIX,
   Repo,
   isImmutableString,
   isValidAutomergeUrl,
@@ -50,12 +47,10 @@ import type {
 } from "@automerge/automerge-repo-keyhive";
 
 import { DEFAULT_CLASSIC_SYNC_SERVER } from "./sync-config.js";
-import { loadKeyhiveSigner, loadOrCreateSigner } from "./signer.js";
+import { loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
-import { SyncNode } from "./sync-node.js";
 import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
-import { PortSyncRemote, relayKeyhive } from "./sync-remote.js";
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
@@ -90,15 +85,11 @@ const CACHEABLE_STATUSES = [200, 203, 204];
 const control = startWorkerControl("automerge-protocol-handler-worker", {
   onMessage: handleControlMessage,
   onRestart: drainForRestart,
+  // Held only so the tabs and the service worker can tell whether this
+  // instance is still around; nothing here waits for it.
   lock: AUTOMERGE_WORKER_LOCK,
 });
-// The sync node and the Repo wait for the lock: until the previous instance
-// is gone, it's still syncing and resolving, against the same IndexedDB.
-let holdingLock = false;
-void control.holding.then(() => (holdingLock = true));
 const log = control.log;
-
-// ── The sync node ──────────────────────────────────────────────────────
 
 let wasmPromise: Promise<void> | null = null;
 
@@ -115,59 +106,6 @@ function initWasm(): Promise<void> {
     });
   }
   return wasmPromise;
-}
-
-let syncNodePromise: Promise<SyncNode> | null = null;
-
-function getSyncNode(): Promise<SyncNode> {
-  if (!syncNodePromise) {
-    syncNodePromise = (async () => {
-      await control.holding;
-      await initWasm();
-      const storage = new IndexedDBStorageAdapter();
-      // On keyhive sites the Repos store encrypted documents under the
-      // interceptor's prefix and sign as the keyhive identity.
-      const node = new SyncNode({
-        signer: syncServer.keyhive
-          ? await loadKeyhiveSigner(
-              new IndexedDBStorageAdapter(keyhiveStorageName)
-            )
-          : await loadOrCreateSigner(storage),
-        storage,
-        storagePrefix: syncServer.keyhive ? INTERCEPTOR_PREFIX : undefined,
-        endpoints: [syncServer.url],
-        log,
-      });
-      (self as any).syncNode = node;
-      return node;
-    })();
-    // Nothing syncs without it: start again from scratch, as a new instance.
-    syncNodePromise.catch((error) => {
-      syncNodePromise = null;
-      control.fail("the sync node failed to start", error);
-    });
-  }
-  return syncNodePromise;
-}
-
-/** Serve a Repo on `port` once the node is up; messages queue until then. */
-function connectToSyncNode(port: MessagePort): void {
-  getSyncNode().then(
-    (node) => node.connect(port),
-    (error) => {
-      console.error("sync node failed to start", error);
-      port.close();
-    }
-  );
-}
-
-/** The resolver Repo's connection to the node, which lives right here. */
-function resolverRemote(): PortSyncRemote {
-  return new PortSyncRemote(() => {
-    const { port1, port2 } = new MessageChannel();
-    connectToSyncNode(port2);
-    return port1;
-  });
 }
 
 // ── The repo ───────────────────────────────────────────────────────────
@@ -198,7 +136,6 @@ Object.defineProperty(self, "repo", {
 });
 
 async function buildRepo(): Promise<Repo> {
-  await control.holding;
   await initWasm();
 
   const { repo, hive } = syncServer.keyhive
@@ -217,7 +154,7 @@ async function buildPlainRepo(): Promise<Repo> {
     storage,
     peerId:
       `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
-    subductionRemote: resolverRemote(),
+    subductionWebsocketEndpoints: [syncServer.url],
     headsChannel: `${storagePrefix}-heads`,
     enableRemoteHeadsGossiping: true,
   });
@@ -229,16 +166,12 @@ async function buildKeyhiveRepo(
   const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
     await import("@automerge/automerge-repo-keyhive");
   initKeyhiveWasm();
-  const remote = resolverRemote();
   const { hive, repo } = await initializeAutomergeRepoKeyhive({
     // ARK injects an `idFactory` deriving document ids from keyhive. A site
     // can opt out of it with `keyhive: { useIdFactory: false }`.
     createRepo: ({ idFactory, ...config }) =>
-      relayKeyhive(
-        new Repo(
-          syncServer.useIdFactory === false ? config : { ...config, idFactory }
-        ),
-        remote
+      new Repo(
+        syncServer.useIdFactory === false ? config : { ...config, idFactory }
       ),
     storage: new IndexedDBStorageAdapter(keyhiveStorageName),
     peerIdSuffix:
@@ -250,7 +183,7 @@ async function buildKeyhiveRepo(
     syncServer: keyhiveSyncServer,
     repo: {
       storage: new IndexedDBStorageAdapter(),
-      subductionRemote: remote,
+      subductionWebsocketEndpoints: [syncServer.url],
       headsChannel: `${storagePrefix}-heads`,
       enableRemoteHeadsGossiping: true,
     },
@@ -307,11 +240,6 @@ function handleControlMessage(
   controlPort: MessagePort,
   event: MessageEvent
 ): void {
-  if (data?.type === "sync-connect") {
-    const [port] = event.ports;
-    if (port) connectToSyncNode(port);
-    return;
-  }
   if (data?.type !== "connect-classic-sync") return;
   const [replyPort] = event.ports;
   const server =
@@ -531,9 +459,10 @@ function handoffFinished() {
 // resolver Repo's automerge to 90–130MB, and letting the documents go gives
 // none of it back. So once handoffs stop for RECYCLE_IDLE_MS, an instance whose
 // wasm has grown by more than RECYCLE_AT_MB restarts itself, as it does for a
-// new build: tabs spawn the replacement and reconnect their sync (classic sync
-// too), the service worker re-sends any handoff still unanswered, and what was
-// resolved is in its cache, so the replacement doesn't load it all again.
+// new build: tabs spawn the replacement and reconnect its classic sync, the
+// service worker re-sends any handoff still unanswered, and what was resolved
+// is in its cache, so the replacement doesn't load it all again. Only the
+// resolver goes with it: every tab is its own node, with its own socket.
 
 const RECYCLE_AT_MB = 64;
 const RECYCLE_IDLE_MS = 15_000;
@@ -576,17 +505,9 @@ const wasmBytes = (file: string) =>
     )
     .reduce((bytes, { memory }) => bytes + memory.buffer.byteLength, 0);
 
-// Subduction holds the sync node's trees, which a replacement holds again as
-// soon as it starts, so only what it grew past that counts. It's taken the
-// first time this instance looks, by when the node has loaded them.
-let subductionBaseline: number | undefined;
-
-/** How far this instance's wasm has grown past what a fresh one would hold. */
+/** How much memory this instance's wasm holds. */
 function wasmGrowthMb(): number {
-  const subduction = wasmBytes(SUBDUCTION_WASM);
-  subductionBaseline ??= subduction;
-  const bytes =
-    wasmBytes(AUTOMERGE_WASM) + Math.max(0, subduction - subductionBaseline);
+  const bytes = wasmBytes(AUTOMERGE_WASM) + wasmBytes(SUBDUCTION_WASM);
   return Math.round(bytes / 1048576);
 }
 
@@ -780,8 +701,6 @@ async function drainForRestart(): Promise<void> {
   await saveLoaded().catch((error) =>
     console.warn("couldn't keep the package records for the next instance", error)
   );
-  const node = await syncNodePromise?.catch(() => null);
-  await node?.shutdown();
 }
 
 handoffChannel.addEventListener("message", (event) => {
@@ -790,17 +709,12 @@ handoffChannel.addEventListener("message", (event) => {
     log(`ignoring handoff ${event.data.id} while restarting`);
     return;
   }
-  // The previous instance is still answering; once it's gone, `online` gets
-  // the service worker to send us whatever it left unanswered.
-  if (!holdingLock) return;
   void handleHandoffRequest(event.data as HandoffRequestMessage);
 });
 
 // Announce ourselves so the service worker can re-broadcast handoff requests
 // sent while we were booting, or left by the instance before us.
-void control.holding.then(() =>
-  handoffChannel.postMessage({ type: "online" } satisfies HandoffOnlineMessage)
-);
+handoffChannel.postMessage({ type: "online" } satisfies HandoffOnlineMessage);
 
 // ── Measuring packages ─────────────────────────────────────────────────
 
@@ -956,8 +870,8 @@ let measuring: Promise<void> = Promise.resolve();
 
 packageMemoryChannel.addEventListener("message", (event) => {
   const message = event.data as PackageMemoryRequestMessage;
-  // Only one instance answers: the one holding the lock.
-  if (message?.type !== "request" || draining || !holdingLock) return;
+  // One that's restarting leaves it to its replacement.
+  if (message?.type !== "request" || draining) return;
   packageMemoryChannel.postMessage({
     id: message.id,
     type: "accepted",

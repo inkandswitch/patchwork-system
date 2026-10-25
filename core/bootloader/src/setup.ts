@@ -10,10 +10,6 @@ import {
   DEFAULT_CLASSIC_SYNC_SERVER,
 } from "./sync-config.js";
 import debug from "debug";
-import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
-import { PortSyncRemote, getSedimentreeId } from "./sync-remote.js";
-import type { SyncConnectMessage } from "./sync-protocol.js";
-export { relayKeyhive, type PortSyncRemote } from "./sync-remote.js";
 import {
   forwardWorkerConsole,
   lifecycleLog,
@@ -100,10 +96,10 @@ function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
 
 // ── The automerge worker ───────────────────────────────────────────────
 // A SharedWorker holding the Repo that resolves `automerge:` URLs for the
-// service worker, and the sync node every tab's Repo syncs through. Only a
-// page can start a SharedWorker, so each tab keeps it alive and starts a new
-// one when it goes: when it says it's closing, when its port closes, or when
-// the Web Lock it holds for its lifetime is released (see
+// service worker. Tabs don't sync through it — each tab is its own node — but
+// only a page can start a SharedWorker, so each tab keeps it alive and starts
+// a new one when it goes: when it says it's closing, when its port closes, or
+// when the Web Lock it holds for its lifetime is released (see
 // AUTOMERGE_WORKER_LOCK).
 
 let automergeProtocolHandlerWorkerPath =
@@ -118,14 +114,11 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
     },
     onGone() {
-      // Its sync node went with it, port and all, and its classic sync.
-      syncRemote?.reconnect();
+      // Its classic sync went with it.
       reconnectClassicSync();
     },
     onRestarting(message) {
-      // Ask the replacement for a sync port now: posts are held until it's
-      // up, and this one's sync node is going away with it.
-      syncRemote?.reconnect();
+      // Ask the replacement now: posts are held until it's up.
       reconnectClassicSync();
       // The worker restarts because a newer tab connected. If that build is
       // newer than ours too, we're the stale one.
@@ -142,48 +135,6 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
 
 export function getAutomergeProtocolHandlerWorker(): SharedWorker {
   return automergeProtocolHandlerWorker.get();
-}
-
-let syncRemote: PortSyncRemote | undefined;
-
-/**
- * This tab's connection to the sync node in the automerge worker, to pass to
- * its Repo as `subductionRemote`. One per tab: it follows the worker across
- * restarts.
- */
-export function getSyncRemote(): PortSyncRemote {
-  syncRemote ??= new PortSyncRemote(() => {
-    const { port1, port2 } = new MessageChannel();
-    automergeProtocolHandlerWorker.post(
-      { type: "sync-connect" } satisfies SyncConnectMessage,
-      [port2]
-    );
-    return port1;
-  });
-  return syncRemote;
-}
-
-/**
- * Call `onChange` whenever the document at `url` may have new heads, until the
- * returned function is called. Nothing is loaded for it: the sync node keeps
- * the document subscribed with the server and says when something arrives for
- * it, whether from the server or from another tab. That's the way to follow a
- * document whose contents you only need now and then.
- *
- * `seen` sums up what the sync node holds of the document: the same `seen`
- * twice means nothing arrived in between. It comes straight after watching,
- * and after the automerge worker restarts, whether or not anything moved. It
- * isn't a version of the document: the node's heads are Subduction's, which
- * can include ancestors of the Automerge heads, so find the document to know
- * where it is. It's absent when the node doesn't say.
- */
-export function watchDocument(
-  url: AutomergeUrl,
-  onChange: (seen?: string) => void
-): () => void {
-  return getSyncRemote().watch(getSedimentreeId(url), (heads) =>
-    onChange(heads && [...heads].sort().join("|"))
-  );
 }
 
 /** Dev escape hatch: make the shared worker close so the next use respawns it. */

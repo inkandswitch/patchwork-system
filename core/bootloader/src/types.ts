@@ -8,10 +8,10 @@ export const HANDOFF_CHANNEL = "@patchwork/handoff";
 
 /**
  * The Web Lock the automerge worker holds for as long as it lives. The
- * browser releases it when the instance goes, however it goes, so a
- * replacement waits for it before starting (two never sync or resolve at
- * once), tabs waiting on it hear the worker die, and the service worker can
- * ask whether there's a worker at all.
+ * browser releases it when the instance goes, however it goes, so tabs
+ * waiting on it hear the worker die, and the service worker can ask whether
+ * there's a worker at all. It's only for telling: no instance waits for it
+ * before working.
  */
 export const AUTOMERGE_WORKER_LOCK = "@patchwork/automerge-worker";
 
