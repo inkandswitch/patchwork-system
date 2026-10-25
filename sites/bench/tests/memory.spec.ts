@@ -278,14 +278,17 @@ function save(row: Row): Row[] {
   return rows;
 }
 
-// Every measurement here goes through CDP.
+// Every measurement here goes through CDP. The hooks run even when every test
+// is skipped, so they check too.
 test.skip(({ browserName }) => browserName !== "chromium", "chromium only");
 
-test.beforeAll(({}, info) => {
+test.beforeAll(({ browserName }, info) => {
+  if (browserName !== "chromium") return;
   if (info.workerIndex === 0) writeFileSync(ROWS, "");
 });
 
-test.afterAll(() => {
+test.afterAll(({ browserName }) => {
+  if (browserName !== "chromium") return;
   console.log("\n" + readFileSync(OUT, "utf8").split("## Summary")[1]);
 });
 
