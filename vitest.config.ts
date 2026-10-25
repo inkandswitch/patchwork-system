@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     workspace: [
       "core/filesystem",
+      "core/patchwork",
       "packages/edge-handles",
     ],
   },
