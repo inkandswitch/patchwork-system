@@ -1,6 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 import { awaitField, online, openTab, record, setField, type Mode } from "./bench.js";
 
+// Garbage collection and measureUserAgentSpecificMemory are chromium only.
+test.skip(({ browserName }) => browserName !== "chromium", "chromium only");
+
 const mode: Mode = "pertab-mesh";
 const TEXT_BYTES = 1 << 20;
 const EDIT_TIMEOUT_MS = 5_000;

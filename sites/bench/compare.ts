@@ -5,8 +5,9 @@
 // Each directory is one run. Only Patchwork as it ships, `patchwork` mode: the
 // other modes and the storage adapters are alternatives the bench explores,
 // not what merging the PR changes. Each side ran its own checkout's
-// benchmarks, so a benchmark the PR adds or renames shows – for main. Every
-// number is lower-is-better.
+// benchmarks, so a benchmark (or browser) the PR adds or renames shows – for
+// main. A result without a browser is chromium's, from before there were
+// others. Every number is lower-is-better.
 import { readFileSync } from "node:fs";
 
 // A row has changed when the two sides' runs don't overlap at all, every run of
@@ -25,10 +26,13 @@ type Result = {
   tabs?: number;
   value: number | boolean | null;
   unit: Unit;
+  browser?: string;
 };
 type MemoryRow = { scenario: string; n: number; footprintMb?: number };
 
-type Row = { name: string; unit: Unit };
+const BROWSERS = ["chromium", "firefox", "webkit"];
+
+type Row = { name: string; unit: Unit; browser: string };
 /** A side's measurements of each row, a value per run that measured it. */
 type Side = { runs: number; values: Map<string, Value[]> };
 
@@ -57,19 +61,21 @@ function read(dirs: string[]): Side {
   for (const dir of dirs) {
     const run = new Map<string, Value>();
     const add = (row: Row, value: unknown) => {
-      if (!rows.has(row.name)) rows.set(row.name, row);
-      if (measured(value)) run.set(row.name, value);
+      const key = `${row.browser}: ${row.name}`;
+      if (!rows.has(key)) rows.set(key, row);
+      if (measured(value)) run.set(key, value);
     };
     for (const r of lines<Result>(`${dir}/results.jsonl`)) {
       if (r.mode !== "patchwork" || r.storage !== undefined) continue;
       const name =
         r.tabs === undefined ? r.metric : `${r.metric} (${r.tabs} tabs)`;
-      add({ name, unit: r.unit }, r.value);
+      add({ name, unit: r.unit, browser: r.browser ?? "chromium" }, r.value);
     }
+    // The memory ladder is chromium only.
     for (const r of lines<MemoryRow>(`${dir}/memory.jsonl`)) {
       if (!/\bpatchwork\b/.test(r.scenario)) continue;
       const name = `renderer memory, ${r.n} tab${r.n === 1 ? "" : "s"}`;
-      add({ name, unit: "MB" }, r.footprintMb);
+      add({ name, unit: "MB", browser: "chromium" }, r.footprintMb);
     }
     if (!run.size) continue;
     side.runs++;
@@ -110,23 +116,30 @@ function cell(values: Value[] | undefined, unit: Unit): string {
   return `${middle} (${bare(low)}–${bare(high)})`;
 }
 
-/** The change from main to the PR, and whether it's more than noise. */
+/**
+ * The change from main to the PR, whether it's more than noise, and whether
+ * it fails the PR: a check main passes, or doesn't have yet, failing in any run
+ * of the PR. A check main fails too doesn't.
+ */
 function change(
   before: Value[] | undefined,
   after: Value[] | undefined,
   unit: Unit
-): { text: string; moved: boolean } {
-  if (!before?.length || !after?.length) return { text: "", moved: false };
-  if (unit === "ok") {
-    const mainOk = before.every(Boolean);
-    const prOk = after.every(Boolean);
-    if (mainOk && !prOk) {
-      const failed = after.filter((v) => !v).length;
-      return { text: `**fails ${failed} of ${after.length}**`, moved: true };
+): { text: string; moved: boolean; breaks?: boolean } {
+  if (unit === "ok" && after?.length) {
+    const mainOk = !before?.length || before.every(Boolean);
+    const failed = after.filter((v) => !v).length;
+    if (mainOk && failed) {
+      return {
+        text: `**fails ${failed} of ${after.length}**`,
+        moved: true,
+        breaks: true,
+      };
     }
-    if (!mainOk && prOk) return { text: "**fixed**", moved: true };
+    if (!mainOk && !failed) return { text: "**fixed**", moved: true };
     return { text: "", moved: false };
   }
+  if (!before?.length || !after?.length) return { text: "", moved: false };
   const a = before.map(Number);
   const b = after.map(Number);
   const ma = median(a);
@@ -146,16 +159,19 @@ function change(
   return { text: `**${percent} ${mb > ma ? "worse" : "better"}**`, moved };
 }
 
+/** With more than one browser, each row says which. */
 function table(keys: string[], main: Side, pr: Side): string {
+  const browsers = new Set([...rows.values()].map((row) => row.browser));
+  const many = browsers.size > 1;
   return [
-    "| benchmark | main | PR | change |",
-    "| --- | --- | --- | --- |",
+    `| ${many ? "browser | " : ""}benchmark | main | PR | change |`,
+    `| ${many ? "--- | " : ""}--- | --- | --- | --- |`,
     ...keys.map((key) => {
-      const { name, unit } = rows.get(key)!;
+      const { name, unit, browser } = rows.get(key)!;
       const before = main.values.get(key);
       const after = pr.values.get(key);
       const { text } = change(before, after, unit);
-      return `| ${name} | ${cell(before, unit)} | ${cell(after, unit)} | ${text} |`;
+      return `| ${many ? `${browser} | ` : ""}${name} | ${cell(before, unit)} | ${cell(after, unit)} | ${text} |`;
     }),
   ].join("\n");
 }
@@ -182,13 +198,30 @@ if (!mainDirs.length || !prDirs.length) {
 }
 const main = read(mainDirs);
 const pr = read(prDirs);
-const keys = [...rows.keys()];
-const moved = keys.filter(
-  (key) =>
-    change(main.values.get(key), pr.values.get(key), rows.get(key)!.unit).moved
+// Grouped by browser, each in the order its rows were first recorded.
+const rank = (browser: string) =>
+  BROWSERS.includes(browser) ? BROWSERS.indexOf(browser) : BROWSERS.length;
+const keys = [...rows.keys()].sort(
+  (a, b) => rank(rows.get(a)!.browser) - rank(rows.get(b)!.browser)
 );
+const changes = new Map(
+  keys.map((key) => [
+    key,
+    change(main.values.get(key), pr.values.get(key), rows.get(key)!.unit),
+  ])
+);
+const moved = keys.filter((key) => changes.get(key)!.moved);
+const broken = keys.filter((key) => changes.get(key)!.breaks);
 
 const out: string[] = [];
+if (broken.length) {
+  out.push(
+    `**The PR fails ${broken.length === 1 ? "a check" : `${broken.length} checks`} main passes, so this run fails:** ${broken.map((key) => key).join("; ")}.`,
+    ""
+  );
+  // The workflow fails on this, once the comment is posted.
+  process.exitCode = 1;
+}
 if (!pr.runs) out.push("The PR's benchmarks recorded nothing.");
 else if (!main.runs)
   out.push(

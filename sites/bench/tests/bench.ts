@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { test } from "@playwright/test";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 
 export type Mode =
@@ -35,10 +36,13 @@ export type Result = {
   /** null: no measurement, printed as – */
   value: number | boolean | null;
   unit: "ms" | "MB" | "n" | "ok";
+  /** The Playwright project it ran in: chromium, firefox or webkit. */
+  browser?: string;
 };
 
 export function record(result: Result): void {
-  appendFileSync(RESULTS, JSON.stringify(result) + "\n");
+  const browser = result.browser ?? test.info().project.name;
+  appendFileSync(RESULTS, JSON.stringify({ ...result, browser }) + "\n");
 }
 
 export function median(values: number[]): number {
@@ -359,11 +363,15 @@ export async function withStall<T>(
  * only covers the caller's own agent cluster), so the pids come from CDP and
  * the sizes from the OS: physical footprint on macOS, the same number Activity
  * Monitor shows, and plain RSS elsewhere, which overcounts shared mappings
- * per process and so flatters whichever topology has fewer processes.
+ * per process and so flatters whichever topology has fewer processes. Null in
+ * firefox and webkit, which have no CDP.
  */
 export async function rendererMemory(
   browser: Browser
-): Promise<{ mb: number; processes: number }> {
+): Promise<{ mb: number | null; processes: number | null }> {
+  if (browser.browserType().name() !== "chromium") {
+    return { mb: null, processes: null };
+  }
   const session = await browser.newBrowserCDPSession();
   const { processInfo } = (await session.send("SystemInfo.getProcessInfo")) as {
     processInfo: Array<{ type: string; id: number }>;

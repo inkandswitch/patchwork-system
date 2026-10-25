@@ -146,7 +146,7 @@ async function measure(browser: Browser, pages: Page[]): Promise<Partial<Row>> {
       )
     : [];
   return {
-    footprintMb: footprint.mb,
+    footprintMb: footprint.mb ?? undefined,
     processes,
     heap: medians(heaps),
     muasm: grouped.length
@@ -277,6 +277,9 @@ function save(row: Row): Row[] {
   console.log("\n" + scenarioTable(row.scenario, rows.filter((r) => r.scenario === row.scenario)));
   return rows;
 }
+
+// Every measurement here goes through CDP.
+test.skip(({ browserName }) => browserName !== "chromium", "chromium only");
 
 test.beforeAll(({}, info) => {
   if (info.workerIndex === 0) writeFileSync(ROWS, "");

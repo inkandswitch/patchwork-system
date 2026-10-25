@@ -23,7 +23,8 @@ jobs:
     # alongside it. Only Patchwork as it ships (`patchwork` mode, whose tests
     # are titled "patchwork: …" or "S5 patchwork, …"): the other modes and the
     # storage adapters are alternatives the bench explores, not what merging
-    # changes.
+    # changes. Each side runs every browser its bench.config.ts has a project
+    # for: chromium, firefox and webkit.
     steps:
       # Say a run is under way, keeping the last results below it, marked as
       # out of date, until this one replaces them.
@@ -89,16 +90,18 @@ jobs:
         working-directory: pr
         run: pnpm install --frozen-lockfile && pnpm build
 
-      - name: install chromium
+      - name: install the browsers
         run: |
-          (cd main/sites/bench && pnpm exec playwright install --with-deps chromium)
-          (cd pr/sites/bench && pnpm exec playwright install --with-deps chromium)
+          (cd main/sites/bench && pnpm exec playwright install --with-deps chromium firefox webkit)
+          (cd pr/sites/bench && pnpm exec playwright install --with-deps chromium firefox webkit)
 
       # A single run of a benchmark can be off by more than the PR changes it,
       # so each side runs ROUNDS times, alternating, so that the runner
       # slowing down partway affects both. Failed tests still record their
       # rows, so every round reports whatever got measured; main failing
-      # doesn't fail the PR, the PR failing does, once it's been reported.
+      # doesn't fail the PR, the PR failing does, once it's been reported. So
+      # does a check (an "ok" row) that main passes failing in any round of
+      # the PR: see compare.ts.
       - name: bench main and the PR, alternating
         env:
           ROUNDS: 3
@@ -120,7 +123,7 @@ jobs:
       - name: compare
         if: always()
         run: |
-          node pr/sites/bench/compare.ts --main runs/main-* --pr runs/pr-* > compare.md
+          node pr/sites/bench/compare.ts --main runs/main-* --pr runs/pr-* > compare.md || touch pr-regressed
           cat compare.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/github-script@v7
@@ -140,7 +143,7 @@ jobs:
               marker,
               `## Benchmarks: Patchwork with this PR against main`,
               ``,
-              `\`${head}\` against main at \`${base}\`, Patchwork as it ships (\`patchwork\` mode), measured one after the other on the same runner ([run](${run})). Lower is better throughout. A row is in the table when every run of the PR came out on the same side of every run of main, with the medians more than 20% apart; every benchmark is below it.`,
+              `\`${head}\` against main at \`${base}\`, Patchwork as it ships (\`patchwork\` mode) in chromium, firefox and webkit, measured one after the other on the same runner ([run](${run})). Lower is better throughout. A row is in the table when every run of the PR came out on the same side of every run of main, with the medians more than 20% apart; every benchmark is below it.`,
               ``,
               compare,
             ].join("\n")
@@ -156,4 +159,4 @@ jobs:
 
       - name: fail if the PR's benchmarks failed
         if: always()
-        run: test ! -e pr-failed
+        run: test ! -e pr-failed && test ! -e pr-regressed
