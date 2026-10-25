@@ -1,5 +1,57 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.8.7
+
+### Patch Changes
+
+- bedd49b: Classic automerge-repo sync connects from the tab's own Repo instead of the automerge worker, so a worker restart no longer drops it and tabs no longer ask the replacement to connect again.
+
+  `connectClassicSync` in `@inkandswitch/patchwork-bootloader` now takes the Repo: `connectClassicSync(repo, server?)`. `setupServiceWorker()` no longer returns `connectClassicSync`. `patchwork.sw.connectClassicSync(server?)` works as before. The `ConnectClassicSyncMessage` type is gone.
+
+- bedd49b: The automerge worker no longer measures package memory. Removed: the `@patchwork/package-memory` channel and its message types (`PACKAGE_MEMORY_CHANNEL`, `PackageMemoryRequestMessage`, `PackageMemoryDocument`, `PackageMemoryAcceptedMessage`, `PackageMemoryReplyMessage`), and the records a restarting worker saved for its replacement (`LOADED_CACHE`). The service worker clears that cache along with every other cache but its own. `packageDocuments` is gone from `@inkandswitch/patchwork-filesystem`; nothing else walked a package.
+- c9d2f39: Every tab is its own Subduction node again, with its own socket to the sync server. The sync node in the automerge worker is gone. When the worker restarts (to recycle its wasm memory, for a new build, or after a trap), it takes only its resolver Repo with it. Before, every restart threw away the node every tab synced through, and each tab had to reconnect and resubscribe. The worker's resolver Repo has its own socket too.
+
+  The automerge worker still holds `AUTOMERGE_WORKER_LOCK` for as long as it lives. The lock now does one thing: it lets tabs and the service worker tell when the worker has died. A replacement no longer waits for it before it builds its Repo, answers handoffs or announces itself `online`. An instance that's restarting already stops taking handoffs and package-memory requests, so the two don't answer at once.
+
+  Removed from `@inkandswitch/patchwork-bootloader`: `getSyncRemote`, `watchDocument`, `relayKeyhive` and the `PortSyncRemote` type. Pass `subductionWebsocketEndpoints: [syncServerUrl]` to the Repo instead of `subductionRemote: getSyncRemote()`. On keyhive sites, use `new Repo(config)` directly rather than wrapping it in `relayKeyhive`. `loadKeyhiveSigner` is gone from `@inkandswitch/patchwork-bootloader/signer`. `startWorkerControl` no longer returns `holding`.
+
+  Tabs still follow package docs without loading them. `watchDocument(repo, url, onChange)`, now exported from `@inkandswitch/patchwork`, subscribes to the document through the tab's own Subduction connection and listens on the origin's heads channel. Every Repo relays the server's heads there, so the watcher hears both the server's pushes and other tabs' writes. `onChange(seen)` gets the same summary `ModuleWatcher` already compares, so a repeat costs no lookup. Subduction can't unsubscribe from a single document, so after `unwatch()` the server keeps pushing it to that tab until the connection drops.
+
+- a12981b: A build emits every file the automerge worker and the page load under a content-hashed name in `/assets`, served `immutable`, instead of at a fixed path: the `/packages/…` chunks, `automerge.wasm`, `subduction.wasm`, `keyhive_wasm.wasm`, the worker's second stage (`automerge-protocol-handler.js`) and `module-loader-worker.js`. A fixed path could only be revalidated, which fails offline, or cached on a guess, which after a deploy could start the worker on one build's files and the rest of another's. Now a build only ever loads its own copies, and they start offline from the HTTP cache.
+
+  Only `service-worker.js` and the automerge worker's script, `automerge-protocol-handler-worker.js`, keep their fixed paths, since the browser starts both by URL from one build to the next. The worker's script is served `max-age=0, stale-while-revalidate=31536000`, so the browser starts it from its copy when it can't check for a newer one. Everything that copy imports is hashed, so even a copy from an older build brings up one whole build. A worker that restarts because a newer tab connected fetches its script past the cache first, so the replacement starts on the newer build rather than the cached one, which would carry on serving the newer tab.
+
+  The fixed paths still work: the generated `_redirects` sends each one to its hashed name with a 302, and `vite preview` does the same, whether or not the site writes Netlify files. But a module imported both by a fixed path and by its hashed name is two modules, so code should import the packages by bare specifier (the import map points at the hashed names) and load the rest by the URLs in `@inkandswitch/patchwork-bootloader/emitted`: `AUTOMERGE_WASM`, `SUBDUCTION_WASM`, `KEYHIVE_WASM`, `AUTOMERGE_PROTOCOL_HANDLER` and `MODULE_LOADER_WORKER`. In dev these are the fixed paths.
+
+  API changes:
+
+  - `emitWasmAssets` (`@inkandswitch/patchwork-bootloader/externals`) emits the wasm under hashed names and returns each one's reference id by file name.
+  - `@inkandswitch/patchwork/vite` has a `hashed()` plugin, included in `patchwork()`, which swaps in the hashed names. `hashedFiles(config)` gives a build's table of them, also exported from `@inkandswitch/patchwork/vite/hashed`.
+  - `workers` entries say whether a worker is `hashed`. The workers no longer import the packages from `/packages/…` URLs: they link to the build's chunks like the page does.
+  - `buildHeaders(options, hashed?)` takes that table for the wasm preloads.
+  - The new `buildRedirects(hashed?)` writes the redirects. `REVALIDATED_PATHS` and `REVALIDATED_CACHE_CONTROL` name the stale-while-revalidate files and their header.
+
+  The e2e offline test waits for the wasm by the URLs the page preloads.
+
+- bedd49b: The service worker asks a tab to resolve `automerge:` requests before falling back to the automerge worker. Every tab is its own node with its own Repo, so the tab that made a request can usually answer it from documents it already holds.
+
+  The service worker asks the tab that made the request first, then any other open tab (focused first, then visible). This covers requests from the module-loader worker and navigations, which have no window of their own. Only when no tab can answer does it broadcast to the automerge worker, which now handles just those requests.
+
+  The tab replies `accepted` straight away, or `unavailable` if it has no Repo yet. A tab that says nothing within 250ms is passed over. That number is provisional: the service worker logs each tab's accept latency under `patchwork:serviceworker`, to measure from. A tab that has accepted holds a Web Lock for that one request until it has replied. If the lock is released with no reply, the tab has gone (closed, crashed, navigated away) and the next candidate is asked.
+
+  New in `@inkandswitch/patchwork-bootloader`: `resolveHandoffsWith(repo)` makes this tab answer with `repo`. `@inkandswitch/patchwork` calls it with the Repo it creates; a site that passes its own Repo isn't asked and keeps resolving through the automerge worker. The resolving code the worker used is shared by both, in `resolver.ts`. The new messages are `ResolveRequestMessage`, `ResolveAcceptedMessage` and `ResolveUnavailableMessage`.
+
+- a12981b: Fixes to how the automerge worker recycles itself to give back wasm memory:
+
+  - The service worker no longer deletes the cache a restarting automerge worker saves what it had loaded into (`patchwork-package-memory`, now `LOADED_CACHE` in the bootloader's types). It cleared every cache but its own on each activation, so the replacement never had anything to restore.
+  - A worker with classic sync connected recycles like any other. Tabs ask the replacement to connect classic sync again, after a restart and after the worker goes unexpectedly, so connecting it no longer stops the worker from ever recycling.
+  - The recycle check counts subduction's wasm memory too, not only automerge's.
+
+- a12981b: The automerge worker's resolver Repo is on `self.repo` again from the moment the worker starts, for the console. The Repo is only built once something has to be resolved, so until then reading `self.repo` starts building it and gives its promise. `await repo` works either way.
+- Updated dependencies [bedd49b]
+- Updated dependencies [c9d2f39]
+  - @inkandswitch/patchwork-filesystem@0.2.16
+
 ## 0.8.6
 
 ### Patch Changes
