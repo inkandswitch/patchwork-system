@@ -176,9 +176,9 @@ jobs:
               threw="$threw $browser"
             fi
           done
-          node sites/bench/compare.ts --main runs/*/main-* --pr runs/*/pr-* > compare.md || touch pr-regressed
+          node sites/bench/compare.ts --main runs/*/main-* --pr runs/*/pr-* --why why.txt > compare.md || touch pr-regressed
           if [ -n "$threw" ]; then
-            touch pr-failed
+            echo "$threw" > pr-failed
             { echo "**The PR's benchmarks threw in:$threw.** See the run's logs."; echo; cat compare.md; } > compare.tmp
             mv compare.tmp compare.md
           fi
@@ -214,5 +214,23 @@ jobs:
               await github.rest.issues.createComment({owner, repo, issue_number, body})
             }
 
+      # Says why as error annotations, which show on the run's summary page and
+      # the PR's checks. The comment has the same, with the tables.
       - name: fail if the PR's benchmarks failed
-        run: test ! -e pr-failed && test ! -e pr-regressed
+        run: |
+          failed=0
+          if [ -e pr-failed ]; then
+            echo "::error title=benchmarks threw::The PR's benchmarks threw in:$(cat pr-failed). See that browser's bench job for the test that threw."
+            failed=1
+          fi
+          if [ -e pr-regressed ]; then
+            if [ -s why.txt ]; then
+              while IFS= read -r line; do
+                echo "::error title=check failed::${line//%/%25}"
+              done < why.txt
+            else
+              echo "::error title=compare failed::compare.ts exited without naming a check that failed; see the compare step."
+            fi
+            failed=1
+          fi
+          exit $failed

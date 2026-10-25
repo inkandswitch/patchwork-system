@@ -470,7 +470,9 @@ window.bench = {
         return serverHeadsAt.get(handle.documentId)!;
       }
       if (performance.now() > deadline) {
-        throw new Error(`server never confirmed ${url}: saw ${seen}`);
+        throw new Error(
+          `server never confirmed ${url}: it holds heads ${seen ?? "none"}, the tab ${target}`
+        );
       }
       await sleep(10);
     }

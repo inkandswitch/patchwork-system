@@ -38,6 +38,8 @@ export type Result = {
   unit: "ms" | "MB" | "n" | "ok";
   /** The Playwright project it ran in: chromium, firefox or webkit. */
   browser?: string;
+  /** What the test saw, for a check that failed: shown with the failure. */
+  note?: string;
   /**
    * A check on the bench itself (did the offline switch hold?), not on
    * Patchwork: shown, but a PR can't fail it.
@@ -127,20 +129,20 @@ export type OfflineSwitch = {
   /** Cut or restore the link to the sync server in every tab. */
   set(pages: Page[], offline: boolean): Promise<void>;
   /**
-   * Messages a page sent the server through the proxy while offline: a
-   * reconnect the browser's offline emulation let through. Zero when the
-   * cut held.
+   * Messages a page sent the server through the proxy while offline. Zero when
+   * the cut held.
    */
   leaked(): number;
 };
 
 /**
- * A real offline switch. Playwright's `setOffline` makes new connections fail
- * the way a dead network does but doesn't close a WebSocket that is already
- * open, so every WebSocket a page opens is also proxied here, purely so the
- * live ones can be closed. (Refusing inside the proxy instead would close the
- * page's socket without an `error` event, which automerge-repo's connect never
- * recovers from — a shape no real network produces.) A worker's socket is out
+ * A real offline switch. Playwright's `setOffline` doesn't close a WebSocket
+ * that is already open, nor stop a routed one from connecting, so every
+ * WebSocket a page opens is proxied here: the live ones are closed, and new
+ * ones are held going nowhere until it's back online. (Refusing them instead
+ * would close the page's socket without an `error` event, which
+ * automerge-repo's connect never recovers from — a shape no real network
+ * produces.) A worker's socket is out
  * of reach of both, so the worker modes are told to drop theirs and fail
  * reconnects while offline. Install before opening any tab.
  */
@@ -148,17 +150,29 @@ export async function offlineSwitch(
   context: BrowserContext
 ): Promise<OfflineSwitch> {
   const live = new Set<{ close(): void }>();
+  // Sockets a page opened while offline, held open and going nowhere.
+  const held = new Set<{ close(): void }>();
   let offline = false;
   let leaked = 0;
   await context.routeWebSocket(
     (url) => url.protocol === "wss:" || url.protocol === "ws:",
     (ws) => {
-      // The real socket is opened in the page, so whether this one gets
-      // anywhere is up to the browser's offline emulation.
-      if (offline) console.log(`[offline switch] ${ws.url()} opened while offline`);
+      // The proxy's own connection to the server is Playwright's, out of
+      // reach of `setOffline`, so a page that reconnects while offline would
+      // get straight through. Its socket is held open with nothing behind it
+      // instead, the way a network that drops everything looks, until going
+      // back online closes it and the page reconnects for real.
+      if (offline) {
+        const hold = { close: () => ws.close({ code: 1012, reason: "offline" }) };
+        held.add(hold);
+        ws.onClose(() => held.delete(hold));
+        return;
+      }
       const server = ws.connectToServer();
+      let closed = false;
       const link = {
         close() {
+          closed = true;
           live.delete(link);
           server.close({ code: 1012, reason: "offline" });
           ws.close({ code: 1012, reason: "offline" });
@@ -166,17 +180,23 @@ export async function offlineSwitch(
       };
       live.add(link);
       ws.onMessage((message) => {
+        // A message the page sent as its link was being cut goes nowhere.
+        if (closed) return;
         if (offline && leaked++ === 0) {
           console.log(`[offline switch] ${ws.url()} reached the server while offline`);
         }
         server.send(message);
       });
-      server.onMessage((message) => ws.send(message));
+      server.onMessage((message) => {
+        if (!closed) ws.send(message);
+      });
       ws.onClose((code, reason) => {
+        closed = true;
         live.delete(link);
         server.close({ code, reason });
       });
       server.onClose((code, reason) => {
+        closed = true;
         live.delete(link);
         ws.close({ code, reason });
       });
@@ -186,7 +206,10 @@ export async function offlineSwitch(
     async set(pages, to) {
       // Offline only once the live links are closed, so nothing they had in
       // flight counts as a leak.
-      if (!to) offline = false;
+      if (!to) {
+        offline = false;
+        for (const hold of [...held]) hold.close();
+      }
       await context.setOffline(to);
       if (to) {
         for (const link of [...live]) link.close();

@@ -18,6 +18,14 @@ const EDITS = 10;
 const RACE_TIMEOUT_MS = 5_000;
 const EDIT_TIMEOUT_MS = 5_000;
 
+// A thrown error's first line, without Playwright's prefix, and with hashes cut
+// short enough to read.
+const said = (error: unknown) =>
+  String(error instanceof Error ? error.message : error)
+    .split("\n")[0]
+    .replace(/^.*?Error: /, "")
+    .replace(/\b(\w{8})\w{24,}/g, "$1…");
+
 // Tab A creates and edits; tabs B.. find and watch. Each latency is a median
 // over EDITS rounds.
 for (const mode of MODES) {
@@ -51,6 +59,9 @@ for (const mode of MODES) {
       mode,
       value: finds.every((find) => find.ok),
       unit: "ok",
+      note: finds.some((find) => !find.ok)
+        ? `${finds.filter((find) => !find.ok).length} of ${finds.length} tabs' finds were still unavailable after ${RACE_TIMEOUT_MS / 1000}s`
+        : undefined,
     });
     // A count, not a check: whether a find beats the creator's save is a race,
     // so one that loses now and then shouldn't fail a PR.
@@ -88,6 +99,8 @@ for (const mode of MODES) {
     const confirmation: number[] = [];
     let missed = 0;
     let unconfirmed = 0;
+    let firstMissed: number | undefined;
+    let firstUnconfirmed: string | undefined;
     for (let i = 1; i <= EDITS; i++) {
       const seen = watchers.map((page) =>
         awaitField(page, url, "counter", i, EDIT_TIMEOUT_MS).catch(
@@ -97,12 +110,16 @@ for (const mode of MODES) {
       const edited = await setField(a, url, "counter", i);
       const [arrived, confirmed] = await Promise.all([
         Promise.all(seen),
-        serverConfirmed(a, url, EDIT_TIMEOUT_MS).catch(() => undefined),
+        serverConfirmed(a, url, EDIT_TIMEOUT_MS).catch((error) => {
+          firstUnconfirmed ??= `edit ${i}: ${said(error)}`;
+          return undefined;
+        }),
       ]);
       if (arrived.every((at) => at !== undefined)) {
         propagation.push(Math.max(...(arrived as number[])) - edited);
       } else {
         missed++;
+        firstMissed ??= i;
       }
       if (confirmed !== undefined) confirmation.push(confirmed - edited);
       else unconfirmed++;
@@ -120,6 +137,9 @@ for (const mode of MODES) {
       mode,
       value: missed === 0,
       unit: "ok",
+      note: missed
+        ? `${missed} of ${EDITS} edits didn't reach every other tab, the first at edit ${firstMissed}`
+        : undefined,
     });
     if (confirmation.length) {
       record({
@@ -134,6 +154,9 @@ for (const mode of MODES) {
       mode,
       value: unconfirmed === 0,
       unit: "ok",
+      note: unconfirmed
+        ? `${unconfirmed} of ${EDITS} edits unconfirmed; the first, ${firstUnconfirmed}`
+        : undefined,
     });
     // The server's word, checked: a client that shares nothing with these
     // tabs asks the server for the doc.
@@ -143,6 +166,11 @@ for (const mode of MODES) {
       mode,
       value: stranger?.counter === EDITS,
       unit: "ok",
+      note: !stranger
+        ? "the stranger couldn't get the doc"
+        : stranger.counter !== EDITS
+          ? `the stranger got counter ${stranger.counter}, not ${EDITS}`
+          : undefined,
     });
   });
 }

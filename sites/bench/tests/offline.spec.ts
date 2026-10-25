@@ -54,6 +54,20 @@ for (const mode of MODES) {
       Boolean
     );
     const stayedDown = wentDown && stillDown && network.leaked() === 0;
+    // A stranger that can't get the doc at all proves nothing either way.
+    const stranger = await strangerSees(browser, url);
+    const unseen =
+      stranger !== undefined && stranger.x !== 1 && stranger.y !== 1;
+    const held = stayedDown && unseen;
+    const why = [
+      !wentDown && "the link never went down",
+      wentDown && !stillDown && "a tab was back online before the end",
+      network.leaked() && `${network.leaked()} messages reached the server`,
+      stranger === undefined && "the stranger couldn't get the doc",
+      stranger && !unseen && "the server had the offline edits",
+    ]
+      .filter(Boolean)
+      .join("; ");
     // In the worker modes the bench closes the socket itself, so this only
     // says something about the tab modes' proxy.
     if (!WORKER_MODES.includes(mode)) {
@@ -63,29 +77,19 @@ for (const mode of MODES) {
         value: stayedDown,
         unit: "ok",
         harness: true,
+        note: stayedDown ? undefined : why,
       });
     }
-    // A stranger that can't get the doc at all proves nothing either way.
-    const stranger = await strangerSees(browser, url);
-    const unseen =
-      stranger !== undefined && stranger.x !== 1 && stranger.y !== 1;
     record({
       metric: "…and the server did not see the offline edits",
       mode,
       value: unseen,
       unit: "ok",
       harness: true,
+      note: unseen ? undefined : why,
     });
-    const held = stayedDown && unseen;
     if (!held) {
-      const why = [
-        !wentDown && "the link never went down",
-        wentDown && !stillDown && "a tab was back online before the end",
-        network.leaked() && `${network.leaked()} messages reached the server`,
-        stranger === undefined && "the stranger couldn't get the doc",
-        stranger && !unseen && "the server had the offline edits",
-      ].filter(Boolean);
-      const note = `offline switch didn't hold (${why.join("; ")}), so the offline rows record nothing`;
+      const note = `offline switch didn't hold (${why}), so the offline rows record nothing`;
       console.warn(`[${mode}] ${note}`);
       test.info().annotations.push({ type: "warning", description: note });
     }
@@ -100,6 +104,7 @@ for (const mode of MODES) {
       mode,
       value: held ? local : null,
       unit: "ok",
+      note: local ? undefined : `tab A saw y ${ay}, tab B saw x ${bx}`,
     });
 
     await network.set([a, b], false);
@@ -116,6 +121,14 @@ for (const mode of MODES) {
       mode,
       value: held ? seenY && seenX && confirmed : null,
       unit: "ok",
+      note:
+        [
+          !seenY && "tab A never got B's edit",
+          !seenX && "tab B never got A's edit",
+          !confirmed && "the server never confirmed A's heads",
+        ]
+          .filter(Boolean)
+          .join("; ") || undefined,
     });
     record({
       metric: "reconnect → tabs converged (only where they hadn't already)",
@@ -134,6 +147,7 @@ for (const mode of MODES) {
       mode,
       value: held ? x === 1 && y === 1 : null,
       unit: "ok",
+      note: x === 1 && y === 1 ? undefined : `the fresh tab saw x ${x}, y ${y}`,
     });
   });
 }
