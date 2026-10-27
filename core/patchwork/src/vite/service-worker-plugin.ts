@@ -42,6 +42,45 @@ export const workers: {
   },
 ];
 
+const PRELOAD_HELPER = /^\0vite\/preload-helper\.js$/;
+const PRELOAD_ERROR_DISPATCH = "window.dispatchEvent(";
+
+/**
+ * Vite wraps every dynamic `import()` in its preload helper, including the
+ * ones in chunks a worker shares with the page. When the import fails, the
+ * helper announces it with `window.dispatchEvent`, which throws a
+ * ReferenceError in a worker and replaces the real failure with it. Dispatch
+ * on `globalThis` instead, which is `window` on the page and the worker's own
+ * scope in a worker, so the import's own error is the one that's rethrown.
+ *
+ * Vite has to keep writing that line for this to work, so the build fails if
+ * it's gone rather than quietly leaving workers with the ReferenceError.
+ */
+export function preloadErrorInWorkers(): Plugin {
+  return {
+    name: "@patchwork/preload-error-in-workers",
+    apply: "build",
+    transform: {
+      filter: { id: PRELOAD_HELPER },
+      handler(code, id) {
+        if (!PRELOAD_HELPER.test(id)) return;
+        if (!code.includes(PRELOAD_ERROR_DISPATCH)) {
+          this.error(
+            `vite's preload helper no longer calls ${PRELOAD_ERROR_DISPATCH}), so a failed import in a worker can't be made to report its own error; update preloadErrorInWorkers() for this vite version`
+          );
+        }
+        return {
+          code: code.replaceAll(
+            PRELOAD_ERROR_DISPATCH,
+            "globalThis.dispatchEvent("
+          ),
+          map: null,
+        };
+      },
+    },
+  };
+}
+
 export function serviceworker(): Plugin {
   // The files they were written to, which vite's module preloading has to
   // leave alone: it adds <link> tags to a document a worker doesn't have.

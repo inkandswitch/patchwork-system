@@ -2,7 +2,10 @@ import type { Plugin, ServerOptions, PreviewOptions, BuildOptions } from "vite";
 
 import { importmap } from "./importmap-plugin.js";
 import { patches } from "./patches-plugin.js";
-import { serviceworker } from "./service-worker-plugin.js";
+import {
+  preloadErrorInWorkers,
+  serviceworker,
+} from "./service-worker-plugin.js";
 import { config, wasm } from "./config-plugin.js";
 import { dev } from "./dev-plugin.js";
 import { icons } from "./icons.js";
@@ -46,6 +49,7 @@ export default function patchwork(options?: PatchworkVitePluginOptions) {
     importmap(options),
     patches(),
     serviceworker(),
+    preloadErrorInWorkers(),
     hashed(),
     dev(options),
     statics(options),
@@ -55,7 +59,11 @@ export default function patchwork(options?: PatchworkVitePluginOptions) {
 
 export { importmap, builtins, devDependencyId } from "./importmap-plugin.js";
 export { patches } from "./patches-plugin.js";
-export { serviceworker, workers } from "./service-worker-plugin.js";
+export {
+  preloadErrorInWorkers,
+  serviceworker,
+  workers,
+} from "./service-worker-plugin.js";
 export { config, buildDefines, wasm } from "./config-plugin.js";
 export { dev } from "./dev-plugin.js";
 export { icons } from "./icons.js";
