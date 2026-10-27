@@ -39,6 +39,8 @@ export interface OpenOptions {
   tool?: string;
   type?: string;
   title?: string;
+  /** Where the document was opened from; see `OpenDocumentEventDetail.path`. */
+  path?: string;
 }
 
 export interface PatchworkOptions {

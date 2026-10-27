@@ -5,6 +5,12 @@ export interface OpenDocumentEventDetail {
   toolId?: string;
   title?: string;
   type?: string;
+  /**
+   * Where the document was opened from, like a cwd. Same shape as a
+   * service-worker path: `/<encoded automerge URL>/<subpath>`, e.g.
+   * `/automerge%3A<folderId>/src/components`.
+   */
+  path?: string;
 }
 
 export class OpenDocumentEvent extends CustomEvent<OpenDocumentEventDetail> {
@@ -58,7 +64,8 @@ declare global {
 export const openDocument = (
   element: HTMLElement | ShadowRoot,
   url: AutomergeUrl,
-  toolId?: string
+  toolId?: string,
+  path?: string
 ) => {
-  element.dispatchEvent(new OpenDocumentEvent({ url, toolId }));
+  element.dispatchEvent(new OpenDocumentEvent({ url, toolId, path }));
 };
