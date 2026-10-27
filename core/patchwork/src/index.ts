@@ -267,6 +267,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
             toolId: openOptions.tool,
             type: openOptions.type,
             title: openOptions.title,
+            path: openOptions.path,
           },
         })
       );
