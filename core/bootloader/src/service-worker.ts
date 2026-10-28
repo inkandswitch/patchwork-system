@@ -3,32 +3,31 @@
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
-  INDEX_ANSWER_PATH,
   type AutomergeWorkerMissingMessage,
   type HandoffReplyMessage,
   type HandoffRequestMessage,
   type HandoffResponse,
-  type IndexAnswer,
-  type IndexEntry,
-  type Manifest,
-  type ManifestRequestMessage,
   type ResolveAcceptedMessage,
   type ResolveRequestMessage,
 } from "./types.js";
-import { contentHash, toBytes } from "@inkandswitch/patchwork-filesystem";
+import {
+  contentHash,
+  toBytes,
+  type FileList,
+} from "@inkandswitch/patchwork-filesystem";
 import {
   CONTENT_CACHE_PREFIX,
   cacheStore,
   contentCacheName,
 } from "./content-store.js";
-import { acceptIndexAnswer, indexChannelProbe } from "./index-channel.js";
 import {
   PinnedAbort,
   handoffRequest,
-  manifestRequests,
+  keepFileList,
   normalizePinned,
   servePinned,
-  sharedManifests,
+  sharedRequests,
+  type PinnedDeps,
 } from "./pinned.js";
 // Referenced so this script's bytes change with every build. The browser only
 // installs a replacement service worker when they do, and the controllerchange
@@ -200,71 +199,19 @@ handoffChannel.addEventListener("message", (event) => {
   if (data?.type !== "online") return;
   // The automerge worker (re)started — re-broadcast anything still in flight so
   // requests that raced its boot aren't stranded.
-  const stranded = [
-    ...[...pendingHandoffs.values()].map(({ message }) => message),
-    ...manifestRequestsInFlight.pending(),
-  ];
+  const stranded = [...pendingHandoffs.values()];
   if (stranded.length === 0) return;
   lifecycle(
     "info",
-    `automerge worker (re)started; re-broadcasting ${stranded.length} in-flight request(s)`
+    `automerge worker (re)started; re-broadcasting ${stranded.length} in-flight asset handoff(s)`
   );
-  for (const message of stranded) handoffChannel.postMessage(message);
+  for (const { message } of stranded) handoffChannel.postMessage(message);
 });
 
-// ── The content index ──────────────────────────────────────────────────
-// Pinned `/@/` URL → what its bytes must hash to. Held only here, in memory,
-// and filled only from the automerge worker's manifests, whose answers arrive
-// as fetches this worker checks the sender of (see index-channel.ts). Lost
-// whenever this worker stops, and rebuilt from the automerge worker on demand.
-
-const contentIndex = new Map<string, IndexEntry>();
-
-// The automerge worker answers within its own 10s; past that, serve unchecked.
-const MANIFEST_TIMEOUT_MS = 10_000;
-// After one goes unanswered, how long later requests wait, and for how long.
-const MANIFEST_QUICK_TIMEOUT_MS = 250;
-const MANIFEST_QUIET_MS = 60_000;
-
-const manifestRequestsInFlight = manifestRequests({
-  send(message) {
-    handoffChannel.postMessage(message);
-    void startWorkerIfMissing(message.id);
-  },
-  timeoutMs: MANIFEST_TIMEOUT_MS,
-  quickTimeoutMs: MANIFEST_QUICK_TIMEOUT_MS,
-  quietMs: MANIFEST_QUIET_MS,
-  onTimeout(path) {
-    lifecycle(
-      "warn",
-      `no manifest for /@/${path} after ${MANIFEST_TIMEOUT_MS}ms; serving /@/ unchecked, and waiting only ${MANIFEST_QUICK_TIMEOUT_MS}ms for manifests, for ${MANIFEST_QUIET_MS / 1000}s or until the automerge worker answers`
-    );
-  },
-});
-
-const manifests = sharedManifests(
-  (path) => manifestRequestsInFlight.request(path),
-  (key) => normalizePinned(key)?.prefix ?? key
-);
-
-function settleIndexAnswer(answer: IndexAnswer) {
-  if (answer.error) log(`no manifest for /@/${answer.path}: ${answer.error}`);
-  if (!manifestRequestsInFlight.settle(answer)) {
-    log(`no pending manifest ${answer.id} for /@/${answer.path}`);
-  }
-}
-
-async function answerIndex(fetchEvent: FetchEvent): Promise<Response> {
-  const client = fetchEvent.clientId
-    ? await self.clients.get(fetchEvent.clientId)
-    : undefined;
-  return acceptIndexAnswer(
-    fetchEvent.request,
-    client,
-    self.location.origin,
-    settleIndexAnswer
-  );
-}
+// File lists this worker holds, by list hash: ones that may not be stored, and
+// ones read from the store. Lost when it stops; the store, or a resolver
+// rebuilding a list from its pinned heads, brings them back.
+const fileLists = new Map<string, FileList>();
 
 const MISSING_WORKER_NUDGE_MS = 5_000;
 // A worker that's been spawned only asks for the lock once its imports have
@@ -290,7 +237,7 @@ async function startWorkerIfMissing(id: string) {
   if (!navigator.locks) return;
   if (await automergeWorkerExists()) return;
   await new Promise((resolve) => setTimeout(resolve, MISSING_WORKER_GRACE_MS));
-  if (!pendingHandoffs.has(id) && !manifestRequestsInFlight.has(id)) return;
+  if (!pendingHandoffs.has(id)) return;
   if (await automergeWorkerExists()) return;
   // Check and claim the throttle with no await in between: every handoff that
   // raced the same cold start comes through here at once, and would all pass a
@@ -406,7 +353,7 @@ function askTab(
  */
 async function handoff(
   fetchEvent: FetchEvent,
-  to: URL | string
+  to: URL | { path: string; heads?: string; list?: boolean }
 ): Promise<HandoffReplyMessage> {
   const message = handoffRequest(fetchEvent.request, cachename, to);
   const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
@@ -591,8 +538,10 @@ function isImmutable(response: Response): boolean {
 }
 
 /**
- * A `/@/` path: a live one is handed off and its redirect served as is; a
- * pinned one is served from the content store, checked against the index.
+ * A `/@/` path. A live one is handed off, and the redirect it answers with is
+ * served without its body, the file list the pinned URL names, which is kept
+ * once it checks out. A pinned one is served checked against its own list
+ * (pinned.ts).
  */
 async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response> {
   const normalized = normalizePinned(path);
@@ -603,11 +552,11 @@ async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response
     });
   }
 
-  const resolve = async (key: string) => {
-    const reply = await handoff(fetchEvent, key);
+  const ask: Ask = async (to) => {
+    const reply = await handoff(fetchEvent, to);
     if (reply.type === "abort") throw new HandoffAborted(reply.reason);
     if (reply.type !== "response") {
-      return new Response(`unexpected ${reply.type} reply for /@/${key}`, {
+      return new Response(`unexpected ${reply.type} reply for /@/${to.path}`, {
         status: 502,
       });
     }
@@ -619,38 +568,34 @@ async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response
     };
   };
 
+  const store =
+    normalized.acctHash && !normalized.share
+      ? cacheStore(
+          await caches.open(contentCacheName(normalized.acctHash)),
+          self.location.origin
+        )
+      : undefined;
+  const deps: PinnedDeps = {
+    lists: fileLists,
+    store,
+    hash: contentHash,
+    buildList: (prefix) => buildList(prefix, ask),
+    resolve: (target, heads) => ask({ path: target, heads }),
+    warn: (message) => lifecycle("warn", message),
+    keep: (work) =>
+      fetchEvent.waitUntil(
+        work.catch((error) => {
+          // Always loud, as for the page cache: a QuotaExceededError here
+          // is the first sign the origin is under storage pressure.
+          console.warn(`error keeping /@/${path}`, error);
+        })
+      ),
+  };
+
   try {
-    if (!normalized.pinned) {
-      const answer = await resolve(normalized.keys[0]);
-      return answer instanceof Response
-        ? answer
-        : new Response(answer.body as BlobPart, {
-            headers: { "content-type": answer.contentType, "cache-control": "no-store" },
-          });
-    }
-    const store =
-      normalized.acctHash && !normalized.share
-        ? cacheStore(
-            await caches.open(contentCacheName(normalized.acctHash)),
-            self.location.origin
-          )
-        : undefined;
-    return await servePinned(normalized.keys, {
-      index: contentIndex,
-      store,
-      hash: contentHash,
-      manifest: manifests,
-      resolve,
-      warn: (message) => lifecycle("warn", message),
-      keep: (work) =>
-        fetchEvent.waitUntil(
-          work.catch((error) => {
-            // Always loud, as for the page cache: a QuotaExceededError here
-            // is the first sign the origin is under storage pressure.
-            console.warn(`error keeping /@/${path}`, error);
-          })
-        ),
-    });
+    const response = await servePinned(normalized, deps);
+    if (response.status === 307) return keepRedirectedList(response, deps);
+    return response;
   } catch (error) {
     // Deliberate: fail the request as a network error, with no response.
     if (error instanceof PinnedAbort || error instanceof HandoffAborted) {
@@ -663,6 +608,44 @@ async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response
       { status: 556, headers: { "content-type": "text/plain" } }
     );
   }
+}
+
+/** A handoff's reply, as bytes, or a Response for anything else. */
+type Ask = (to: {
+  path: string;
+  heads?: string;
+  list?: boolean;
+}) => Promise<{ body: Uint8Array; contentType: string } | Response>;
+
+// Concurrent requests for files of one package share a rebuild of its list.
+const buildList = sharedRequests(
+  async (prefix: string, ask: Ask): Promise<Uint8Array | undefined> => {
+    const answer = await ask({ path: prefix, list: true });
+    return answer instanceof Response ? undefined : answer.body;
+  }
+);
+
+/**
+ * A resolver's redirect from a live path carries, as its body, the file list
+ * the pinned URL names. Keep it if it hashes to the `~listHash` in `location`,
+ * and serve the redirect without it.
+ */
+async function keepRedirectedList(
+  response: Response,
+  deps: PinnedDeps
+): Promise<Response> {
+  const location = response.headers.get("location") ?? "";
+  const listHash = normalizePinned(location.replace(/^\/@\//, ""))?.candidates.find(
+    (candidate) => candidate.listHash
+  )?.listHash;
+  const body = new Uint8Array(await response.arrayBuffer());
+  if (listHash && body.length && !(await keepFileList(body, listHash, deps))) {
+    lifecycle("warn", `the file list with the redirect to ${location} isn't the one it names`);
+  }
+  return new Response(null, {
+    status: response.status,
+    headers: { location, "cache-control": "no-store" },
+  });
 }
 
 async function servePassthrough(
@@ -741,13 +724,6 @@ self.addEventListener("fetch", (fetchEvent: FetchEvent) => {
   log("fetch event", request.url);
   const url = new URL(request.url);
   const ours = url.origin === self.location.origin;
-
-  if (ours && url.pathname === INDEX_ANSWER_PATH) {
-    fetchEvent.respondWith(
-      request.method === "POST" ? answerIndex(fetchEvent) : indexChannelProbe()
-    );
-    return;
-  }
 
   if (request.method !== "GET") return;
 

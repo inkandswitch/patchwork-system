@@ -228,15 +228,18 @@ export async function servePinned(
   return respond(answer.body, entry.type, true);
 }
 
-/** Wrap `fn` so concurrent calls with one key share a request. A settled request is forgotten. */
-export function sharedRequests<T>(
-  fn: (key: string) => Promise<T>
-): (key: string) => Promise<T> {
+/**
+ * Wrap `fn` so concurrent calls with one key share a request, made with the first call's other
+ * arguments. A settled request is forgotten.
+ */
+export function sharedRequests<A extends unknown[], T>(
+  fn: (key: string, ...args: A) => Promise<T>
+): (key: string, ...args: A) => Promise<T> {
   const inFlight = new Map<string, Promise<T>>();
-  return (key) => {
+  return (key, ...args) => {
     let request = inFlight.get(key);
     if (!request) {
-      request = fn(key).finally(() => inFlight.delete(key));
+      request = fn(key, ...args).finally(() => inFlight.delete(key));
       inFlight.set(key, request);
     }
     return request;

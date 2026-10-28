@@ -1,6 +1,11 @@
 import { afterEach, describe, it, expect } from "vitest";
-import { Repo, stringifyAutomergeUrl } from "@automerge/automerge-repo";
-import { handleResolveRequest, resolveHandoffsWith } from "../src/tab-resolver.js";
+import { Repo, stringifyAutomergeUrl, type AutomergeUrl } from "@automerge/automerge-repo";
+import { contentHash, livePath, toBytes } from "@inkandswitch/patchwork-filesystem";
+import {
+  handleResolveRequest,
+  registerAccount,
+  resolveHandoffsWith,
+} from "../src/tab-resolver.js";
 import {
   ORIGIN,
   navigation,
@@ -56,24 +61,111 @@ describe("service worker: legacy automerge URLs", () => {
   });
 });
 
-describe("service worker: the index channel", () => {
-  it("refuses an answer posted by a page", async () => {
+/** An account whose / is a folder Projects/foo holding one file, `notes`. */
+async function account(repo: Repo) {
+  const file = (content: string) =>
+    repo.create({ "@patchwork": { type: "file" }, content, mimeType: "text/plain" });
+  const folder = (entries: Record<string, AutomergeUrl>) =>
+    repo.create({
+      title: "folder",
+      docs: Object.entries(entries).map(([name, url]) => ({ name, type: "x", url })),
+    });
+  const notes = file("hi");
+  const foo = folder({ notes: notes.url });
+  const root = folder({ Projects: folder({ foo: foo.url }).url });
+  const acct = repo.create({
+    "@patchwork": { type: "account" },
+    namespace: { "/": [{ url: root.url }] },
+  });
+  const a = await registerAccount(acct.url);
+  return { a, notes };
+}
+
+/** Follow a live /@/ URL's redirect, as fetch() would: the pinned URL it names. */
+async function pin(harness: ServiceWorkerHarness, live: string) {
+  const response = await harness.fetch(new Request(`${ORIGIN}/@/${live}`), "tab").response()!;
+  expect(response.status).toBe(307);
+  expect(response.body).toBeNull();
+  return `${ORIGIN}${response.headers.get("location")}`;
+}
+
+describe("service worker: /@/ paths", () => {
+  it("redirects a live path, then serves the pinned file from its list", async () => {
     sw = await startServiceWorker();
-    sw.clients.set("page", { id: "page", type: "window", url: `${ORIGIN}/`, postMessage() {} });
-    const event = sw.fetch(
-      new Request(`${ORIGIN}/@/.index`, {
-        method: "POST",
-        body: JSON.stringify({ id: "x", path: "a@h", manifest: { prefix: "a@h", entries: {} } }),
-      }),
-      "page"
-    );
-    expect((await event.response()!).status).toBe(403);
+    const repo = new Repo();
+    addTab(sw, repo);
+    const { a } = await account(repo);
+
+    const pinned = await pin(sw, livePath(a, ["Projects", "foo", "notes"]));
+    const event = sw.fetch(new Request(pinned), "tab");
+    const response = await event.response()!;
+    expect(await response.text()).toBe("hi");
+    expect(response.headers.get("cache-control")).toContain("immutable");
+    await event.settled();
+    // the list and the file's bytes, each under its own hash
+    const stored = sw.caches.named.get(`patchwork-content-${a}`)!;
+    expect(stored.entries.size).toBe(2);
+    expect(await stored.match(`${ORIGIN}/.content/${await contentHash(toBytes("hi"))}`)).toBeDefined();
   });
 
-  it("answers a probe so the worker knows its fetches arrive", async () => {
+  it("serves the old bytes for a pinned URL after the file changed", async () => {
     sw = await startServiceWorker();
-    const response = await sw.fetch(new Request(`${ORIGIN}/@/.index`)).response()!;
-    expect(response.headers.get("x-patchwork-index")).toBe("present");
+    const repo = new Repo();
+    addTab(sw, repo);
+    const { a, notes } = await account(repo);
+    const pinned = await pin(sw, livePath(a, ["Projects", "foo", "notes"]));
+
+    notes.change((d: any) => (d.content = "changed"));
+    // nothing stored: the bytes come from a resolver, read at the heads the list recorded
+    await sw.caches.delete(`patchwork-content-${a}`);
+    expect(await (await sw.fetch(new Request(pinned), "tab").response()!).text()).toBe("hi");
+  });
+
+  it("never serves a forged store entry", async () => {
+    sw = await startServiceWorker();
+    const repo = new Repo();
+    addTab(sw, repo);
+    const { a } = await account(repo);
+    const pinned = await pin(sw, livePath(a, ["Projects", "foo", "notes"]));
+    const first = sw.fetch(new Request(pinned), "tab");
+    await (await first.response()!).text();
+    await first.settled();
+
+    const key = `${ORIGIN}/.content/${await contentHash(toBytes("hi"))}`;
+    const store = sw.caches.named.get(`patchwork-content-${a}`)!;
+    await store.put(key, new Response("forged"));
+    const again = sw.fetch(new Request(pinned), "tab");
+    expect(await (await again.response()!).text()).toBe("hi");
+    await again.settled();
+    expect(await (await store.match(key))!.text()).toBe("hi");
+  });
+
+  it("fails, rather than serving, when a tab answers with other bytes", async () => {
+    sw = await startServiceWorker();
+    const repo = new Repo();
+    addTab(sw, repo);
+    const { a } = await account(repo);
+    const pinned = await pin(sw, livePath(a, ["Projects", "foo", "notes"]));
+
+    // a tab that answers everything with bytes of its own
+    sw.clients.set("tab", {
+      id: "tab",
+      type: "window",
+      url: `${ORIGIN}/`,
+      focused: true,
+      visibilityState: "visible",
+      postMessage(message: any, transfer) {
+        const [port] = (transfer ?? []) as MessagePort[];
+        if (!port) return; // not a request to resolve
+        port.postMessage({ type: "accepted" });
+        port.postMessage({
+          id: message.id,
+          type: "response",
+          response: { status: 200, body: toBytes("forged"), headers: { "content-type": "text/plain" } },
+        });
+      },
+    });
+    await expect(sw.fetch(new Request(pinned), "tab").response()!).rejects.toThrow();
   });
 });
 
