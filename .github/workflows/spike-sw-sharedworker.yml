@@ -1,0 +1,53 @@
+name: spike sw-sharedworker
+
+# Records how each browser lets a service worker and a module SharedWorker
+# message each other, and what it tells the service worker about the sender.
+# See packages/e2e/spikes/sw-sharedworker. The JSON lands in the job summary.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - packages/e2e/spikes/sw-sharedworker/**
+      - .github/workflows/spike-sw-sharedworker.yml
+
+jobs:
+  spike:
+    name: spike (${{ matrix.browser }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox, webkit]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: install the e2e package
+        run: pnpm install --frozen-lockfile --filter @inkandswitch/patchwork-e2e
+
+      - name: install ${{ matrix.browser }}
+        working-directory: packages/e2e
+        run: pnpm exec playwright install --with-deps ${{ matrix.browser }}
+
+      - name: run the spike
+        working-directory: packages/e2e
+        run: pnpm exec playwright test -c spikes/sw-sharedworker/playwright.config.mjs --project=${{ matrix.browser }}
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spike-sw-sharedworker-${{ matrix.browser }}
+          path: packages/e2e/spikes/sw-sharedworker/results/
+          retention-days: 14

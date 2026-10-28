@@ -296,8 +296,10 @@ These replace the deleted `package-load-gate.md` note.
 - Offline, `servePassthrough` falls back to the URL-keyed `patchwork` cache,
   which any code on the origin can write. Site assets, the automerge worker's
   script included, come from there.
-- Packages can write the automerge worker's IndexedDB/OPFS storage. Whether
-  loading a document at given heads verifies change hashes needs checking.
+- Packages can write the automerge worker's IndexedDB/OPFS storage.
+  Automerge verifies change hashes when it loads a document, so tampered
+  changes don't load as the heads they claim. That check is planned to become
+  optional; when it does, this gap reopens unless patchwork keeps it on.
 - A live → pinned redirect answered by a tab can point at the wrong version.
   It can't poison the store, but it decides which version a tab loads.
 - Legacy `/automerge%3A…` URLs stay keyed by URL and unchecked.
@@ -313,9 +315,11 @@ These replace the deleted `package-load-gate.md` note.
   worker reply with the service worker able to check its `Client.url`, in
   Chromium, Firefox and WebKit? Fallback: the worker posts answers to the
   service worker as `fetch()` requests, whose `clientId` the service worker
-  can look up.
+  can look up. Spike: `packages/e2e/spikes/sw-sharedworker`, run in CI by
+  `.github/workflows/spike-sw-sharedworker.yml`.
 - Does automerge verify change hashes when loading a document from storage?
-  This decides how big the storage-tampering gap is.
+  **Answered: yes**, though it's planned to become optional (see
+  [Remaining gaps](#remaining-gaps)).
 
 ## Testing
 
