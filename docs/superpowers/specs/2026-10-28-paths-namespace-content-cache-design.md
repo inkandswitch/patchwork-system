@@ -1,6 +1,11 @@
 # Paths, namespace, and a content-addressed package cache
 
-Status: design, approved in conversation 2026-10-28. Not implemented.
+Status: design, approved in conversation 2026-10-28. Revised the same day:
+pinned URLs now name a hash of their folder's file list, so a pinned URL is
+checked against itself and nothing else (sections 1 and 5). Phase 1 is
+implemented. Phase 2 was implemented against the earlier section 5 (an index
+in service worker memory, filled by the automerge worker over an
+authenticated channel) and gets reworked to this one.
 
 ## Goals
 
@@ -10,7 +15,8 @@ Status: design, approved in conversation 2026-10-28. Not implemented.
   through them, and the filesystem is a namespace rather than only the
   `.docs` walk of the root folder.
 - Package management is a folder: whatever is bound at `/packages`.
-- URLs don't carry raw document ids unless a portable share link is wanted.
+- URLs don't carry raw document ids unless a portable share link is wanted,
+  and neither does anything in the content store.
 - The package cache can't be poisoned by a crafted link, by code running on
   the origin writing to CacheStorage, or by a stale name resolution.
 
@@ -18,7 +24,7 @@ Status: design, approved in conversation 2026-10-28. Not implemented.
 
 - Cache isolation between two accounts in the same browser profile.
 - Running package code on a separate origin. This design is meant not to
-  preclude it (the store and index work the same there), but doesn't do it.
+  preclude it (the store and file lists work the same there), but doesn't do it.
 - Mount points below the top level of the namespace.
 - Path providers supplied by packages.
 - Garbage collection of the content store.
@@ -27,9 +33,9 @@ Status: design, approved in conversation 2026-10-28. Not implemented.
 
 | Attacker | In scope | What stops it |
 |---|---|---|
-| A crafted link makes the service worker cache content under a key your own imports later hit | yes | Only pinned URLs are stored, and the index maps a pinned URL to the hash of what is really at those heads |
-| Code on the origin (a package or tool) writes to CacheStorage | yes | Every store read is hashed and compared; the index lives only in service worker memory and is filled only by the automerge worker over an authenticated channel |
-| A name path resolved once keeps serving old content | yes | Names are never stored; only pinned URLs are, and they can't change meaning |
+| A crafted link makes the service worker cache content under a key your own imports later hit | yes | Content is stored only under its own hash, after hashing it; a crafted link can only name other content |
+| Code on the origin (a package or tool) writes to CacheStorage | yes | Every store read is hashed and compared with a hash that comes from the URL, directly or through a file list that is itself checked against the URL |
+| A name path resolved once keeps serving old content | yes | Names are never stored; a pinned URL carries the heads of each folder and the hash of its file list, so it can't change meaning |
 | Another account on the same origin | no | — |
 
 Everything on the origin shares one realm boundary, so this raises the bar
@@ -47,6 +53,10 @@ rather than closing it. What stays open is listed under
 - **acctHash**: the idhash of the account document.
 - **heads**: the doc's heads in base58, sorted, joined with `.`. Sorting
   makes one set of heads one URL. Base58 has no `.`, so it's unambiguous.
+- **listHash**: the SHA-256, in base64url, of a container's **file list**
+  (section 5): every file the URL may reach below that container, with the
+  hash of its bytes and the heads it was read at. base64url has no `@`, `.`
+  or `~`.
 
 ### Live path
 
@@ -68,18 +78,33 @@ What imports and share links use. Every document the walk enters is pinned:
 3. A step **inside** a document (a directory key, a mount name in the
    account doc) stays a plain name, since the enclosing doc's heads already
    pin it.
+4. The names after the last container (a folder, a directory, …) lead to a
+   **file**: a value inside the container, or a document reached by a link.
+   They stay names, so a module's relative imports (`./util.js`, `../x.js`)
+   resolve against them. A link without heads doesn't pin the file it leads
+   to, so the container's step carries `~<listHash>`, and the list records
+   each file's hash and heads. Links don't need to carry heads.
 
 ```
 live:    <acctHash>/Projects/foo/dist/index.js
-pinned:  <acctHash>@h/<rootHash>@h/<projectsHash>@h/<fooHash>@h/dist/index.js
+pinned:  <acctHash>@h/<rootHash>@h/<projectsHash>@h/<fooHash>@h~<listHash>/dist/index.js
 
 live:    <acctHash>/packages/foo/dist/index.js
-pinned:  <acctHash>@h/packages/<myPackagesHash>@h/<fooHash>@h/dist/index.js
+pinned:  <acctHash>@h/packages/<myPackagesHash>@h/<fooHash>@h~<listHash>/dist/index.js
 ```
 
-When resolving, a segment is a doc step if it parses as `<base58>@<heads>`
-and a link reachable from the current node hashes to that idhash; otherwise
-it's a name.
+Which containers carry a list:
+
+- `pinPath` puts one on the last container.
+- Pinning a package (phase 4) puts one on every container from the
+  package's own step down, so `../` between a folder package's subfolders
+  stays pinned.
+- A file reached under a container step with no list is resolved live,
+  served `no-store`, and never stored or checked.
+
+When resolving, a segment is a doc step if it parses as
+`<base58>@<heads>` or `<base58>@<heads>~<listHash>` and a link reachable
+from the current node hashes to that idhash; otherwise it's a name.
 
 The first segment of a pinned path is either an acctHash the resolver knows
 locally, or `automerge:<documentId>@<heads>` for a portable share link (safe
@@ -87,7 +112,11 @@ to hand out once the doc is on keyhive, since the id no longer grants
 access). The `automerge:` prefix is what tells the two apart.
 
 A pinned path never changes meaning, so whoever builds an import URL builds
-the whole chain first. Nothing in a module graph goes through a redirect: the
+the whole chain, and its file lists, first.
+
+No raw document id appears in a live or pinned path: every step is an
+idhash. The only exception is a share link's root, which carries one on
+purpose. Nothing in a module graph goes through a redirect: the
 ES module map keys an entry by the URL requested, so a redirect is memoized
 for the life of the realm (the same reason `importModule` retries with
 `?retry=1`).
@@ -111,10 +140,11 @@ Built-in providers, checked in order, first match wins:
   stands for its `default` branch. This replaces the special case in
   `core/bootloader/src/resolver.ts`.
 
-Providers are built in only. The automerge worker runs them to build the
-cache index, so a package-supplied provider would put package code inside
-the resolver the index trusts. The provider interface is exported, shaped so
-package providers can be added later.
+Providers are built in only, for now. Nothing trusts a provider's answers
+any more, since every byte is checked against the URL. But a provider runs
+inside every resolver, the automerge worker's included, so a package
+supplying one would run package code there. The provider interface is
+exported, shaped so package providers can be added later.
 
 ### Namespace
 
@@ -143,7 +173,9 @@ If `namespace` is missing, `/` falls back to `rootFolderUrl`, so older
 accounts and older readers keep working.
 
 The automerge worker needs to know acctHash → account url to resolve a path's
-root. Tabs register it with the worker at boot.
+root. Tabs register it with the worker at boot. The worker computes the
+acctHash from the url itself, so no tab can register an account under
+another's hash.
 
 ## 3. Service worker URLs and routing
 
@@ -154,12 +186,15 @@ for a path:
 
 ```
 /@/<live path>      e.g. /@/<acctHash>/Projects/foo/x.js
-/@/<pinned path>    e.g. /@/<acctHash>@h/<rootHash>@h/.../x.js
+/@/<pinned path>    e.g. /@/<acctHash>@h/<rootHash>@h/.../<fooHash>@h~<listHash>/x.js
 ```
 
 - A **live** URL answers with a 307 to its pinned form, computed by a
-  resolver. Fine for `fetch()`; never use one for `import()`.
-- A **pinned** URL is served from the content store (section 5).
+  resolver. Fine for `fetch()`; never use one for `import()`. The pinned
+  form's list covers only the file asked for, so a redirect costs one file
+  read, not a folder's worth (section 5, *File lists*).
+- A **pinned** URL is served from the content store, checked against its
+  own list (section 5).
 - Existing `/automerge%3A…/` URLs keep working as they do today, keyed by URL
   and unchecked. They are deprecated.
 
@@ -191,7 +226,7 @@ Builds on the `open-document-path` branch (48f4ab98):
 - `parsePath(path)`: live or pinned, into segments
 - `resolveLivePath(repo, path)` → handle
 - `pinPath(repo, path)` → pinned service-worker URL, for fetching siblings or
-  importing
+  importing, and the file list it names (section 5)
 
 ## 4. Packages via `/packages`
 
@@ -204,7 +239,10 @@ Builds on the `open-document-path` branch (48f4ab98):
     path lookup finds.
   - Packages are tracked by document id, so a rename doesn't reload anything.
   - When a package's own heads move, the watcher builds its pinned chain with
-    `pinPath` and imports it. Other packages keep their existing URLs: a
+    `pinPath`, with a list on every container from the package's own step
+    down, and imports it. A push that changes only files behind links
+    without heads must still touch the package doc; pushwork already bumps
+    `lastSyncAt` for that. Other packages keep their existing URLs: a
     pinned URL stays valid forever, so a change elsewhere in the chain
     doesn't reload them.
   - `PackageTracker.findLatest` keeps asking the service worker, in the new
@@ -226,87 +264,111 @@ Builds on the `open-document-path` branch (48f4ab98):
 - `AccountDoc.moduleSettingsUrl` is deprecated in favour of the `/packages`
   binding.
 
-## 5. Content store and index
+## 5. Content store and file lists
 
 ### Store
 
 - A CacheStorage cache named `patchwork-content-<acctHash>`, separate from
   the `patchwork` cache that holds site pages and assets.
 - Key: `/.content/<sha256 base64url>`, an internal key that is never fetched.
-- Value: the bytes only. The content type lives in the index, so identical
-  bytes are stored once whatever their type.
+- Value: the bytes only. The content type lives in the file list, so
+  identical bytes are stored once whatever their type.
 - Reads and writes go through one small interface (`get(hash)`,
   `put(hash, bytes)`), so entries can later be encrypted under an at-rest key.
+- Anything on the origin can write it. That's fine: every read is hashed and
+  compared with a hash the URL vouches for, and a mismatch is deleted.
 - `clearAccountStore(acctHash)` deletes the cache. There is no sign-out flow
   today; a site calls this from its own.
 
+### File lists
+
+A container's file list says what each file under it is, at the moment it
+was pinned. It is canonical JSON: keys sorted, no whitespace.
+
+```json
+{"files":{"dist/index.js":{"heads":"a.b","sha256":"…","store":true,"type":"text/javascript"},"package.json":{…}},"v":1}
+```
+
+- **Keys** are tails: the names below the container, each
+  `encodeURIComponent`-encoded and joined with `/`. The container itself is
+  `""`.
+- **Entries:**
+  - `sha256` is the hash of the bytes the file serves as.
+  - `type` is its content type.
+  - `heads` is the heads its document was read at. It's absent for a value
+    inside the container, which the container's own heads pin.
+  - `store` says whether the bytes may be kept (see
+    [What gets stored](#what-gets-stored)).
+- **No document ids, by design.** A resolver that needs a file's bytes walks
+  to it by name from the container at its pinned heads, and reads it at the
+  recorded heads. Automerge keeps history, so an old version stays readable
+  wherever the document is.
+- **The listHash is the SHA-256 of these bytes.** The list is content like
+  any other: stored under its hash if its container's content may be stored,
+  and otherwise held in service worker memory.
+- **A list may cover only some of a container's files.** A package's list
+  covers all of them, so relative imports work. The list behind a live →
+  pinned redirect covers only the file asked for. A tail a list doesn't
+  cover answers 404.
+- **Whoever pins builds the list** (`pinPath`): it loads each file once and
+  hashes it. A tab or the automerge worker, it doesn't matter which: a list
+  is checked against the URL, not trusted for who made it.
+  - The pinner writes the list into the store itself when it may be stored.
+  - Otherwise it hands the list to the service worker in a message, or with
+    the 307 it answers.
+  - The service worker hashes the list before keeping it in memory.
+
 ### What gets stored
 
-- Content from unprotected documents (`isUnprotectedDocId`).
+- Content, file lists included, from unprotected documents
+  (`isUnprotectedDocId`).
 - Content from keyhive-protected documents only when reached through
   `/packages`. Package code needs to load fast at boot; user documents don't.
-- Everything else is served inline: checked, never stored.
-
-### Index
-
-A `Map` in service worker memory: pinned URL → `{ sha256, contentType }`.
-
-- Lost when the service worker is stopped, which is fine.
-- On a miss, the service worker asks the automerge worker for the **manifest
-  of the last document in the URL at its heads**: hash and type of every file
-  that resolves pinned inside it. One round trip per package rather than per
-  file.
-- The automerge worker memoizes manifests by `doc@heads` in an LRU; they never
-  change.
+- Everything else is served after checking, never stored.
 
 ### Request flow for a pinned URL
 
-1. **Index hit:** read the store, hash the bytes, compare.
-   - Match: serve.
-   - Mismatch: delete the entry, warn loudly, go to step 3.
-2. **Index miss:** fetch the manifest, then step 1.
-3. **Store miss:** ask a resolver for the bytes and hash them in the service
-   worker.
-   - Matches the index entry: serve, and store it if
-     [What gets stored](#what-gets-stored) allows.
-   - Doesn't match: fail as a network error, store nothing.
-   - No index entry, because no automerge worker is available: serve inline,
-     store nothing.
+1. **The list:**
+   - Read the last container's list by its listHash: from the store, or
+     from memory.
+   - Hash it.
+   - On a miss, or a mismatch (delete the store entry and warn), ask a
+     resolver to build that container's list at its pinned heads. Keep the
+     answer only if it hashes to the listHash.
+   - No list: fail as a network error.
+2. **The entry:** look the tail up in the list; not there, 404.
+3. **The bytes:**
+   - Read the store by the entry's `sha256` and hash the bytes. A match
+     serves them; a mismatch deletes the entry, warns, and goes on.
+   - Ask a resolver for the file at its pinned path and the entry's `heads`,
+     and hash its bytes.
+   - A match serves them, and stores them if the entry allows it. A
+     mismatch fails as a network error and stores nothing.
+
+A container step with no list leads to files resolved live: served
+`no-store` from a resolver, never stored, not checked.
 
 Hashing is `crypto.subtle` SHA-256 on every hit, since a store entry can
 change between two reads. `sites/bench` gets a case measuring it.
 
+Cold start needs no document: a package's list and its files are both in the
+store, and both are checked against the URL the watcher pinned.
+
 ### Who is trusted for what
 
-- **Resolvers never write the cache.** Today `resolver.ts` calls `cache.put`
-  itself. Instead a resolver returns bytes, and the service worker decides.
-- **Only the automerge worker fills the index.** Tab resolvers run in the
-  same realm as packages; their answers are served inline and never stored.
-- **The index channel is authenticated.** Today's `HANDOFF_CHANNEL` is a
-  BroadcastChannel: any context on the origin can listen, see request ids,
-  and reply first with a forged response. That is a hole in the current code
-  as well. Index answers must arrive from a `Client` whose `type` is
-  `sharedworker` and whose `url` is the automerge worker's script URL, which
-  the service worker knows at build time. That URL is fixed, not hashed:
-  `/automerge-protocol-handler-worker.js`, the name the vite plugin keeps from
-  one build to the next. A site that sets its own `workerPath` has its
-  answers refused, so everything under `/@/` is served inline and nothing is
-  stored.
-  - The worker sends answers as `fetch()` requests to a reserved path. The
-    service worker looks up `event.clientId` with `clients.get` and checks
-    the client. This is the only reply path that works in all three engines
-    (see [Spikes](#spikes-before-planning)).
-  - Requests can stay on a BroadcastChannel. A listener learns which pinned
-    URLs are being loaded, which it could see anyway, but it can't answer.
-  - A `MessagePort` relayed through a tab doesn't authenticate anything.
-    Messages on a port have `source: null`, and the tab runs package code,
-    which can keep the port and answer itself, or sit in the middle and edit
-    answers. A relayed port is only safe if every answer on it is signed
-    with a key the worker got from the response to a checked `fetch()`. Not
-    worth that machinery unless one fetch per manifest proves too slow.
-  - Checking `type` is not optional. Any page can start a dedicated `Worker`
-    from the same script URL, and it shows up with the same `url` and
-    `type: "worker"`.
+- **Nothing between the URL and the bytes is trusted.** Lists, store
+  entries, and resolver answers from a tab or the automerge worker are all
+  checked against hashes that start at the URL. A forged answer can fail a
+  request, but it can't change what's served.
+- **Whoever builds a URL chooses the version it names.** For imports that's
+  the tab's own ModuleWatcher. For a live → pinned redirect it's whichever
+  resolver answered (see [Remaining gaps](#remaining-gaps)).
+- **No authenticated channel is needed.** The earlier design filled an index
+  from the automerge worker over `fetch()` requests checked by `clientId`.
+  The spike behind that is kept below, in case a later design needs to know
+  who sent something.
+- **Legacy `/automerge%3A…` URLs** stay keyed by URL and unchecked. Their
+  replies still ride `HANDOFF_CHANNEL`, which any context can answer first.
 
 ## Remaining gaps
 
@@ -319,27 +381,28 @@ These replace the deleted `package-load-gate.md` note.
   Automerge verifies change hashes when it loads a document, so tampered
   changes don't load as the heads they claim. That check is planned to become
   optional; when it does, this gap reopens unless patchwork keeps it on.
-- A live → pinned redirect answered by a tab can point at the wrong version.
-  It can't poison the store, but it decides which version a tab loads.
+- Whoever builds a pinned URL chooses its version. A live → pinned redirect
+  answered by a tab can name a wrong version, and so can a package that
+  builds import URLs for another. It can't poison the store, but it decides
+  which version gets loaded.
+- A pinned URL can't be served if its file list is gone (evicted, cleared,
+  or held only in a service worker that stopped) and no resolver can
+  rebuild it. A rebuild reads each file at its current heads, so it matches
+  only if nothing changed since, and only for a list that covers the whole
+  container (not a redirect's one-file list, which a fresh request to the
+  live URL replaces). The ModuleWatcher pins again on boot, so
+  imports recover; a hand-made share link doesn't.
 - Legacy `/automerge%3A…` URLs stay keyed by URL and unchecked.
 - Protected package code is stored in plaintext. Today keyhive's secrets sit
   in the same storage as its ciphertext, so this exposes nothing new;
   revisit when keyhive protects its keys at rest.
 - Nothing cleans up the content store. Deduplication slows growth, and the
   existing quota warning still fires.
-- The index lives only in service worker memory, so after a browser restart
-  every package needs a fresh manifest, and building one loads and hashes
-  every file document in the package. The URL-keyed cache this replaces
-  served package code at boot without loading any document. The automerge
-  worker remembers 64 manifests, which covers service worker restarts within
-  a session but not a cold start. Persisting manifests would fix it, but
-  anything stored on the origin can be written by package code. `sites/bench`'s
-  `content-hash.spec` measures the per-hit hashing; the cold-start cost isn't
-  measured yet.
 
 ## Spikes before planning
 
-- Can the service worker `postMessage` to a SharedWorker client, and can that
+- (For the earlier, index-based section 5. Not needed now, but kept.) Can
+  the service worker `postMessage` to a SharedWorker client, and can that
   worker reply with the service worker able to check its `Client.url`, in
   Chromium, Firefox and WebKit? Fallback: the worker posts answers to the
   service worker as `fetch()` requests, whose `clientId` the service worker
@@ -383,10 +446,19 @@ These replace the deleted `package-load-gate.md` note.
   - `ModuleWatcher` `folder` source: add, remove, rename without reload, only
     the changed package reloading, union deduplication.
   - Migration from a module-settings doc.
-  - Store and index with a fake `Cache` and an injected hash: forged store
-    entry rejected, tab answer never stored, matching answer stored,
-    protected non-package content never stored.
-  - Manifest builder against folder and directory fixtures.
+  - File lists: canonical bytes (key order, no whitespace), tails for folder
+    and directory fixtures, no document ids, and a list that agrees with
+    `readPath` for every file it covers.
+  - The request flow with a fake `Cache` and an injected hash:
+    - a forged list or store entry is rejected;
+    - a resolver's mismatching bytes fail as a network error and are never
+      stored;
+    - a file read at its recorded heads after it has changed still serves
+      the old bytes;
+    - protected non-package content is never stored;
+    - a tail the list doesn't cover answers 404.
+  - The service worker itself, in node, against a fake global scope
+    (`core/bootloader/test/service-worker-harness.ts`).
 - E2E, run in CI:
   - Open a document with `&path=` alone.
   - A page `cache.put`s forged bytes under a real content key, reloads, and
@@ -398,9 +470,10 @@ Each phase can ship on its own and gets its own plan:
 
 1. **Grammar, providers, namespace** in `patchwork-filesystem`, plus the
    account `namespace` field and its fallback. No behaviour change yet.
-2. **Service worker:** `/@/` URLs, the content store, the index, the
-   authenticated channel (after its spike), resolvers no longer writing the
-   cache.
+2. **Service worker:** `/@/` URLs, the content store, resolvers no longer
+   writing the cache. Done against the earlier index-based section 5; the
+   rework replaces the index, the manifest handler and the authenticated
+   channel with file lists.
 3. **Routing:** `&path=`, opening at a path, rebased on `open-document-path`.
 4. **Packages:** the `folder` source, `/packages`, migration, deprecating
    `moduleSettingsUrl`.
