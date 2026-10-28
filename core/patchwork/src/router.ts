@@ -10,6 +10,11 @@ import {
 } from "@automerge/vanillajs/slim";
 import { openDocument } from "@inkandswitch/patchwork-elements";
 import {
+  docParamToUrl,
+  parseHashParams,
+  serializeHashParams,
+} from "./hash-params.js";
+import {
   type AccountDoc,
   type DatatypeDescription,
   type DatatypeImplementation,
@@ -24,42 +29,7 @@ import {
 const BIG_PATCHWORK_HASH_REGEX =
   /^(?<title>[^=&?/#]*)--(?<docId>[1-9A-HJ-NP-Za-km-z]+)/;
 
-// The `doc=` and `draft=` values are automerge URLs, kept literal rather than
-// percent-encoded so links stay readable.
-const RAW_HASH_KEYS = new Set(["doc", "draft"]);
-// A stable order means re-serializing the same logical params is
-// byte-identical, avoiding spurious `hashchange` round-trips.
-const HASH_KEY_ORDER = ["doc", "tool", "type", "title", "frame", "draft"];
-
-function serializeHashParams(params: URLSearchParams): string {
-  const keys = [...HASH_KEY_ORDER, ...params.keys()];
-  const parts: string[] = [];
-  const emitted = new Set<string>();
-  for (const key of keys) {
-    if (emitted.has(key)) continue;
-    const value = params.get(key);
-    if (!value) continue;
-    emitted.add(key);
-    parts.push(
-      `${key}=${RAW_HASH_KEYS.has(key) ? value : encodeURIComponent(value)}`
-    );
-  }
-  return parts.join("&");
-}
-
-/**
- * Coerce a `doc=` hash param to a full automerge URL. Accepts a full URL
- * (`automerge:<id>[#heads]`) or a bare document id, for older links.
- */
-export function docParamToUrl(docParam: string | null): AutomergeUrl | undefined {
-  if (!docParam) return undefined;
-  if (isValidAutomergeUrl(docParam as AutomergeUrl)) {
-    return docParam as AutomergeUrl;
-  }
-  const documentId = docParam.replace(/^automerge:/, "");
-  if (!isValidDocumentId(documentId)) return undefined;
-  return stringifyAutomergeUrl({ documentId: documentId as DocumentId });
-}
+export { docParamToUrl } from "./hash-params.js";
 
 export interface RouterParams {
   rootElement: HTMLElement;
@@ -91,7 +61,7 @@ export function createRouter({
     // The first call seeds the root view's tool/doc so it can mount; later
     // calls reconcile the mounted view with the hash.
     if (!rootElement.hasAttribute("tool-id")) {
-      const params = new URLSearchParams(location.hash.slice(1));
+      const params = parseHashParams(location.hash.slice(1));
       const frame = params.get("frame");
       const toolId =
         frame ??
@@ -131,7 +101,7 @@ export function createRouter({
       return;
     }
 
-    const params = new URLSearchParams(hash);
+    const params = parseHashParams(hash);
     const docUrl = docParamToUrl(params.get("doc"));
     const frame = params.get("frame");
 
@@ -168,7 +138,7 @@ export function createRouter({
       title?: string;
     };
 
-    const params = new URLSearchParams(window.location.hash.slice(1));
+    const params = parseHashParams(window.location.hash.slice(1));
     // `doc` is the full automerge URL, so heads live inside it and the separate
     // `heads=` param is gone.
     params.delete("heads");
