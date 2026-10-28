@@ -17,7 +17,9 @@ import {
 } from "./paths.js";
 import {
   type Child,
+  type ExtraProviders,
   type Lookup,
+  type SubSegment,
   directoryProvider,
   folderProvider,
   type PathProvider,
@@ -25,6 +27,7 @@ import {
   branchesProvider,
   defaultBranch,
   providerFor,
+  valueAt,
 } from "./providers.js";
 import { buildFileList } from "./file-list.js";
 import { readNode } from "./resolve.js";
@@ -40,7 +43,40 @@ export type WalkOptions = {
    * the walk.
    */
   find?: (url: AutomergeUrl, heads?: UrlHeads) => Promise<DocHandle<unknown>>;
+  /** Providers for documents no built-in walks. A tab passes the ones packages register. */
+  providers?: ExtraProviders;
 };
+
+/** The built-in provider for `doc`, else one of `extra`'s; one that fails is none. */
+async function providerOf(
+  doc: unknown,
+  extra?: ExtraProviders
+): Promise<PathProvider | undefined> {
+  const builtIn = providerFor(doc);
+  if (builtIn || !extra) return builtIn;
+  try {
+    return await extra(doc);
+  } catch {
+    return undefined;
+  }
+}
+
+// A package's provider is package code: one that throws has no children here.
+function lookUp(provider: PathProvider, node: unknown, names: string[]): Lookup | undefined {
+  try {
+    return provider.lookup(node, names);
+  } catch {
+    return undefined;
+  }
+}
+
+function listOf(provider: PathProvider | undefined, node: unknown): Child[] {
+  try {
+    return provider?.list(node) ?? [];
+  } catch {
+    return [];
+  }
+}
 
 // idhashes never change, and every walk hashes the same few documents again.
 const idhashes = new Map<string, Promise<string>>();
@@ -76,6 +112,8 @@ export type WalkEnd = {
   container?: { handle: DocHandle<unknown>; pinned: string; listHash?: string };
   /** The encoded names after the container, joined with "/": "" at the container itself. */
   tail: string;
+  /** Where the walk ended inside the document, when that is a sub-document: `handle.sub(...sub)`. */
+  sub?: SubSegment[];
 };
 
 /** Where a walk is: inside a document, or at a mount whose binding the next step picks. */
@@ -86,6 +124,8 @@ type At =
       node: unknown;
       provider?: PathProvider;
       inside: boolean;
+      /** The segments from the document to `node`, while every step inside was a sub-document. */
+      sub?: SubSegment[];
     }
   | { kind: "union"; members: AutomergeUrl[] };
 
@@ -128,7 +168,8 @@ export async function walkPath(
       const handle = live.view(at ?? live.heads());
       const node = handle.doc();
       if (node === undefined) return undefined;
-      return { kind: "doc", handle, node, provider: providerFor(node), inside: false };
+      const provider = await providerOf(node, options.providers);
+      return { kind: "doc", handle, node, provider, inside: false };
     } catch {
       return undefined;
     }
@@ -214,7 +255,10 @@ export async function walkPath(
         const names = namesFrom(i);
         for (const url of at.members) {
           const candidate = await enter(url);
-          if (!names.length || candidate?.provider?.lookup(candidate.node, names)) {
+          if (
+            !names.length ||
+            (candidate?.provider && lookUp(candidate.provider, candidate.node, names))
+          ) {
             member = url;
             next = candidate;
             break;
@@ -244,7 +288,7 @@ export async function walkPath(
     }
 
     if (segment.kind === "doc") {
-      const links = (at.provider?.list(at.node) ?? []).flatMap((child) =>
+      const links = listOf(at.provider, at.node).flatMap((child) =>
         "link" in child ? [child.link] : "union" in child ? child.union : []
       );
       const link = await matchLink(links, segment);
@@ -262,7 +306,7 @@ export async function walkPath(
     // A document without a provider has no children.
     if (!at.provider) return undefined;
     const names = namesFrom(i);
-    const found: Lookup | undefined = at.provider.lookup(at.node, names);
+    const found: Lookup | undefined = lookUp(at.provider, at.node, names);
     if (!found) return undefined;
     const { child, consumed }: Lookup = found;
     const written = names.slice(0, consumed).map(encodeURIComponent);
@@ -270,7 +314,13 @@ export async function walkPath(
 
     if ("value" in child) {
       out.push(...written);
-      at = { ...at, node: child.value, inside: true };
+      at = { ...at, node: child.value, inside: true, sub: undefined };
+    } else if ("sub" in child) {
+      const node = valueAt(at.node, child.sub);
+      if (node === undefined) return undefined;
+      out.push(...written);
+      const sub: SubSegment[] | undefined = at.inside && !at.sub ? undefined : [...(at.sub ?? []), ...child.sub];
+      at = { ...at, node, inside: true, sub };
     } else if ("union" in child) {
       out.push(...written);
       at = { kind: "union", members: child.union };
@@ -301,6 +351,7 @@ export async function walkPath(
       listHash: lists.get(container.index),
     },
     tail: container ? out.slice(container.index + 1).join("/") : "",
+    ...(at.sub ? { sub: at.sub } : {}),
   };
 }
 
@@ -308,8 +359,9 @@ export async function walkPath(
  * The document a live or pinned path names. For a canonical pinned path (see
  * {@link WalkEnd.canonical}) that is a view at the heads it was read at; a file reached by name
  * after the last pinned document is read at its current heads, or the heads its link carries.
- * Anything else gets the live handle. Undefined if the path doesn't resolve, or ends at a value
- * inside a document.
+ * Anything else gets the live handle. A path that ends at a sub-document gets that handle's
+ * sub-handle. Undefined if the path doesn't resolve, or ends at any other value inside a
+ * document.
  */
 export async function resolveLivePath(
   repo: Repo,
@@ -317,9 +369,11 @@ export async function resolveLivePath(
   options: WalkOptions
 ): Promise<DocHandle<unknown> | undefined> {
   const end = await walkPath(repo, path, options);
-  if (!end?.atDocument) return undefined;
-  if (end.canonical) return end.handle;
-  return repo.find(stringifyAutomergeUrl({ documentId: end.handle.documentId }));
+  if (!end || (!end.atDocument && !end.sub)) return undefined;
+  const handle = end.canonical
+    ? end.handle
+    : await repo.find(stringifyAutomergeUrl({ documentId: end.handle.documentId }));
+  return end.sub ? handle.sub(...end.sub) : handle;
 }
 
 /**
@@ -378,13 +432,14 @@ export async function pinPath(
 /** Every binding's children, concatenated in binding order. */
 export async function listUnion(
   repo: Repo,
-  urls: AutomergeUrl[]
+  urls: AutomergeUrl[],
+  providers?: ExtraProviders
 ): Promise<Child[]> {
   const lists = await Promise.all(
     urls.map(async (url) => {
       try {
         const doc = (await repo.find(url)).doc();
-        return providerFor(doc)?.list(doc) ?? [];
+        return listOf(await providerOf(doc, providers), doc);
       } catch {
         return [];
       }
@@ -399,19 +454,20 @@ export async function listUnion(
  */
 export async function listChildren(
   repo: Repo,
-  handle: DocHandle<unknown>
+  handle: DocHandle<unknown>,
+  providers?: ExtraProviders
 ): Promise<Child[]> {
   const doc = handle.doc();
-  const provider = providerFor(doc);
+  const provider = await providerOf(doc, providers);
   if (!provider) return [];
-  const children = provider.list(doc);
+  const children = listOf(provider, doc);
   if (provider !== accountProvider) return children;
 
   const mounts = children.filter((child) => child.name !== "");
   const root = children.find((child) => child.name === "");
   const shadowed = new Set(mounts.map((child) => child.name));
   const rootChildren =
-    root && "union" in root ? await listUnion(repo, root.union) : [];
+    root && "union" in root ? await listUnion(repo, root.union, providers) : [];
   return [
     ...rootChildren.filter((child) => !shadowed.has(child.name)),
     ...mounts,
@@ -502,13 +558,13 @@ export async function listFiles(
   const find =
     options.findFile ?? options.find ?? ((url: AutomergeUrl) => repo.find(url));
   const root = end.container.handle.doc();
-  const rootProvider = providerFor(root);
+  const rootProvider = await providerOf(root, options.providers);
   const rootId = end.container.handle.documentId;
   // A package's relative imports reach into its nested folders by name, so a
   // package lists everything under it. Anything else lists its own files.
   const deep =
     options.deep ??
-    (rootProvider?.list(root) ?? []).some((child) => child.name === "package.json");
+    listOf(rootProvider, root).some((child) => child.name === "package.json");
 
   const found = new Map<string, { keys: number[]; file: ListedFile }>();
   const missing: string[] = [];
@@ -548,13 +604,16 @@ export async function listFiles(
     keys: number[]
   ): Promise<Link[]> => {
     const links: Link[] = [];
-    for (const child of provider?.list(node) ?? []) {
+    for (const child of listOf(provider, node)) {
       // Only a directory's keys span several path segments; a folder entry's name is one.
       const names =
         provider === directoryProvider ? child.name.split("/") : [child.name];
       const childParts = [...parts, ...names];
       const childKeys = [...keys, names.length];
-      if ("value" in child) {
+      if ("sub" in child) {
+        const value = valueAt(node, child.sub);
+        if (value !== undefined) await add(childParts, childKeys, value, holder);
+      } else if ("value" in child) {
         await add(childParts, childKeys, child.value, holder);
         // Nested values are addressable by path only inside a directory doc.
         if (provider === directoryProvider && isNested(child.value)) {
@@ -594,7 +653,7 @@ export async function listFiles(
       const heads = parsed.heads ?? live.heads();
       const doc = live.view(heads).doc();
       if (doc === undefined) return;
-      const provider = providerFor(doc);
+      const provider = await providerOf(doc, options.providers);
       if (!provider) {
         await add(parts, keys, doc, parsed.documentId, heads);
       } else if (

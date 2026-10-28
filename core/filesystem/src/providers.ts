@@ -1,5 +1,6 @@
 import {
   type AutomergeUrl,
+  type DocHandle,
   isImmutableString,
   isValidAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
@@ -11,14 +12,20 @@ import type {
   FolderDoc,
 } from "./types.js";
 
+/** A step into a document: an object key or an array index. */
+export type SubSegment = string | number;
+
 /**
  * What a provider finds under a name: a link to another document, a value inside the same
- * document (a nested directory, a file's bytes), or an ordered union of documents (a mount).
+ * document (a nested directory, a file's bytes), an ordered union of documents (a mount), or a
+ * value offered as a sub-document, opened as `handle.sub(...sub)`. `sub` is relative to the node
+ * the provider was given.
  */
 export type Child =
   | { name: string; link: AutomergeUrl }
   | { name: string; value: unknown }
-  | { name: string; union: AutomergeUrl[] };
+  | { name: string; union: AutomergeUrl[] }
+  | { name: string; sub: SubSegment[] };
 
 /**
  * A child and how many of the leading names it used. A step that consumes no name (the `/`
@@ -29,13 +36,42 @@ export type Lookup = { child: Child; consumed: number };
 /**
  * How to walk one kind of document. `lookup` and `list` take the document or a value nested in
  * it, and never leave it: following a link is the walker's job. `lookup` is called with at least
- * one name.
+ * one name. They read only the node they're given, so a walk at the same heads gives the same
+ * answer.
+ *
+ * The editing methods are optional; the sidebar offers only those a provider has. Each changes
+ * the document through `handle`; `node` is what `list` was given.
  */
 export interface PathProvider {
   readonly kind: string;
   matches(doc: unknown): boolean;
   lookup(node: unknown, names: string[]): Lookup | undefined;
   list(node: unknown): Child[];
+  add?(
+    handle: DocHandle<unknown>,
+    node: unknown,
+    child: { name: string; link: AutomergeUrl },
+    index?: number
+  ): void | Promise<void>;
+  rename?(handle: DocHandle<unknown>, node: unknown, name: string, to: string): void | Promise<void>;
+  remove?(handle: DocHandle<unknown>, node: unknown, name: string): void | Promise<void>;
+}
+
+/**
+ * Providers asked after the built-ins, which can't be overridden. A tab passes the ones
+ * packages register; the automerge worker passes none.
+ */
+export type ExtraProviders = (doc: unknown) => Promise<PathProvider | undefined>;
+
+/** The value at `segments` below `node`, or undefined. */
+export function valueAt(node: unknown, segments: SubSegment[]): unknown {
+  let at = node;
+  for (const segment of segments) {
+    if (!at || typeof at !== "object" || at instanceof Uint8Array) return undefined;
+    if (!Object.hasOwn(at, segment)) return undefined;
+    at = (at as Record<SubSegment, unknown>)[segment];
+  }
+  return at;
 }
 
 /**
