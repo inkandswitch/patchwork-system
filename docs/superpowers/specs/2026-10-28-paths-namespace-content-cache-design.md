@@ -26,7 +26,7 @@ authenticated channel) and gets reworked to this one.
 - Running package code on a separate origin. This design is meant not to
   preclude it (the store and file lists work the same there), but doesn't do it.
 - Mount points below the top level of the namespace.
-- Path providers supplied by packages.
+- Path providers supplied by packages, until section 6 is built.
 - Garbage collection of the content store.
 
 ## Threat model
@@ -389,7 +389,9 @@ store, and both are checked against the URL the watcher pinned.
 - **Legacy `/automerge%3A…` URLs** stay keyed by URL and unchecked. Their
   replies still ride `HANDOFF_CHANNEL`, which any context can answer first.
 
-## 6. Package-supplied path providers (proposed, not approved)
+## 6. Package-supplied path providers
+
+Approved in conversation 2026-10-28. Not implemented.
 
 The sidebar can open up a doc that isn't a folder when a built-in provider
 walks it: a directory doc, a branches doc, the account. This section proposes
@@ -409,6 +411,9 @@ registers one beside its datatype.
 - **It's a pure function of the document.** `list` and `lookup` read only the
   node they're given, at the heads they're given. That's what lets a file
   list built through a provider be rebuilt to the same bytes.
+- **It says which datatypes it walks** with `supportedDatatypes`, as a tool
+  does. That's how the sidebar knows a row of that type can open up, from its
+  link's `type`, without loading the doc.
 
 ### Where it runs: tabs only
 
@@ -445,18 +450,33 @@ A new version of the providing package can change what a live path resolves
 to. Pinned paths don't change. A list rebuilt through a changed provider won't
 match its hash, so the URL fails rather than serving something else.
 
-### Open questions
+### What a provider offers
 
-1. **Editing.** Should a provider be able to say how to add, rename or remove
-   a child, so those rows aren't read-only? Or is that the datatype's own
-   tool's job?
-2. **Values.** Should children that are values inside the doc (not links) be
-   openable, as a sub-document view with its own path? Today only link
-   children show.
-3. **Rows without a type.** The sidebar can only tell a row expands from its
-   link `type`. A provider for a type that isn't `directory` or `branches`
-   needs its type registered as expandable. Should the plugin declare
-   `supportedDatatypes` for that, like tools do?
+The sidebar shows what a provider offers and no more. Two things are optional.
+
+**Editing.** A provider may implement any of these:
+- `add(handle, node, child, index?)`;
+- `rename(handle, node, name, to)`;
+- `remove(handle, node, name)`.
+
+Each takes the doc's handle and changes the doc. The sidebar turns on Rename,
+Remove, drops and new-doc only where the provider offers them. A child of a
+provider that offers none is read-only, as directory and branches children are
+now.
+
+The built-in folder provider would offer all three. That would make the
+sidebar's folder editing one case of this rather than its own code path,
+though there's no need to move it yet.
+
+**Values as sub-documents.** A child that is a value inside the doc, not a
+link, can be offered as a sub-document:
+- `{ name, sub: [...segments] }` is opened as automerge-repo's sub-handle,
+  `handle.sub(...segments)`, at the URL `automerge:<docId>/<path>`;
+- the tool gets that handle, so it edits just that part of the doc;
+- the live path names it as an in-doc step (rule 3): a plain name after the
+  doc's own step, pinned by the doc's heads.
+
+Values a provider doesn't offer as sub-documents stay hidden, as now.
 
 ## Remaining gaps
 
