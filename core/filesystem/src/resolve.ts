@@ -175,3 +175,15 @@ export async function resolvePath(
     pinned: hasHeads(rootHandle.url),
   });
 }
+
+/**
+ * What `node` serves as, the way {@link resolvePath} serves the end of a path: a file doc's
+ * content with its mime type, bytes as they are, anything else as JSON.
+ */
+export async function readNode(
+  repo: Repo,
+  node: unknown
+): Promise<{ content: string | Uint8Array; type: string } | undefined> {
+  const read = await materialize(repo, node);
+  return read && { content: read.content, type: read.type };
+}

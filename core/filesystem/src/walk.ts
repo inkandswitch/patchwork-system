@@ -1,8 +1,10 @@
 import {
   type AutomergeUrl,
   type DocHandle,
+  type DocumentId,
   type Repo,
   type UrlHeads,
+  isImmutableString,
   parseAutomergeUrl,
   stringifyAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
@@ -16,12 +18,14 @@ import {
 import {
   type Child,
   type Lookup,
+  directoryProvider,
   type PathProvider,
   accountProvider,
   branchesProvider,
   defaultBranch,
   providerFor,
 } from "./providers.js";
+import { readNode } from "./resolve.js";
 import { documentBaseOrigin } from "./urls.js";
 
 export type WalkOptions = {
@@ -337,4 +341,109 @@ export async function listChildren(
     ...rootChildren.filter((child) => !shadowed.has(child.name)),
     ...mounts,
   ];
+}
+
+export type FileContent = { content: string | Uint8Array; type: string };
+
+/** What a path names, read: its pinned form, whether the input was canonical, and the bytes. */
+export async function readPath(
+  repo: Repo,
+  path: string,
+  options: WalkOptions
+): Promise<(FileContent & { pinned: string; canonical: boolean }) | undefined> {
+  const end = await walkPath(repo, path, options);
+  if (!end) return undefined;
+  const read = await readNode(repo, end.node);
+  return read && { ...read, pinned: end.pinned, canonical: end.canonical };
+}
+
+/** A file under a pinned document, and the document that holds its bytes. */
+export type ListedFile = FileContent & { tail: string; documentId: DocumentId };
+
+const isNested = (value: unknown): value is Record<string, unknown> =>
+  !!value &&
+  typeof value === "object" &&
+  !Array.isArray(value) &&
+  !(value instanceof Uint8Array) &&
+  !isImmutableString(value) &&
+  !("content" in value);
+
+// Which of two spellings of one tail the walk finds: at the first level where their directory
+// keys differ in length, the longer key, since lookup tries the longest prefix first.
+function walkPrefers(a: number[], b: number[]): boolean {
+  for (let i = 0; i < Math.min(a.length, b.length); i++) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return false;
+}
+
+/**
+ * Every file under the last document a canonical pinned path enters, keyed by tail: "" for the
+ * document itself, encoded names joined with "/" below it. Containers aren't listed; they have
+ * their own doc steps. Undefined unless `path` is canonical and ends at a document.
+ *
+ * A file reached by a link without heads is read as it is now, so the list is a snapshot.
+ */
+export async function listFiles(
+  repo: Repo,
+  path: string,
+  options: WalkOptions
+): Promise<{ prefix: string; files: AsyncIterable<ListedFile> } | undefined> {
+  const end = await walkPath(repo, path, options);
+  if (!end?.canonical || !end.atDocument) return undefined;
+  const find = options.find ?? ((url: AutomergeUrl) => repo.find(url));
+  const provider = providerFor(end.node);
+  const documentId = end.handle.documentId;
+
+  async function* files(): AsyncIterable<ListedFile> {
+    const found = new Map<string, { keys: number[]; file: ListedFile }>();
+    const add = async (
+      parts: string[],
+      keys: number[],
+      node: unknown,
+      holder: DocumentId
+    ) => {
+      const tail = parts.map(encodeURIComponent).join("/");
+      const existing = found.get(tail);
+      if (existing && !walkPrefers(keys, existing.keys)) return;
+      const read = await readNode(repo, node);
+      if (read) found.set(tail, { keys, file: { ...read, tail, documentId: holder } });
+    };
+
+    const visit = async (node: unknown, parts: string[], keys: number[]) => {
+      for (const child of provider?.list(node) ?? []) {
+        // Only a directory's keys span several path segments; a folder entry's name is one.
+        const names =
+          provider === directoryProvider ? child.name.split("/") : [child.name];
+        const childParts = [...parts, ...names];
+        const childKeys = [...keys, names.length];
+        if ("value" in child) {
+          await add(childParts, childKeys, child.value, documentId);
+          // Nested values are addressable by path only inside a directory doc.
+          if (provider === directoryProvider && isNested(child.value)) {
+            await visit(child.value, childParts, childKeys);
+          }
+        } else if ("link" in child) {
+          try {
+            const parsed = parseAutomergeUrl(child.link);
+            const live = await find(
+              stringifyAutomergeUrl({ documentId: parsed.documentId }),
+              parsed.heads
+            );
+            const doc = live.view(parsed.heads ?? live.heads()).doc();
+            if (doc === undefined || providerFor(doc)) continue;
+            await add(childParts, childKeys, doc, parsed.documentId);
+          } catch {
+            // A file that can't be found isn't listed; reading it fails the same way.
+          }
+        }
+      }
+    };
+
+    await add([], [], end!.node, documentId);
+    await visit(end!.node, [], []);
+    for (const { file } of found.values()) yield file;
+  }
+
+  return { prefix: end.pinned, files: files() };
 }
