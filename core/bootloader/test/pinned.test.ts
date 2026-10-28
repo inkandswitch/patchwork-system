@@ -3,6 +3,7 @@ import { contentHash, toBytes } from "../src/content-hash.js";
 import type { ContentStore } from "../src/content-store.js";
 import {
   PinnedAbort,
+  handoffRequest,
   normalizePinned,
   servePinned,
   sharedManifests,
@@ -183,6 +184,22 @@ describe("servePinned", () => {
     expect((await servePinned([KEY], deps)).status).toBe(404);
   });
 
+  it("passes a resolver's other answer through when there's no entry", async () => {
+    const { deps } = await setup({ manifest: false });
+    deps.resolve.mockResolvedValue(
+      new Response(null, { status: 307, headers: { location: "/@/acct@h/x@h" } }) as never
+    );
+    const response = await servePinned([KEY], deps);
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("/@/acct@h/x@h");
+  });
+
+  it("fails a resolver's other answer as a network error when there's an entry", async () => {
+    const { deps } = await setup();
+    deps.resolve.mockResolvedValue(new Response("nope", { status: 404 }) as never);
+    await expect(servePinned([KEY], deps)).rejects.toBeInstanceOf(PinnedAbort);
+  });
+
   it("rebuilds the index after a restart and reuses the store", async () => {
     const first = await setup();
     await servePinned([KEY], first.deps);
@@ -218,5 +235,21 @@ describe("sharedManifests", () => {
     await shared(KEY);
     expect(fetcher).toHaveBeenCalledTimes(2);
     void deps;
+  });
+});
+
+describe("handoffRequest", () => {
+  it("builds a path handoff that old resolvers decline", () => {
+    const m = handoffRequest(new Request("https://p.test/@/acct/Projects"), "patchwork", "acct/Projects");
+    expect(m.request.path).toBe("acct/Projects");
+    expect(new URL(m.request.handoffURL).protocol).not.toBe("automerge:");
+    expect(m.request.url).toBe("https://p.test/@/acct/Projects");
+  });
+
+  it("builds a legacy handoff with no path", () => {
+    const special = new URL("automerge:abc/x.js");
+    const m = handoffRequest(new Request("https://p.test/automerge%3Aabc/x.js"), "patchwork", special);
+    expect(m.request.handoffURL).toBe(special.href);
+    expect(m.request.path).toBeUndefined();
   });
 });

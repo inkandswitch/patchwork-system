@@ -3,7 +3,11 @@
 // manifests say what a URL's bytes must hash to (see index-channel.ts); a store entry or a
 // resolver's answer that doesn't match is never served.
 import type { ContentStore } from "./content-store.js";
-import type { IndexEntry, Manifest } from "./types.js";
+import type {
+  HandoffRequestMessage,
+  IndexEntry,
+  Manifest,
+} from "./types.js";
 
 const BASE58 = "[1-9A-HJ-NP-Za-km-z]+";
 const DOC_STEP = new RegExp(`^${BASE58}@${BASE58}(\\.${BASE58})*$`);
@@ -97,8 +101,13 @@ export type PinnedDeps = {
   hash(bytes: Uint8Array): Promise<string>;
   /** Ask the automerge worker for the manifest covering `key`; undefined if it can't answer. */
   manifest(key: string): Promise<Manifest | undefined>;
-  /** Ask a tab or the automerge worker for `key`'s bytes; undefined if it doesn't resolve. */
-  resolve(key: string): Promise<{ body: Uint8Array; contentType: string } | undefined>;
+  /**
+   * Ask a tab or the automerge worker for `key`'s bytes: undefined if it doesn't resolve, a
+   * Response for any answer that isn't bytes (a redirect for a path that isn't canonical).
+   */
+  resolve(
+    key: string
+  ): Promise<{ body: Uint8Array; contentType: string } | Response | undefined>;
   warn(message: string): void;
   /** Keep the service worker alive for work that outlives the response. */
   keep(work: Promise<unknown>): void;
@@ -161,6 +170,14 @@ export async function servePinned(
       headers: { "content-type": "text/plain", "cache-control": "no-store" },
     });
   }
+  if (answer instanceof Response) {
+    if (entry) {
+      throw new PinnedAbort(
+        `${keys[0]} is in the automerge worker's manifest, but a resolver answered ${answer.status}`
+      );
+    }
+    return answer;
+  }
   if (!entry) return respond(answer.body, answer.contentType, false);
 
   if ((await deps.hash(answer.body)) !== entry.sha256) {
@@ -191,5 +208,31 @@ export function sharedManifests(
       inFlight.set(prefix, request);
     }
     return request;
+  };
+}
+
+/**
+ * The handoff the service worker sends tabs and the automerge worker: `to` is a legacy special
+ * URL (`automerge:…`), or a `/@/` path. A path's `handoffURL` is `patchwork-path:` and the path,
+ * which resolvers from before paths parse and then decline.
+ */
+export function handoffRequest(
+  request: Request,
+  cachename: string,
+  to: URL | string
+): HandoffRequestMessage {
+  return {
+    id: crypto.randomUUID(),
+    type: "request",
+    cachename,
+    request: {
+      url: request.url,
+      handoffURL: typeof to === "string" ? `patchwork-path:${to}` : to.href,
+      ...(typeof to === "string" ? { path: to } : {}),
+      headers: Object.fromEntries(request.headers.entries()),
+      method: request.method,
+      destination: request.destination,
+      referrer: request.referrer,
+    },
   };
 }

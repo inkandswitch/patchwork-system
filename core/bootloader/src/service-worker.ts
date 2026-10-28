@@ -3,12 +3,32 @@
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
+  INDEX_ANSWER_PATH,
   type AutomergeWorkerMissingMessage,
   type HandoffReplyMessage,
   type HandoffRequestMessage,
+  type HandoffResponse,
+  type IndexAnswer,
+  type IndexEntry,
+  type Manifest,
+  type ManifestRequestMessage,
   type ResolveAcceptedMessage,
   type ResolveRequestMessage,
 } from "./types.js";
+import { contentHash, toBytes } from "./content-hash.js";
+import {
+  CONTENT_CACHE_PREFIX,
+  cacheStore,
+  contentCacheName,
+} from "./content-store.js";
+import { acceptIndexAnswer } from "./index-channel.js";
+import {
+  PinnedAbort,
+  handoffRequest,
+  normalizePinned,
+  servePinned,
+  sharedManifests,
+} from "./pinned.js";
 // Referenced so this script's bytes change with every build. The browser only
 // installs a replacement service worker when they do, and the controllerchange
 // that follows is how open tabs learn a deploy happened (see setup.ts).
@@ -85,7 +105,11 @@ async function clearOtherCaches() {
   const names = await caches.keys();
   await Promise.all(
     names
-      .filter((name) => name !== cachename)
+      // Content stores are per account and checked on every read; they
+      // outlive cache renames and deploys.
+      .filter(
+        (name) => name !== cachename && !name.startsWith(CONTENT_CACHE_PREFIX)
+      )
       .map((name) => caches.delete(name))
   );
 }
@@ -175,14 +199,86 @@ handoffChannel.addEventListener("message", (event) => {
   if (data?.type !== "online") return;
   // The automerge worker (re)started — re-broadcast anything still in flight so
   // requests that raced its boot aren't stranded.
-  const stranded = [...pendingHandoffs.values()];
+  const stranded = [
+    ...[...pendingHandoffs.values()].map(({ message }) => message),
+    ...[...pendingManifests.values()].map(({ message }) => message),
+  ];
   if (stranded.length === 0) return;
   lifecycle(
     "info",
-    `automerge worker (re)started; re-broadcasting ${stranded.length} in-flight asset handoff(s)`
+    `automerge worker (re)started; re-broadcasting ${stranded.length} in-flight request(s)`
   );
-  for (const { message } of stranded) handoffChannel.postMessage(message);
+  for (const message of stranded) handoffChannel.postMessage(message);
 });
+
+// ── The content index ──────────────────────────────────────────────────
+// Pinned `/@/` URL → what its bytes must hash to. Held only here, in memory,
+// and filled only from the automerge worker's manifests, whose answers arrive
+// as fetches this worker checks the sender of (see index-channel.ts). Lost
+// whenever this worker stops, and rebuilt from the automerge worker on demand.
+
+const contentIndex = new Map<string, IndexEntry>();
+
+// The automerge worker answers within its own 10s; past that, serve unchecked.
+const MANIFEST_TIMEOUT_MS = 10_000;
+
+type PendingManifest = {
+  message: ManifestRequestMessage;
+  settle: (manifest: Manifest | undefined) => void;
+};
+
+const pendingManifests = new Map<string, PendingManifest>();
+
+function requestManifest(path: string): Promise<Manifest | undefined> {
+  const message: ManifestRequestMessage = {
+    type: "manifest",
+    id: crypto.randomUUID(),
+    path,
+  };
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      lifecycle(
+        "warn",
+        `no manifest for /@/${path} after ${MANIFEST_TIMEOUT_MS}ms; serving it unchecked`
+      );
+      settle(undefined);
+    }, MANIFEST_TIMEOUT_MS);
+    const settle = (manifest: Manifest | undefined) => {
+      clearTimeout(timer);
+      pendingManifests.delete(message.id);
+      resolve(manifest);
+    };
+    pendingManifests.set(message.id, { message, settle });
+    handoffChannel.postMessage(message);
+    void startWorkerIfMissing(message.id);
+  });
+}
+
+const manifests = sharedManifests(
+  requestManifest,
+  (key) => normalizePinned(key)?.prefix ?? key
+);
+
+function settleIndexAnswer(answer: IndexAnswer) {
+  const pending = pendingManifests.get(answer.id);
+  if (!pending) return log(`no pending manifest for id ${answer.id}`);
+  if (answer.error) {
+    log(`no manifest for /@/${pending.message.path}: ${answer.error}`);
+  }
+  pending.settle(answer.manifest);
+}
+
+async function answerIndex(fetchEvent: FetchEvent): Promise<Response> {
+  const client = fetchEvent.clientId
+    ? await self.clients.get(fetchEvent.clientId)
+    : undefined;
+  return acceptIndexAnswer(
+    fetchEvent.request,
+    client,
+    self.location.origin,
+    settleIndexAnswer
+  );
+}
 
 const MISSING_WORKER_NUDGE_MS = 5_000;
 // A worker that's been spawned only asks for the lock once its imports have
@@ -208,7 +304,7 @@ async function startWorkerIfMissing(id: string) {
   if (!navigator.locks) return;
   if (await automergeWorkerExists()) return;
   await new Promise((resolve) => setTimeout(resolve, MISSING_WORKER_GRACE_MS));
-  if (!pendingHandoffs.has(id)) return;
+  if (!pendingHandoffs.has(id) && !pendingManifests.has(id)) return;
   if (await automergeWorkerExists()) return;
   // Check and claim the throttle with no await in between: every handoff that
   // raced the same cold start comes through here at once, and would all pass a
@@ -324,22 +420,9 @@ function askTab(
  */
 async function handoff(
   fetchEvent: FetchEvent,
-  handoffURL: URL
+  to: URL | string
 ): Promise<HandoffReplyMessage> {
-  const request = fetchEvent.request;
-  const message: HandoffRequestMessage = {
-    id: crypto.randomUUID(),
-    type: "request",
-    cachename,
-    request: {
-      url: request.url,
-      handoffURL: handoffURL.href,
-      headers: Object.fromEntries(request.headers.entries()),
-      method: request.method,
-      destination: request.destination,
-      referrer: request.referrer,
-    },
-  };
+  const message = handoffRequest(fetchEvent.request, cachename, to);
   const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
   for (const tab of await resolvingTabs(fetchEvent.clientId)) {
     const answer = await askTab(tab, message, deadline);
@@ -479,10 +562,13 @@ async function serveHandoff(
 
   if (reply.type === "response") {
     log(`serving handed-off response for ${handoffURL}`, reply);
-    return new Response(reply.response.body ?? null, {
-      status: reply.response.status ?? 200,
-      headers: reply.response.headers,
-    });
+    const response = inlineResponse(reply.response);
+    // Resolvers hand everything back inline; what's immutable is kept here,
+    // by URL, as legacy URLs always were.
+    if (isImmutable(response)) {
+      cacheInBackground(fetchEvent, cache, fetchEvent.request, response.clone());
+    }
+    return response;
   }
 
   const stored = await cache.match(fetchEvent.request);
@@ -494,6 +580,96 @@ async function serveHandoff(
   }
   log(`serving ${handoffURL} from cache ${cachename} after handoff`);
   return stored;
+}
+
+const inlineResponse = (response: HandoffResponse) =>
+  new Response(response.body ?? null, {
+    status: response.status ?? 200,
+    headers: response.headers,
+  });
+
+const IMMUTABLE_STATUSES = [200, 203, 204];
+
+function isImmutable(response: Response): boolean {
+  return (
+    IMMUTABLE_STATUSES.includes(response.status) &&
+    !/(^|,)\s*no-store(\s*,|$)/.test(response.headers.get("cache-control") ?? "")
+  );
+}
+
+/**
+ * A `/@/` path: a live one is handed off and its redirect served as is; a
+ * pinned one is served from the content store, checked against the index.
+ */
+async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response> {
+  const normalized = normalizePinned(path);
+  if (!normalized) {
+    return new Response(`not a path: /@/${path}`, {
+      status: 400,
+      headers: { "content-type": "text/plain" },
+    });
+  }
+
+  const resolve = async (key: string) => {
+    const reply = await handoff(fetchEvent, key);
+    if (reply.type === "abort") throw new HandoffAborted(reply.reason);
+    if (reply.type !== "response") {
+      return new Response(`unexpected ${reply.type} reply for /@/${key}`, {
+        status: 502,
+      });
+    }
+    const { status = 200, body, headers } = reply.response;
+    if (status !== 200) return inlineResponse(reply.response);
+    return {
+      body: toBytes(body ?? new Uint8Array()),
+      contentType: headers?.["content-type"] ?? "application/octet-stream",
+    };
+  };
+
+  try {
+    if (!normalized.pinned) {
+      const answer = await resolve(normalized.keys[0]);
+      return answer instanceof Response
+        ? answer
+        : new Response(answer.body as BlobPart, {
+            headers: { "content-type": answer.contentType, "cache-control": "no-store" },
+          });
+    }
+    const store =
+      normalized.acctHash && !normalized.share
+        ? cacheStore(
+            await caches.open(contentCacheName(normalized.acctHash)),
+            self.location.origin
+          )
+        : undefined;
+    return await servePinned(normalized.keys, {
+      index: contentIndex,
+      store,
+      hash: contentHash,
+      manifest: manifests,
+      resolve,
+      warn: (message) => lifecycle("warn", message),
+      keep: (work) =>
+        fetchEvent.waitUntil(
+          work.catch((error) => {
+            // Always loud, as for the page cache: a QuotaExceededError here
+            // is the first sign the origin is under storage pressure.
+            console.warn(`error keeping /@/${path}`, error);
+          })
+        ),
+    });
+  } catch (error) {
+    // Deliberate: fail the request as a network error, with no response.
+    if (error instanceof PinnedAbort || error instanceof HandoffAborted) {
+      lifecycle("warn", `failing /@/${path}: ${(error as Error).message}`);
+      throw error;
+    }
+    console.error(`service worker error serving /@/${path}`, error);
+    return new Response(
+      error instanceof Error ? `${error.message}\n\n${error.stack}` : String(error),
+      { status: 556, headers: { "content-type": "text/plain" } }
+    );
+  }
 }
 
 async function servePassthrough(
@@ -570,6 +746,24 @@ async function respond(
 self.addEventListener("fetch", (fetchEvent: FetchEvent) => {
   const request = fetchEvent.request;
   log("fetch event", request.url);
+  const url = new URL(request.url);
+  const ours = url.origin === self.location.origin;
+
+  if (ours && url.pathname === INDEX_ANSWER_PATH) {
+    fetchEvent.respondWith(
+      request.method === "POST"
+        ? answerIndex(fetchEvent)
+        : new Response(null, { status: 405 })
+    );
+    return;
+  }
+
   if (request.method !== "GET") return;
+
+  if (ours && url.pathname.startsWith("/@/")) {
+    fetchEvent.respondWith(servePath(fetchEvent, url.pathname.slice("/@/".length)));
+    return;
+  }
+
   fetchEvent.respondWith(respond(fetchEvent, specialURLFor(request)));
 });
