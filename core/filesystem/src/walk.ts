@@ -537,7 +537,7 @@ export async function listFiles(
   };
 
   // Values are read in place; links are gathered and read below.
-  const links: { parts: string[]; keys: number[]; link: AutomergeUrl }[] = [];
+  type Link = { parts: string[]; keys: number[]; link: AutomergeUrl };
   const entered = new Set<string>([rootId]);
   const visit = async (
     node: unknown,
@@ -545,7 +545,8 @@ export async function listFiles(
     holder: DocumentId,
     parts: string[],
     keys: number[]
-  ) => {
+  ): Promise<Link[]> => {
+    const links: Link[] = [];
     for (const child of provider?.list(node) ?? []) {
       // Only a directory's keys span several path segments; a folder entry's name is one.
       const names =
@@ -556,7 +557,7 @@ export async function listFiles(
         await add(childParts, childKeys, child.value, holder);
         // Nested values are addressable by path only inside a directory doc.
         if (provider === directoryProvider && isNested(child.value)) {
-          await visit(child.value, provider, holder, childParts, childKeys);
+          links.push(...(await visit(child.value, provider, holder, childParts, childKeys)));
         }
       } else if (
         "link" in child &&
@@ -565,44 +566,57 @@ export async function listFiles(
         links.push({ parts: childParts, keys: childKeys, link: child.link });
       }
     }
+    return links;
   };
-  await add([], [], root, rootId);
-  await visit(root, rootProvider, rootId, [], []);
 
-  let next = 0;
-  const readLinks = async () => {
-    while (next < links.length) {
-      const { parts, keys, link } = links[next++];
-      try {
-        const parsed = parseAutomergeUrl(link);
-        const live = await find(
-          stringifyAutomergeUrl({ documentId: parsed.documentId }),
-          parsed.heads
-        );
-        const heads = parsed.heads ?? live.heads();
-        const doc = live.view(heads).doc();
-        if (doc === undefined) continue;
-        const provider = providerFor(doc);
-        if (!provider) {
-          await add(parts, keys, doc, parsed.documentId, heads);
-        } else if (
-          deep &&
-          (provider === folderProvider || provider === directoryProvider) &&
-          !entered.has(parsed.documentId)
-        ) {
-          // Into a nested folder, by name: its files are under its name here.
-          entered.add(parsed.documentId);
-          await add(parts, keys, doc, parsed.documentId, heads);
-          await visit(doc, provider, parsed.documentId, parts, keys);
-        }
-      } catch {
-        missing.push(tailOf(parts));
-      }
-    }
+  // At most LIST_CONCURRENCY file docs read at once, nested folders included.
+  let active = 0;
+  const queue: Array<() => void> = [];
+  const acquire = async () => {
+    if (active >= LIST_CONCURRENCY) await new Promise<void>((resolve) => queue.push(resolve));
+    active++;
   };
-  await Promise.all(
-    Array.from({ length: Math.min(LIST_CONCURRENCY, links.length) }, readLinks)
-  );
+  const release = () => {
+    active--;
+    queue.shift()?.();
+  };
+
+  const read = async ({ parts, keys, link }: Link): Promise<void> => {
+    let below: Link[] = [];
+    await acquire();
+    try {
+      const parsed = parseAutomergeUrl(link);
+      const live = await find(
+        stringifyAutomergeUrl({ documentId: parsed.documentId }),
+        parsed.heads
+      );
+      const heads = parsed.heads ?? live.heads();
+      const doc = live.view(heads).doc();
+      if (doc === undefined) return;
+      const provider = providerFor(doc);
+      if (!provider) {
+        await add(parts, keys, doc, parsed.documentId, heads);
+      } else if (
+        deep &&
+        (provider === folderProvider || provider === directoryProvider) &&
+        !entered.has(parsed.documentId)
+      ) {
+        // Into a nested folder, by name: its files are under its name here.
+        entered.add(parsed.documentId);
+        await add(parts, keys, doc, parsed.documentId, heads);
+        below = await visit(doc, provider, parsed.documentId, parts, keys);
+      }
+    } catch {
+      missing.push(tailOf(parts));
+    } finally {
+      release();
+    }
+    // Read what's below after letting go of the slot, so nesting can't deadlock.
+    await Promise.all(below.map(read));
+  };
+
+  await add([], [], root, rootId);
+  await Promise.all((await visit(root, rootProvider, rootId, [], [])).map(read));
 
   return {
     prefix: end.container.pinned,

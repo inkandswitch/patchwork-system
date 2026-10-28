@@ -90,3 +90,40 @@ describe("trackPackagesFolder", () => {
     expect(fallback.watch).toHaveBeenCalled();
   });
 });
+
+describe("watchPackagesFolder: duplicate names", () => {
+  it("skips, and warns about, a second package with one name in one member", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const repo = new Repo();
+    const pkg = () => repo.create({ "@patchwork": { type: "directory" } }).url;
+    const [a, b] = [pkg(), pkg()];
+    const mine = folder(repo, [["same", a], ["same", b]]);
+    const account = repo.create<any>({
+      "@patchwork": { type: "account" },
+      namespace: { "/packages": [{ url: mine.url }] },
+    });
+    const seen: PackageEntry[][] = [];
+    const stop = watchPackagesFolder(repo, account, (entries) => seen.push(entries));
+    await vi.waitFor(() => expect(seen.length).toBe(1));
+    expect(seen[0].map((e) => e.url)).toEqual([a]);
+    expect(warn).toHaveBeenCalled();
+    stop();
+    warn.mockRestore();
+  });
+});
+
+describe("trackPackagesFolder: stable URLs", () => {
+  it("keeps a package's URL while its own step is unchanged", async () => {
+    const entry = { url: "automerge:2j9knpCseyhnK8izDmLpGP5WMdZQ" as AutomergeUrl, name: "foo", memberStep: "m@h1" };
+    const fallback: PackageTracker = { findLatest: vi.fn(), watch: vi.fn(() => () => {}) };
+    let root = "acct@r1";
+    const lookUp = vi.fn(async () => `https://p.test/@/${root}/packages/m@h1/pkg@p1~L1`);
+    const tracker = trackPackagesFolder(Promise.resolve("acct"), () => [entry], fallback, lookUp);
+    const first = await tracker.findLatest(entry.url);
+    // the account and the member moved; the package didn't
+    root = "acct@r2";
+    expect(await tracker.findLatest(entry.url)).toBe(first);
+    lookUp.mockResolvedValue("https://p.test/@/acct@r2/packages/m@h1/pkg@p2~L2");
+    expect(await tracker.findLatest(entry.url)).toBe("https://p.test/@/acct@r2/packages/m@h1/pkg@p2~L2");
+  });
+});

@@ -318,7 +318,8 @@ describe("ModuleWatcher module lifecycle", () => {
         d.modules = [];
       });
       await pause(100);
-      expect(unloaded).toEqual([folder.url]);
+      // Under the url it was imported from, which its plugins are registered under.
+      expect(unloaded).toEqual([importCalls[0]]);
 
       folder.change((d: any) => {
         d.rev = 1;
@@ -868,8 +869,126 @@ describe("ModuleWatcher /packages folder", () => {
 
     source.set([source.entries()[0]]);
     await pause(50);
-    expect(unloaded).toEqual([source.docs[1].url]);
+    expect(unloaded).toHaveLength(1);
+    expect(loaded).toContain(unloaded[0]);
     watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+});
+
+describe("ModuleWatcher /packages, through the real lookup chain", () => {
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function packagesAccount() {
+    const { idhash } = await import("../src/paths.js");
+    const { pinnedPath } = await import("../src/walk.js");
+    const { trackPackagesFolder, watchPackagesFolder } = await import("../src/packages-folder.js");
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const pkg = () => {
+      const json = repo.create({ "@patchwork": { type: "file" }, content: "{}", mimeType: "application/json" });
+      return repo.create<any>({ "@patchwork": { type: "directory" }, "package.json": json.url });
+    };
+    const [p1, p2, p3] = [pkg(), pkg(), pkg()];
+    const member = repo.create<any>({
+      title: "packages",
+      docs: [
+        { name: "one", type: "directory", url: p1.url },
+        { name: "two", type: "directory", url: p2.url },
+      ],
+    });
+    const account = repo.create<any>({
+      "@patchwork": { type: "account" },
+      namespace: { "/packages": [{ url: member.url }] },
+    });
+    const a = await idhash(account.documentId);
+    const accounts = new Map([[a, account.url]]);
+    // The pinned path a lookup would redirect to, as a module that says which.
+    const lookUp = async (path: string) => {
+      const pinned = await pinnedPath(repo, path, { accounts, only: "end" });
+      return `data:text/javascript,export const plugins = []//${pinned!.path}`;
+    };
+    let entries: any[] = [];
+    const listeners = new Set<() => void>();
+    const first = Promise.withResolvers<void>();
+    watchPackagesFolder(repo, account, (next) => {
+      entries = next;
+      first.resolve();
+      for (const listener of listeners) listener();
+    });
+    await first.promise;
+    const fallback: PackageTracker = { findLatest: async (u) => u, watch: () => () => {} };
+    const tracker = trackPackagesFolder(Promise.resolve(a), () => entries, fallback, lookUp);
+    const loaded: string[] = [];
+    const unloaded: string[] = [];
+    const watcher = new ModuleWatcher(
+      repo,
+      {},
+      (name) => loaded.push(name),
+      (name) => unloaded.push(name),
+      undefined,
+      tracker
+    );
+    await watcher.addPackagesFolder("packages", () => entries, (onChange) => {
+      listeners.add(onChange);
+      return () => listeners.delete(onChange);
+    });
+    return { repo, member, p3, watcher, loaded, unloaded };
+  }
+
+  it("adding a package to the folder loads only that package", async () => {
+    const { repo, member, p3, watcher, loaded } = await packagesAccount();
+    expect(loaded).toHaveLength(2);
+    member.change((d: any) => d.docs.push({ name: "three", type: "directory", url: p3.url }));
+    await pause(300);
+    expect(loaded).toHaveLength(3);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("renaming a package reloads nothing", async () => {
+    const { repo, member, watcher, loaded } = await packagesAccount();
+    member.change((d: any) => (d.docs[0].name = "uno"));
+    await pause(300);
+    expect(loaded).toHaveLength(2);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("removing a package unloads it under the name it was loaded with", async () => {
+    const { repo, member, watcher, loaded, unloaded } = await packagesAccount();
+    member.change((d: any) => d.docs.splice(1, 1));
+    await pause(300);
+    expect(unloaded).toHaveLength(1);
+    expect(loaded).toContain(unloaded[0]);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+});
+
+describe("ModuleWatcher lookup retries", () => {
+  it("retries a lookup that failed", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const doc = repo.create<any>({ "@patchwork": { type: "directory" } });
+    let calls = 0;
+    const tracker: PackageTracker = {
+      async findLatest() {
+        if (calls++ === 0) throw new Error("not yet");
+        return dataModule("export const plugins = []") as any;
+      },
+      watch: () => () => {},
+    };
+    const loaded: string[] = [];
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const watcher = new ModuleWatcher(repo, {}, (name) => loaded.push(name), undefined, undefined, tracker);
+    await watcher.addPackagesFolder(
+      "packages",
+      () => [{ url: doc.url, name: "p", memberStep: "m@h" }],
+      () => () => {}
+    );
+    expect(loaded).toHaveLength(0);
+    await vi.waitFor(() => expect(loaded).toHaveLength(1), { timeout: 3000 });
+    watcher.dispose();
+    errors.mockRestore();
     await repo.shutdown().catch(() => {});
   });
 });

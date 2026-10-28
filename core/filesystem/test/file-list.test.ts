@@ -150,3 +150,31 @@ describe("package lists", () => {
     expect(Object.keys(list.files)).toEqual(expect.arrayContaining(["package.json", "sub/x.js"]));
   });
 });
+
+describe("listFiles concurrency", () => {
+  it("reads a nested folder's files several at a time", async () => {
+    const f = await fixture();
+    const files = Object.fromEntries(
+      Array.from({ length: 20 }, (_, i) => [`f${i}.js`, file(f.repo, `${i}`).url])
+    );
+    const dist = folder(f.repo, files);
+    const pkg = folder(f.repo, {
+      "package.json": file(f.repo, '{"main":"dist/f0.js"}').url,
+      dist: dist.url,
+    });
+    f.mine.change((d: any) => d.docs.push({ name: "big", type: "folder", url: pkg.url }));
+    const prefix = await chain(f.repo, livePath(f.a, ["packages", "big"]), f.accounts);
+    let active = 0;
+    let peak = 0;
+    const findFile = async (url: any) => {
+      active++;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active--;
+      return f.repo.find(url);
+    };
+    const built = await buildFileList(f.repo, prefix!, { accounts: f.accounts, findFile });
+    expect(Object.keys(built!.list.files).filter((t) => t.startsWith("dist/"))).toHaveLength(20);
+    expect(peak).toBeGreaterThanOrEqual(4);
+  });
+});

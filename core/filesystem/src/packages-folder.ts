@@ -54,10 +54,22 @@ export function watchPackagesFolder(
     const entries: PackageEntry[] = [];
     const seen = new Set<string>();
     for (const member of members) {
-      const doc = member.doc();
-      const memberStep = docStep(await idhash(member.documentId), member.heads());
+      // The doc and the heads it was read at, together.
+      const heads = member.heads();
+      const doc = member.view(heads).doc();
+      const memberStep = docStep(await idhash(member.documentId), heads);
+      const names = new Set<string>();
       for (const child of providerFor(doc)?.list(doc) ?? []) {
         if (!("link" in child)) continue;
+        // Only the first of two links with one name in a folder is reachable
+        // by that name, so the second would import the first's code.
+        if (names.has(child.name)) {
+          console.warn(
+            `/packages: skipping a second package named ${JSON.stringify(child.name)} in one folder; rename one`
+          );
+          continue;
+        }
+        names.add(child.name);
         const { documentId } = parseAutomergeUrl(child.link);
         if (seen.has(documentId)) continue;
         seen.add(documentId);
@@ -129,6 +141,12 @@ export function trackPackagesFolder(
   fallback: PackageTracker,
   lookUp: (path: string) => Promise<string> = lookUpViaServiceWorker
 ): PackageTracker {
+  // A lookup pins the whole chain, so the URL changes whenever the account or
+  // the member folder does. A pinned URL stays valid forever, so keep the one
+  // already imported while the package's own step (its heads and list) is
+  // the same: a change elsewhere in /packages mustn't reload every package.
+  const known = new Map<string, string>();
+  const ownStep = (url: string) => new URL(url).pathname.split("/").at(-1);
   return {
     async findLatest(url) {
       const { documentId } = parseAutomergeUrl(url);
@@ -136,8 +154,14 @@ export function trackPackagesFolder(
         (candidate) => parseAutomergeUrl(candidate.url).documentId === documentId
       );
       if (!entry) return fallback.findLatest(url);
+      const latest = await lookUp(packageLookupPath(await acctHash, entry));
+      const previous = known.get(documentId);
+      if (previous && ownStep(previous) === ownStep(latest)) {
+        return previous as AutomergeUrl;
+      }
+      known.set(documentId, latest);
       // Not an automerge URL: the watcher imports it with importPackageFromHttpUrl.
-      return (await lookUp(packageLookupPath(await acctHash, entry))) as AutomergeUrl;
+      return latest as AutomergeUrl;
     },
     watch: (url, onChange) => fallback.watch(url, onChange),
   };

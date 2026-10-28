@@ -131,6 +131,8 @@ export class ModuleWatcher {
   // eventually succeeding and rolling the registry back to that old version.
   #announceGenerations = new Map<string, number>();
   #retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Lookups that failed, waiting to try again. */
+  #lookupRetries = new Map<string, ReturnType<typeof setTimeout>>();
   #lastAnnounced = new Map<string, string>();
   #activeModules = new Set<string>();
   /** Package folders (`/packages`), by source name: what they list, and how to stop hearing them. */
@@ -244,14 +246,39 @@ export class ModuleWatcher {
     );
   }
 
-  private async processModuleEntry(importName: string) {
+  private async processModuleEntry(importName: string, attempt = 0) {
     if (isValidAutomergeUrl(importName)) {
       // Watch before looking up, so a change landing in between still reloads.
       // Keyed by the settings entry, a branches doc's included, so removing
       // it from settings unloads this module.
+      const watched = this.#watchedModules.get(importName);
+      // Already found: its watch looks it up again when it moves. Looking up
+      // every package whenever its source's list changes would reload them.
+      if (watched?.version !== undefined) return;
       const entry = this.watchPackage(importName, stripHeads(importName));
       if (!entry) return;
-      const latest = await this.findLatestVersion(importName, entry);
+      let latest: AutomergeUrl | undefined;
+      try {
+        latest = await this.findLatestVersion(importName, entry);
+      } catch (error) {
+        // Nothing else brings it back until the package moves: back off and
+        // look again.
+        const delay = RETRY_DELAYS_MS[attempt];
+        console.warn(
+          `couldn't look up ${importName}${delay === undefined ? "" : `; trying again in ${delay}ms`}`,
+          error
+        );
+        if (delay !== undefined) {
+          const timer = setTimeout(() => {
+            this.#lookupRetries.delete(importName);
+            if (this.#activeModules.has(importName)) {
+              void this.processModuleEntry(importName, attempt + 1);
+            }
+          }, delay);
+          this.#lookupRetries.set(importName, timer);
+        }
+        return;
+      }
       // A newer lookup took over, and announces what it finds.
       if (!latest) return;
       entry.version = latest;
@@ -497,8 +524,12 @@ export class ModuleWatcher {
   private unloadModule(entry: string) {
     this.detachDocWatcher(entry);
     this.cancelAnnounce(entry);
+    clearTimeout(this.#lookupRetries.get(entry));
+    this.#lookupRetries.delete(entry);
+    // Its plugins were registered under the url it was imported from.
+    const announced = this.#lastAnnounced.get(entry);
     this.#lastAnnounced.delete(entry);
-    this.onUnload?.(entry);
+    this.onUnload?.(announced ?? entry);
   }
 
   dispose() {
@@ -516,6 +547,8 @@ export class ModuleWatcher {
     }
     for (const timer of this.#retryTimers.values()) clearTimeout(timer);
     this.#retryTimers.clear();
+    for (const timer of this.#lookupRetries.values()) clearTimeout(timer);
+    this.#lookupRetries.clear();
     this.#activeModules.clear();
   }
 
