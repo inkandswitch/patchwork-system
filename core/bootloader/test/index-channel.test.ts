@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   acceptIndexAnswer,
+  indexChannelProbe,
   isAutomergeWorker,
   postIndexAnswer,
 } from "../src/index-channel.js";
@@ -56,20 +57,43 @@ describe("acceptIndexAnswer", () => {
   });
 });
 
+describe("indexChannelProbe", () => {
+  it("says the service worker is there, and takes nothing", () => {
+    const response = indexChannelProbe();
+    expect(response.status).toBe(405);
+    expect(response.headers.get("x-patchwork-index")).toBe("present");
+  });
+});
+
+const present = () =>
+  new Response(null, { status: 405, headers: { "x-patchwork-index": "present" } });
+const accepted = () =>
+  new Response(null, { status: 204, headers: { "x-patchwork-index": "accepted" } });
+
 describe("postIndexAnswer", () => {
-  it("retries a reply that skipped the service worker", async () => {
-    const replies = [
-      new Response("", { status: 404 }),
-      new Response(null, { status: 204, headers: { "x-patchwork-index": "accepted" } }),
-    ];
-    const fetcher = vi.fn(async () => replies.shift()!);
+  it("probes before posting, so an answer never reaches the network", async () => {
+    const replies = [new Response("", { status: 404 }), present(), accepted()];
+    const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) => replies.shift()!);
     expect(await postIndexAnswer({ id: "1" }, fetcher as typeof fetch)).toBe(true);
-    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(fetcher.mock.calls.map(([, init]) => init?.method ?? "GET")).toEqual([
+      "GET",
+      "GET",
+      "POST",
+    ]);
   });
 
-  it("gives up after 5 tries", async () => {
-    const fetcher = vi.fn(async () => new Response("", { status: 404 }));
+  it("never posts when the probe never reaches the service worker", async () => {
+    const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) => new Response("", { status: 404 }));
     expect(await postIndexAnswer({ id: "1" }, fetcher as typeof fetch)).toBe(false);
+    expect(fetcher.mock.calls.every(([, init]) => (init?.method ?? "GET") === "GET")).toBe(true);
     expect(fetcher).toHaveBeenCalledTimes(5);
+  });
+
+  it("probes once per fetcher, then retries a post that didn't get through", async () => {
+    const replies = [present(), new Response("", { status: 404 }), accepted(), accepted()];
+    const fetcher = vi.fn(async (_url: unknown, _init?: RequestInit) => replies.shift()!);
+    expect(await postIndexAnswer({ id: "1" }, fetcher as typeof fetch)).toBe(true);
+    expect(await postIndexAnswer({ id: "2" }, fetcher as typeof fetch)).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(4);
   });
 });

@@ -193,7 +193,8 @@ function impatience(limit: number) {
 export function waitingFind(
   repo: Repo,
   signal: AbortSignal,
-  missing: Set<string>
+  missing: Set<string>,
+  { catchUp = true }: { catchUp?: boolean } = {}
 ): NonNullable<WalkOptions["find"]> {
   return async (url: AutomergeUrl, heads?: UrlHeads) => {
     const handle = await repo.find(url, { signal });
@@ -202,7 +203,7 @@ export function waitingFind(
         missing.add(url);
         throw new AbortHandoff(`heads ${heads.join(",")} of ${url} not found`);
       }
-    } else {
+    } else if (catchUp) {
       await caughtUpWithPeers(repo, handle, signal);
     }
     return handle;
@@ -268,8 +269,25 @@ export type Resolver = {
 export function createResolver(
   getRepo: () => Promise<Repo>,
   log: (...args: unknown[]) => void = () => {},
-  accounts: () => ReadonlyMap<string, AutomergeUrl> = () => new Map()
+  accounts: () => ReadonlyMap<string, AutomergeUrl> = () => new Map(),
+  options: {
+    /**
+     * Decline (answer undefined) a path under an account this resolver
+     * doesn't know, so the service worker asks someone else. A tab learns its
+     * account only once it has loaded; the automerge worker, asked last,
+     * answers 404 instead.
+     */
+    declineUnknownAccounts?: boolean;
+  } = {}
 ): Resolver {
+  const knowsAccountOf = (path: string) => {
+    try {
+      const { root } = parsePath(path);
+      return root.kind !== "account" || accounts().has(root.acctHash);
+    } catch {
+      return true; // answered with a 400 below
+    }
+  };
   const within = (signal?: AbortSignal) =>
     signal
       ? AbortSignal.any([signal, AbortSignal.timeout(RESOLVE_TIMEOUT_MS)])
@@ -336,6 +354,9 @@ export function createResolver(
       let response: Response;
       try {
         if (request.path !== undefined) {
+          if (options.declineUnknownAccounts && !knowsAccountOf(request.path)) {
+            return undefined;
+          }
           const repo = await getRepo();
           const limit = within(signal);
           log(`resolving handoff ${id} for /@/${request.path}`);

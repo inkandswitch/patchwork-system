@@ -199,12 +199,21 @@ const resolver = createResolver(getRepo, log, () => accounts);
 // The service worker stops waiting for a manifest after 10s; walking to it
 // gets no longer than that.
 const MANIFEST_WALK_TIMEOUT_MS = 10_000;
+const MANIFEST_LIST_TIMEOUT_MS = 30_000;
 
 // Manifests are what the service worker checks every pinned `/@/` URL
 // against. Only this worker answers them: tabs run package code.
 const answerManifest = createManifestHandler(getRepo, () => accounts, {
   find: (repo) =>
     waitingFind(repo, AbortSignal.timeout(MANIFEST_WALK_TIMEOUT_MS), new Set()),
+  // Listing a package reads every file doc in it. Each is read as this node
+  // has it, without waiting for peers, and the listing gets its own budget: a
+  // manifest finished after the service worker stopped waiting is still kept
+  // for the next request.
+  findFile: (repo) =>
+    waitingFind(repo, AbortSignal.timeout(MANIFEST_LIST_TIMEOUT_MS), new Set(), {
+      catchUp: false,
+    }),
   log,
 });
 const handoffChannel = new BroadcastChannel(HANDOFF_CHANNEL);

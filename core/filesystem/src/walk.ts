@@ -392,75 +392,96 @@ function walkPrefers(a: number[], b: number[]): boolean {
   return false;
 }
 
+// How many file docs a listing reads at once.
+const LIST_CONCURRENCY = 8;
+
 /**
  * Every file under the last container a canonical pinned path enters (see
  * {@link WalkEnd.container}), keyed by tail: "" for the container itself, encoded names joined
  * with "/" below it. Containers below it aren't listed; they have their own doc steps. `path`
  * may name the container or anything in it. Undefined unless `path` is canonical.
  *
- * A file reached by a link without heads is read as it is now, so the list is a snapshot.
+ * File docs are read with `findFile` (default: `find`), several at once. One that can't be read
+ * is left out and its tail named in `missing`, so a caller can tell a partial list from a whole
+ * one. A file reached by a link without heads is read as it is now, so the list is a snapshot.
  */
 export async function listFiles(
   repo: Repo,
   path: string,
-  options: WalkOptions
-): Promise<{ prefix: string; files: AsyncIterable<ListedFile> } | undefined> {
+  options: WalkOptions & { findFile?: WalkOptions["find"] }
+): Promise<{ prefix: string; files: ListedFile[]; missing: string[] } | undefined> {
   const end = await walkPath(repo, path, options);
   if (!end?.canonical || !end.container) return undefined;
-  const find = options.find ?? ((url: AutomergeUrl) => repo.find(url));
+  const find =
+    options.findFile ?? options.find ?? ((url: AutomergeUrl) => repo.find(url));
   const root = end.container.handle.doc();
   const provider = providerFor(root);
   const documentId = end.container.handle.documentId;
 
-  async function* files(): AsyncIterable<ListedFile> {
-    const found = new Map<string, { keys: number[]; file: ListedFile }>();
-    const add = async (
-      parts: string[],
-      keys: number[],
-      node: unknown,
-      holder: DocumentId
-    ) => {
-      const tail = parts.map(encodeURIComponent).join("/");
-      const existing = found.get(tail);
-      if (existing && !walkPrefers(keys, existing.keys)) return;
-      const read = await readNode(repo, node);
-      if (read) found.set(tail, { keys, file: { ...read, tail, documentId: holder } });
-    };
+  const found = new Map<string, { keys: number[]; file: ListedFile }>();
+  const missing: string[] = [];
+  const tailOf = (parts: string[]) => parts.map(encodeURIComponent).join("/");
+  const add = async (
+    parts: string[],
+    keys: number[],
+    node: unknown,
+    holder: DocumentId
+  ) => {
+    const tail = tailOf(parts);
+    const existing = found.get(tail);
+    if (existing && !walkPrefers(keys, existing.keys)) return;
+    const read = await readNode(repo, node);
+    if (read) found.set(tail, { keys, file: { ...read, tail, documentId: holder } });
+  };
 
-    const visit = async (node: unknown, parts: string[], keys: number[]) => {
-      for (const child of provider?.list(node) ?? []) {
-        // Only a directory's keys span several path segments; a folder entry's name is one.
-        const names =
-          provider === directoryProvider ? child.name.split("/") : [child.name];
-        const childParts = [...parts, ...names];
-        const childKeys = [...keys, names.length];
-        if ("value" in child) {
-          await add(childParts, childKeys, child.value, documentId);
-          // Nested values are addressable by path only inside a directory doc.
-          if (provider === directoryProvider && isNested(child.value)) {
-            await visit(child.value, childParts, childKeys);
-          }
-        } else if ("link" in child) {
-          try {
-            const parsed = parseAutomergeUrl(child.link);
-            const live = await find(
-              stringifyAutomergeUrl({ documentId: parsed.documentId }),
-              parsed.heads
-            );
-            const doc = live.view(parsed.heads ?? live.heads()).doc();
-            if (doc === undefined || providerFor(doc)) continue;
-            await add(childParts, childKeys, doc, parsed.documentId);
-          } catch {
-            // A file that can't be found isn't listed; reading it fails the same way.
-          }
+  // Values are read in place; links are gathered and read below.
+  const links: { parts: string[]; keys: number[]; link: AutomergeUrl }[] = [];
+  const visit = async (node: unknown, parts: string[], keys: number[]) => {
+    for (const child of provider?.list(node) ?? []) {
+      // Only a directory's keys span several path segments; a folder entry's name is one.
+      const names =
+        provider === directoryProvider ? child.name.split("/") : [child.name];
+      const childParts = [...parts, ...names];
+      const childKeys = [...keys, names.length];
+      if ("value" in child) {
+        await add(childParts, childKeys, child.value, documentId);
+        // Nested values are addressable by path only inside a directory doc.
+        if (provider === directoryProvider && isNested(child.value)) {
+          await visit(child.value, childParts, childKeys);
         }
+      } else if ("link" in child) {
+        links.push({ parts: childParts, keys: childKeys, link: child.link });
       }
-    };
+    }
+  };
+  await add([], [], root, documentId);
+  await visit(root, [], []);
 
-    await add([], [], root, documentId);
-    await visit(root, [], []);
-    for (const { file } of found.values()) yield file;
-  }
+  let next = 0;
+  const readLinks = async () => {
+    while (next < links.length) {
+      const { parts, keys, link } = links[next++];
+      try {
+        const parsed = parseAutomergeUrl(link);
+        const live = await find(
+          stringifyAutomergeUrl({ documentId: parsed.documentId }),
+          parsed.heads
+        );
+        const doc = live.view(parsed.heads ?? live.heads()).doc();
+        if (doc === undefined || providerFor(doc)) continue;
+        await add(parts, keys, doc, parsed.documentId);
+      } catch {
+        missing.push(tailOf(parts));
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(LIST_CONCURRENCY, links.length) }, readLinks)
+  );
 
-  return { prefix: end.container.pinned, files: files() };
+  return {
+    prefix: end.container.pinned,
+    files: [...found.values()].map(({ file }) => file),
+    missing,
+  };
 }

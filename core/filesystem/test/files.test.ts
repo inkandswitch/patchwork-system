@@ -123,6 +123,17 @@ describe("listFiles", () => {
     expect((await listFiles(repo, `${prefix}/dist`, { accounts }))?.prefix).toBe(prefix);
   });
 
+  it("says which files it couldn't read", async () => {
+    const { repo, a, accounts, minePkg } = await fixture();
+    const bad = (minePkg.doc() as any)["package.json"] as string;
+    const find = (url: AutomergeUrl) =>
+      url === bad ? Promise.reject(new Error("unavailable")) : repo.find(url);
+    const prefix = await pinnedPath(repo, livePath(a, ["packages", "foo"]), { accounts });
+    const listed = await listFiles(repo, prefix!, { accounts, find });
+    expect(listed?.missing).toEqual(["package.json"]);
+    expect(listed?.files.map((f) => f.tail)).not.toContain("package.json");
+  });
+
   it("lists nothing for a path that isn't canonical", async () => {
     const { repo, a, accounts } = await fixture();
     expect(

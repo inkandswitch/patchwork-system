@@ -5,8 +5,10 @@
 import type { ContentStore } from "./content-store.js";
 import type {
   HandoffRequestMessage,
+  IndexAnswer,
   IndexEntry,
   Manifest,
+  ManifestRequestMessage,
 } from "./types.js";
 
 const BASE58 = "[1-9A-HJ-NP-Za-km-z]+";
@@ -234,5 +236,68 @@ export function handoffRequest(
       destination: request.destination,
       referrer: request.referrer,
     },
+  };
+}
+
+/**
+ * The service worker's manifest requests to the automerge worker: sent with `send`, settled by
+ * an answer for the same id *and* path (requests are broadcast, so a page can get the worker to
+ * answer a copy with another path), or given up on after `timeoutMs`. Once one times out, the
+ * worker is taken to be away and later requests wait only `quickTimeoutMs`, for `quietMs` or
+ * until it answers again, so a missing worker costs each request a moment rather than the
+ * whole timeout.
+ */
+export function manifestRequests(options: {
+  send(message: ManifestRequestMessage): void;
+  timeoutMs: number;
+  quickTimeoutMs: number;
+  quietMs: number;
+  onTimeout(path: string): void;
+}) {
+  const pending = new Map<
+    string,
+    { message: ManifestRequestMessage; finish(manifest: Manifest | undefined): void }
+  >();
+  let quietUntil = 0;
+
+  return {
+    request(path: string): Promise<Manifest | undefined> {
+      const message: ManifestRequestMessage = {
+        type: "manifest",
+        id: crypto.randomUUID(),
+        path,
+      };
+      const quiet = Date.now() < quietUntil;
+      return new Promise((resolve) => {
+        const timer = setTimeout(
+          () => {
+            if (!quiet) {
+              quietUntil = Date.now() + options.quietMs;
+              options.onTimeout(path);
+            }
+            finish(undefined);
+          },
+          quiet ? options.quickTimeoutMs : options.timeoutMs
+        );
+        const finish = (manifest: Manifest | undefined) => {
+          clearTimeout(timer);
+          pending.delete(message.id);
+          resolve(manifest);
+        };
+        pending.set(message.id, { message, finish });
+        options.send(message);
+      });
+    },
+    /** False if `answer` settles nothing: an unknown id, or another path. */
+    settle(answer: IndexAnswer): boolean {
+      const request = pending.get(answer.id);
+      if (!request || answer.path !== request.message.path) return false;
+      quietUntil = 0;
+      request.finish(answer.manifest);
+      return true;
+    },
+    has: (id: string) => pending.has(id),
+    /** What's still waiting, to send again to a worker that restarted. */
+    pending: () => [...pending.values()].map(({ message }) => message),
   };
 }

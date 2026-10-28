@@ -29,15 +29,18 @@ async function fixture(packages = 1) {
   const prefixes = await Promise.all(
     pkgs.map((_, i) => pinnedPath(repo, livePath(a, ["packages", `p${i}`]), { accounts }))
   );
-  return { repo, accounts, prefixes: prefixes as string[] };
+  return { repo, accounts, pkgs, prefixes: prefixes as string[] };
 }
 
-const setup = async (packages?: number) => {
+const setup = async (packages?: number, unreadable?: (url: string) => boolean) => {
   const f = await fixture(packages);
   const posted: IndexAnswer[] = [];
   const post = vi.fn(async (answer: IndexAnswer) => (posted.push(answer), true));
   const finds: string[] = [];
-  const find = (repo: Repo) => (url: AutomergeUrl) => (finds.push(url), repo.find(url));
+  const find = (repo: Repo) => (url: AutomergeUrl) => {
+    finds.push(url);
+    return unreadable?.(url) ? Promise.reject(new Error("unavailable")) : repo.find(url);
+  };
   const handle = createManifestHandler(() => Promise.resolve(f.repo), () => f.accounts, {
     post,
     find,
@@ -60,6 +63,22 @@ describe("createManifestHandler", () => {
     const fileFinds = finds.length;
     await handle({ type: "manifest", id: "4", path: `${prefixes[0]}/b.js` });
     expect(finds.length - fileFinds).toBeLessThanOrEqual(4); // a walk, no relisting
+  });
+
+  it("echoes the path it answers for", async () => {
+    const { handle, prefixes, posted } = await setup();
+    await handle({ type: "manifest", id: "1", path: `${prefixes[0]}/a.js` });
+    expect(posted[0].path).toBe(`${prefixes[0]}/a.js`);
+  });
+
+  it("doesn't remember a manifest that's missing files", async () => {
+    let bUrl = "";
+    const { handle, prefixes, posted, finds, pkgs } = await setup(1, (url) => url === bUrl);
+    bUrl = String((pkgs[0].doc() as Record<string, unknown>)["b.js"]);
+    await handle({ type: "manifest", id: "1", path: prefixes[0] });
+    expect(Object.keys(posted[0].manifest!.entries)).not.toContain("b.js");
+    await handle({ type: "manifest", id: "2", path: prefixes[0] });
+    expect(finds.filter((url) => url === bUrl)).toHaveLength(2);
   });
 
   it("posts an error for a path it can't list", async () => {

@@ -35,8 +35,11 @@ const isProtectedDoc = (documentId: DocumentId) =>
 export async function buildManifest(
   repo: Repo,
   path: string,
-  options: WalkOptions & { isProtected?: (documentId: DocumentId) => boolean }
-): Promise<Manifest | undefined> {
+  options: WalkOptions & {
+    findFile?: WalkOptions["find"];
+    isProtected?: (documentId: DocumentId) => boolean;
+  }
+): Promise<{ manifest: Manifest; missing: string[] } | undefined> {
   const listed = await listFiles(repo, path, options);
   if (!listed) return undefined;
   const { root, segments } = parsePath(listed.prefix);
@@ -45,7 +48,7 @@ export async function buildManifest(
   const isProtected = options.isProtected ?? isProtectedDoc;
 
   const entries: Record<string, IndexEntry> = {};
-  for await (const file of listed.files) {
+  for (const file of listed.files) {
     entries[file.tail] = {
       sha256: await contentHash(toBytes(file.content)),
       contentType: file.type,
@@ -54,7 +57,7 @@ export async function buildManifest(
         (throughPackages || !isProtected(file.documentId)),
     };
   }
-  return { prefix: listed.prefix, entries };
+  return { manifest: { prefix: listed.prefix, entries }, missing: listed.missing };
 }
 
 const REMEMBERED_MANIFESTS = 64;
@@ -72,12 +75,17 @@ export function createManifestHandler(
     post?: (answer: IndexAnswer) => Promise<boolean>;
     /** The walk's find, per request: one that waits for heads, in the worker. */
     find?: (repo: Repo) => WalkOptions["find"];
+    /** The listing's find for file docs, per build, with a budget of its own. */
+    findFile?: (repo: Repo) => WalkOptions["find"];
     log?: (...args: unknown[]) => void;
   } = {}
 ): (message: ManifestRequestMessage) => Promise<void> {
   const post = options.post ?? ((answer) => postIndexAnswer(answer));
   const remembered = new Map<string, Manifest>();
-  const building = new Map<string, Promise<Manifest | undefined>>();
+  const building = new Map<
+    string,
+    Promise<{ manifest: Manifest; missing: string[] } | undefined>
+  >();
 
   const manifestFor = async (path: string): Promise<Manifest> => {
     const repo = await getRepo();
@@ -94,24 +102,39 @@ export function createManifestHandler(
     }
     let build = building.get(prefix);
     if (!build) {
-      build = buildManifest(repo, prefix, walk).finally(() => building.delete(prefix));
+      build = buildManifest(repo, prefix, {
+        ...walk,
+        findFile: options.findFile?.(repo),
+      }).finally(() => building.delete(prefix));
       building.set(prefix, build);
     }
-    const manifest = await build;
-    if (!manifest) throw new Error(`couldn't list the files under ${prefix}`);
-    remembered.set(prefix, manifest);
+    const built = await build;
+    if (!built) throw new Error(`couldn't list the files under ${prefix}`);
+    // A partial manifest still checks what it lists, but isn't kept: the next
+    // request tries the missing files again.
+    if (built.missing.length) {
+      options.log?.(
+        `manifest for ${prefix} is missing ${built.missing.length} file(s); not keeping it`
+      );
+      return built.manifest;
+    }
+    remembered.set(prefix, built.manifest);
     if (remembered.size > REMEMBERED_MANIFESTS) {
       remembered.delete(remembered.keys().next().value!);
     }
-    return manifest;
+    return built.manifest;
   };
 
   return async ({ id, path }) => {
     let answer: IndexAnswer;
     try {
-      answer = { id, manifest: await manifestFor(path) };
+      answer = { id, path, manifest: await manifestFor(path) };
     } catch (error) {
-      answer = { id, error: error instanceof Error ? error.message : String(error) };
+      answer = {
+        id,
+        path,
+        error: error instanceof Error ? error.message : String(error),
+      };
     }
     options.log?.(`manifest ${id} for ${path}: ${answer.error ?? "built"}`);
     if (!(await post(answer))) {

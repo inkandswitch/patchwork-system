@@ -33,7 +33,7 @@ describe("buildManifest", () => {
   it("hashes each file as the service worker will", async () => {
     const { repo, a, accounts } = await fixture();
     const prefix = await pinnedPath(repo, livePath(a, ["Projects"]), { accounts });
-    const manifest = await buildManifest(repo, prefix!, { accounts });
+    const manifest = (await buildManifest(repo, prefix!, { accounts }))?.manifest;
     expect(manifest?.prefix).toBe(prefix);
     expect(manifest?.entries.note).toEqual({
       sha256: await contentHash(new TextEncoder().encode("héllo ✓")),
@@ -47,15 +47,15 @@ describe("buildManifest", () => {
     const isProtected = () => true;
     const projects = await pinnedPath(repo, livePath(a, ["Projects"]), { accounts });
     const pkg = await pinnedPath(repo, livePath(a, ["packages", "pkg"]), { accounts });
-    expect((await buildManifest(repo, projects!, { accounts, isProtected }))?.entries.note.store).toBe(false);
-    expect((await buildManifest(repo, pkg!, { accounts, isProtected }))?.entries["index.js"].store).toBe(true);
+    expect((await buildManifest(repo, projects!, { accounts, isProtected }))?.manifest.entries.note.store).toBe(false);
+    expect((await buildManifest(repo, pkg!, { accounts, isProtected }))?.manifest.entries["index.js"].store).toBe(true);
   });
 
   it("never stores under a share root", async () => {
     const { repo, accounts, projects } = await fixture();
     const share = `automerge:${projects.documentId}@${formatHeads(projects.heads())}`;
-    const manifest = await buildManifest(repo, share, { accounts });
-    expect(manifest?.entries.note.store).toBe(false);
+    const built = await buildManifest(repo, share, { accounts });
+    expect(built?.manifest.entries.note.store).toBe(false);
   });
 
   it("returns nothing for a live path", async () => {

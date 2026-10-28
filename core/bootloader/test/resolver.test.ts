@@ -108,6 +108,23 @@ describe("resolver: /@/ paths", () => {
   });
 });
 
+describe("resolver: accounts it doesn't know", () => {
+  it("a tab declines, so another tab or the worker is asked", async () => {
+    const { repo, a } = await fixture();
+    const tab = createResolver(() => Promise.resolve(repo), undefined, () => new Map(), {
+      declineUnknownAccounts: true,
+    });
+    expect(await tab.answer(pathRequest(livePath(a, ["Projects"])))).toBeUndefined();
+  });
+
+  it("the worker, asked last, answers 404", async () => {
+    const { repo, a } = await fixture();
+    const worker = createResolver(() => Promise.resolve(repo), undefined, () => new Map());
+    const reply = await worker.answer(pathRequest(livePath(a, ["Projects"])));
+    expect(inline(reply).status).toBe(404);
+  });
+});
+
 describe("resolver: legacy automerge URLs", () => {
   it("answers inline, leaving caching to the service worker", async () => {
     const { repo, resolver } = await fixture();

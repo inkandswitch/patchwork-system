@@ -237,7 +237,17 @@ export interface ManifestRequestMessage {
 }
 
 /** Automerge worker → service worker, as the body of a POST to INDEX_ANSWER_PATH. */
-export type IndexAnswer = { id: string; manifest?: Manifest; error?: string };
+export type IndexAnswer = {
+  id: string;
+  /**
+   * The path the request named. Requests are broadcast, so a page can send
+   * the worker a copy with the same id and another path; the service worker
+   * takes an answer only for the path it asked about.
+   */
+  path?: string;
+  manifest?: Manifest;
+  error?: string;
+};
 
 /** Tab → automerge worker: resolve paths under this account. */
 export interface RegisterAccountMessage {

@@ -54,21 +54,56 @@ export async function acceptIndexAnswer(
   return new Response(null, { status: 204, headers: { [ACCEPTED_HEADER]: "accepted" } });
 }
 
+/**
+ * The service worker's answer to a GET of INDEX_ANSWER_PATH: nothing to get, but the header says
+ * the request reached it rather than the network.
+ */
+export function indexChannelProbe(): Response {
+  return new Response(null, {
+    status: 405,
+    headers: { [ACCEPTED_HEADER]: "present", allow: "POST" },
+  });
+}
+
 const TRIES = 5;
 const RETRY_MS = 200;
 
+const pause = () => new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+
+// Fetchers whose requests have been seen to reach the service worker.
+const reachesServiceWorker = new WeakSet<typeof fetch>();
+
 /**
- * The automerge worker's side: POST an answer. A reply without the accepted header never reached
- * the service worker (Firefox sends a worker's first fetch straight to the network), so try
- * again a few times. False if it never got through.
+ * Whether this worker's fetches reach the service worker. Firefox sent a worker's first fetch
+ * straight to the network in the spike, and an answer that does that hands the origin server
+ * the account's file names; so probe with a GET that carries nothing first.
+ */
+async function probe(fetcher: typeof fetch): Promise<boolean> {
+  if (reachesServiceWorker.has(fetcher)) return true;
+  for (let i = 0; i < TRIES; i++) {
+    if (i) await pause();
+    const response = await fetcher(INDEX_ANSWER_PATH).catch(() => undefined);
+    if (response?.headers.get(ACCEPTED_HEADER) === "present") {
+      reachesServiceWorker.add(fetcher);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The automerge worker's side: POST an answer, once a probe says this worker's fetches reach the
+ * service worker. A reply without the accepted header didn't get there, so try again a few
+ * times. False if it never got through.
  */
 export async function postIndexAnswer(
   answer: IndexAnswer,
   fetcher: typeof fetch = fetch
 ): Promise<boolean> {
+  if (!(await probe(fetcher))) return false;
   const body = JSON.stringify(answer);
   for (let i = 0; i < TRIES; i++) {
-    if (i) await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
+    if (i) await pause();
     const response = await fetcher(INDEX_ANSWER_PATH, {
       method: "POST",
       headers: { "content-type": "application/json" },

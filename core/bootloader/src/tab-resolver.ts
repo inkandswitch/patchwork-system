@@ -28,7 +28,9 @@ const accounts = new Map<string, AutomergeUrl>();
  * they load stays in `repo`.
  */
 export function resolveHandoffsWith(repo: Repo): void {
-  resolver = createResolver(() => Promise.resolve(repo), undefined, () => accounts);
+  resolver = createResolver(() => Promise.resolve(repo), undefined, () => accounts, {
+    declineUnknownAccounts: true,
+  });
 }
 
 /**

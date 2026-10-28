@@ -4,12 +4,17 @@ import type { ContentStore } from "../src/content-store.js";
 import {
   PinnedAbort,
   handoffRequest,
+  manifestRequests,
   normalizePinned,
   servePinned,
   sharedManifests,
   type PinnedDeps,
 } from "../src/pinned.js";
-import type { IndexEntry, Manifest } from "../src/types.js";
+import type {
+  IndexEntry,
+  Manifest,
+  ManifestRequestMessage,
+} from "../src/types.js";
 
 const keysOf = (path: string) => normalizePinned(path)!.keys;
 
@@ -251,5 +256,50 @@ describe("handoffRequest", () => {
     const m = handoffRequest(new Request("https://p.test/automerge%3Aabc/x.js"), "patchwork", special);
     expect(m.request.handoffURL).toBe(special.href);
     expect(m.request.path).toBeUndefined();
+  });
+});
+
+describe("manifestRequests", () => {
+  const manifest: Manifest = { prefix: "acct@h/p@h", entries: {} };
+  const make = (timeouts = { timeoutMs: 1000, quickTimeoutMs: 20 }) => {
+    const sent: ManifestRequestMessage[] = [];
+    const requests = manifestRequests({
+      send: (message) => sent.push(message),
+      ...timeouts,
+      quietMs: 60_000,
+      onTimeout: () => {},
+    });
+    return { sent, requests };
+  };
+
+  it("ignores an answer for a different path and keeps waiting", async () => {
+    const { sent, requests } = make();
+    const pending = requests.request("acct@h/p@h/a.js");
+    requests.settle({ id: sent[0].id, path: "garbage", error: "unparseable" });
+    expect(requests.has(sent[0].id)).toBe(true);
+    requests.settle({ id: sent[0].id, path: sent[0].path, manifest });
+    expect(await pending).toEqual(manifest);
+  });
+
+  it("gives up quickly after a timeout, until the worker answers again", async () => {
+    const { sent, requests } = make({ timeoutMs: 150, quickTimeoutMs: 10 });
+    const elapsed = async (path: string) => {
+      const start = performance.now();
+      await requests.request(path);
+      return performance.now() - start;
+    };
+    expect(await elapsed("acct@h/p@h/a.js")).toBeGreaterThanOrEqual(140);
+    expect(await elapsed("acct@h/p@h/b.js")).toBeLessThan(100);
+    const answered = requests.request("acct@h/p@h/c.js");
+    const last = sent.at(-1)!;
+    requests.settle({ id: last.id, path: last.path, manifest });
+    await answered;
+    expect(await elapsed("acct@h/p@h/d.js")).toBeGreaterThanOrEqual(140);
+  });
+
+  it("lists what's pending, for re-sending to a restarted worker", () => {
+    const { sent, requests } = make();
+    void requests.request("acct@h/p@h/a.js");
+    expect(requests.pending()).toEqual(sent);
   });
 });

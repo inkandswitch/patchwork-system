@@ -21,10 +21,11 @@ import {
   cacheStore,
   contentCacheName,
 } from "./content-store.js";
-import { acceptIndexAnswer } from "./index-channel.js";
+import { acceptIndexAnswer, indexChannelProbe } from "./index-channel.js";
 import {
   PinnedAbort,
   handoffRequest,
+  manifestRequests,
   normalizePinned,
   servePinned,
   sharedManifests,
@@ -201,7 +202,7 @@ handoffChannel.addEventListener("message", (event) => {
   // requests that raced its boot aren't stranded.
   const stranded = [
     ...[...pendingHandoffs.values()].map(({ message }) => message),
-    ...[...pendingManifests.values()].map(({ message }) => message),
+    ...manifestRequestsInFlight.pending(),
   ];
   if (stranded.length === 0) return;
   lifecycle(
@@ -221,51 +222,36 @@ const contentIndex = new Map<string, IndexEntry>();
 
 // The automerge worker answers within its own 10s; past that, serve unchecked.
 const MANIFEST_TIMEOUT_MS = 10_000;
+// After one goes unanswered, how long later requests wait, and for how long.
+const MANIFEST_QUICK_TIMEOUT_MS = 250;
+const MANIFEST_QUIET_MS = 60_000;
 
-type PendingManifest = {
-  message: ManifestRequestMessage;
-  settle: (manifest: Manifest | undefined) => void;
-};
-
-const pendingManifests = new Map<string, PendingManifest>();
-
-function requestManifest(path: string): Promise<Manifest | undefined> {
-  const message: ManifestRequestMessage = {
-    type: "manifest",
-    id: crypto.randomUUID(),
-    path,
-  };
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      lifecycle(
-        "warn",
-        `no manifest for /@/${path} after ${MANIFEST_TIMEOUT_MS}ms; serving it unchecked`
-      );
-      settle(undefined);
-    }, MANIFEST_TIMEOUT_MS);
-    const settle = (manifest: Manifest | undefined) => {
-      clearTimeout(timer);
-      pendingManifests.delete(message.id);
-      resolve(manifest);
-    };
-    pendingManifests.set(message.id, { message, settle });
+const manifestRequestsInFlight = manifestRequests({
+  send(message) {
     handoffChannel.postMessage(message);
     void startWorkerIfMissing(message.id);
-  });
-}
+  },
+  timeoutMs: MANIFEST_TIMEOUT_MS,
+  quickTimeoutMs: MANIFEST_QUICK_TIMEOUT_MS,
+  quietMs: MANIFEST_QUIET_MS,
+  onTimeout(path) {
+    lifecycle(
+      "warn",
+      `no manifest for /@/${path} after ${MANIFEST_TIMEOUT_MS}ms; serving /@/ unchecked, and waiting only ${MANIFEST_QUICK_TIMEOUT_MS}ms for manifests, for ${MANIFEST_QUIET_MS / 1000}s or until the automerge worker answers`
+    );
+  },
+});
 
 const manifests = sharedManifests(
-  requestManifest,
+  (path) => manifestRequestsInFlight.request(path),
   (key) => normalizePinned(key)?.prefix ?? key
 );
 
 function settleIndexAnswer(answer: IndexAnswer) {
-  const pending = pendingManifests.get(answer.id);
-  if (!pending) return log(`no pending manifest for id ${answer.id}`);
-  if (answer.error) {
-    log(`no manifest for /@/${pending.message.path}: ${answer.error}`);
+  if (answer.error) log(`no manifest for /@/${answer.path}: ${answer.error}`);
+  if (!manifestRequestsInFlight.settle(answer)) {
+    log(`no pending manifest ${answer.id} for /@/${answer.path}`);
   }
-  pending.settle(answer.manifest);
 }
 
 async function answerIndex(fetchEvent: FetchEvent): Promise<Response> {
@@ -304,7 +290,7 @@ async function startWorkerIfMissing(id: string) {
   if (!navigator.locks) return;
   if (await automergeWorkerExists()) return;
   await new Promise((resolve) => setTimeout(resolve, MISSING_WORKER_GRACE_MS));
-  if (!pendingHandoffs.has(id) && !pendingManifests.has(id)) return;
+  if (!pendingHandoffs.has(id) && !manifestRequestsInFlight.has(id)) return;
   if (await automergeWorkerExists()) return;
   // Check and claim the throttle with no await in between: every handoff that
   // raced the same cold start comes through here at once, and would all pass a
@@ -564,9 +550,16 @@ async function serveHandoff(
     log(`serving handed-off response for ${handoffURL}`, reply);
     const response = inlineResponse(reply.response);
     // Resolvers hand everything back inline; what's immutable is kept here,
-    // by URL, as legacy URLs always were.
+    // under the request, as resolvers used to keep it. Not cachePage: a
+    // navigation to a document in a doc must not replace the app shell's
+    // offline copy at / and /index.html.
     if (isImmutable(response)) {
-      cacheInBackground(fetchEvent, cache, fetchEvent.request, response.clone());
+      const copy = response.clone();
+      fetchEvent.waitUntil(
+        cache.put(fetchEvent.request, copy).catch((error) => {
+          console.warn(`error caching ${handoffURL} in ${cachename}`, error);
+        })
+      );
     }
     return response;
   }
@@ -751,9 +744,7 @@ self.addEventListener("fetch", (fetchEvent: FetchEvent) => {
 
   if (ours && url.pathname === INDEX_ANSWER_PATH) {
     fetchEvent.respondWith(
-      request.method === "POST"
-        ? answerIndex(fetchEvent)
-        : new Response(null, { status: 405 })
+      request.method === "POST" ? answerIndex(fetchEvent) : indexChannelProbe()
     );
     return;
   }
