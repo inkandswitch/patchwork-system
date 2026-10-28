@@ -206,3 +206,32 @@ export type IndexEntry = { sha256: string; contentType: string; store: boolean }
  * below it ("" for the document itself).
  */
 export type Manifest = { prefix: string; entries: Record<string, IndexEntry> };
+
+/**
+ * Where the automerge worker's script is served. The vite plugin keeps this name from one build
+ * to the next (it's started by URL), and the service worker trusts index answers only from a
+ * SharedWorker running it.
+ */
+export const AUTOMERGE_WORKER_PATH = "/automerge-protocol-handler-worker.js";
+
+/**
+ * Where the automerge worker POSTs its answers to the service worker. Under the reserved `/@/`
+ * prefix, and `.` isn't base58, so no account path can collide with it.
+ */
+export const INDEX_ANSWER_PATH = "/@/.index";
+
+/** Service worker → automerge worker, on HANDOFF_CHANNEL: build the manifest covering `path`. */
+export interface ManifestRequestMessage {
+  type: "manifest";
+  id: string;
+  path: string;
+}
+
+/** Automerge worker → service worker, as the body of a POST to INDEX_ANSWER_PATH. */
+export type IndexAnswer = { id: string; manifest?: Manifest; error?: string };
+
+/** Tab → automerge worker: resolve paths under this account. */
+export interface RegisterAccountMessage {
+  type: "register-account";
+  url: string;
+}

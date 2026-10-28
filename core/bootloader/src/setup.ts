@@ -1,7 +1,8 @@
-import type {
-  NewBuildInfo,
-  SetupServiceWorkerOptions,
-  SetupServiceWorkerResult,
+import {
+  AUTOMERGE_WORKER_PATH,
+  type NewBuildInfo,
+  type SetupServiceWorkerOptions,
+  type SetupServiceWorkerResult,
 } from "./types.js";
 import { buildId, isNewerBuild } from "./build-id.js";
 import { promptForNewBuild } from "./new-build-prompt.js";
@@ -107,8 +108,7 @@ function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
 // port closes, or when the Web Lock it holds for its lifetime is released (see
 // AUTOMERGE_WORKER_LOCK).
 
-let automergeProtocolHandlerWorkerPath =
-  "/automerge-protocol-handler-worker.js";
+let automergeProtocolHandlerWorkerPath = AUTOMERGE_WORKER_PATH;
 
 const automergeProtocolHandlerWorker = sharedWorkerHandle(
   "patchwork-automerge-protocol-handler",
