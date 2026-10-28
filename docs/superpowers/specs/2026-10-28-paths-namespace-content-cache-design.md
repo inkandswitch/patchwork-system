@@ -287,7 +287,11 @@ change between two reads. `sites/bench` gets a case measuring it.
   and reply first with a forged response. That is a hole in the current code
   as well. Index answers must arrive from a `Client` whose `type` is
   `sharedworker` and whose `url` is the automerge worker's script URL, which
-  the service worker knows at build time.
+  the service worker knows at build time. That URL is fixed, not hashed:
+  `/automerge-protocol-handler-worker.js`, the name the vite plugin keeps from
+  one build to the next. A site that sets its own `workerPath` has its
+  answers refused, so everything under `/@/` is served inline and nothing is
+  stored.
   - The worker sends answers as `fetch()` requests to a reserved path. The
     service worker looks up `event.clientId` with `clients.get` and checks
     the client. This is the only reply path that works in all three engines
@@ -323,6 +327,15 @@ These replace the deleted `package-load-gate.md` note.
   revisit when keyhive protects its keys at rest.
 - Nothing cleans up the content store. Deduplication slows growth, and the
   existing quota warning still fires.
+- The index lives only in service worker memory, so after a browser restart
+  every package needs a fresh manifest, and building one loads and hashes
+  every file document in the package. The URL-keyed cache this replaces
+  served package code at boot without loading any document. The automerge
+  worker remembers 64 manifests, which covers service worker restarts within
+  a session but not a cold start. Persisting manifests would fix it, but
+  anything stored on the origin can be written by package code. `sites/bench`'s
+  `content-hash.spec` measures the per-hit hashing; the cold-start cost isn't
+  measured yet.
 
 ## Spikes before planning
 
