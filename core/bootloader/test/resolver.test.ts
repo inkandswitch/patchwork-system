@@ -159,6 +159,39 @@ describe("resolver: /@/ paths", () => {
   });
 });
 
+describe("resolver: folder packages", () => {
+  async function folderPackage() {
+    const f = await fixture();
+    const x = f.repo.create({ "@patchwork": { type: "file" }, content: "x", mimeType: "text/plain" });
+    const sub = folder(f.repo, { "x.js": x.url });
+    const pkg = folder(f.repo, {
+      "package.json": file(f.repo, '{"main":"index.js"}'),
+      sub: sub.url,
+    });
+    const packages = folder(f.repo, { fpkg: pkg.url });
+    f.account.change((d: any) => (d.namespace["/packages"] = [{ url: packages.url }]));
+    return { ...f, x };
+  }
+
+  it("redirects a live path to a folder with the folder's whole list", async () => {
+    const { a, resolver } = await folderPackage();
+    const reply = await resolver.answer(pathRequest(livePath(a, ["packages", "fpkg"])));
+    expect(inline(reply).status).toBe(307);
+    const list = parseFileList(inline(reply).body as Uint8Array)!;
+    expect(Object.keys(list.files)).toEqual(expect.arrayContaining(["package.json", "sub/x.js"]));
+  });
+
+  it("reads at heads through a folder reached by name", async () => {
+    const { repo, a, accounts, resolver, x } = await folderPackage();
+    const prefix = await chain(repo, livePath(a, ["packages", "fpkg"]), accounts);
+    const heads = formatHeads(x.heads());
+    x.change((d: any) => (d.content = "changed"));
+    const reply = await resolver.answer(withRequest(`${prefix}/sub/x.js`, { heads }));
+    expect(inline(reply).status).toBe(200);
+    expect(body(reply)).toBe("x");
+  });
+});
+
 describe("resolver: accounts it doesn't know", () => {
   it("a tab declines, so another tab or the worker is asked", async () => {
     const { repo, a } = await fixture();

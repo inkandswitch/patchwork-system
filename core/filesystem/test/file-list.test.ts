@@ -4,7 +4,7 @@ import { formatHeads, livePath, parseHeads } from "../src/paths.js";
 import { IncompleteFileListError, pinnedPath, readPath } from "../src/walk.js";
 import { contentHash, toBytes } from "../src/content-hash.js";
 import { buildFileList, canonicalJson, parseFileList } from "../src/file-list.js";
-import { chain, fixture } from "./namespace-fixture.js";
+import { chain, file, fixture, folder } from "./namespace-fixture.js";
 
 const decode = (content: string | Uint8Array) =>
   typeof content === "string" ? content : new TextDecoder().decode(content);
@@ -92,5 +92,61 @@ describe("pinnedPath", () => {
     const pinning = pinnedPath(repo, livePath(a, ["packages", "foo"]), { accounts, find });
     await expect(pinning).rejects.toBeInstanceOf(IncompleteFileListError);
     await expect(pinning).rejects.toMatchObject({ missing: ["package.json"] });
+  });
+});
+
+describe("package lists", () => {
+  /** A folder package under /packages: package.json, index.js, and sub/x.js. */
+  async function folderPackage() {
+    const f = await fixture();
+    const x = file(f.repo, "x");
+    const sub = folder(f.repo, { "x.js": x.url });
+    const pkg = folder(f.repo, {
+      "package.json": file(f.repo, '{"main":"index.js"}').url,
+      "index.js": file(f.repo, "export * from './sub/x.js'").url,
+      sub: sub.url,
+    });
+    f.mine.change((d: any) => d.docs.push({ name: "fpkg", type: "folder", url: pkg.url }));
+    const prefix = await chain(f.repo, livePath(f.a, ["packages", "fpkg"]), f.accounts);
+    return { ...f, x, sub, pkg, prefix: prefix! };
+  }
+
+  it("lists a package's nested folders deep", async () => {
+    const { repo, accounts, prefix } = await folderPackage();
+    const built = await buildFileList(repo, prefix, { accounts });
+    expect(Object.keys(built!.list.files)).toEqual(
+      expect.arrayContaining(["package.json", "index.js", "sub/x.js"])
+    );
+  });
+
+  it("lists a user folder shallow", async () => {
+    const { repo, a, accounts, foo } = await fixture();
+    const sub = folder(repo, { inner: file(repo, "inner").url });
+    foo.change((d: any) => d.docs.push({ name: "sub", type: "folder", url: sub.url }));
+    const prefix = await chain(repo, livePath(a, ["Projects", "foo"]), accounts);
+    const built = await buildFileList(repo, prefix!, { accounts });
+    expect(Object.keys(built!.list.files).some((tail) => tail.startsWith("sub/"))).toBe(false);
+  });
+
+  it("reads a nested file at its recorded heads", async () => {
+    const { repo, accounts, prefix, x } = await folderPackage();
+    const built = await buildFileList(repo, prefix, { accounts });
+    const entry = built!.list.files["sub/x.js"];
+    x.change((d: any) => (d.content = "changed"));
+    const then = await readPath(repo, `${prefix}/sub/x.js`, {
+      accounts,
+      heads: parseHeads(entry.heads!),
+    });
+    expect(decode(then!.content)).toBe("x");
+  });
+
+  it("pins a live path to a folder with the folder's whole list", async () => {
+    const { repo, a, accounts } = await folderPackage();
+    const pinned = await pinnedPath(repo, livePath(a, ["packages", "fpkg"]), {
+      accounts,
+      only: "end",
+    });
+    const list = parseFileList(pinned!.list!)!;
+    expect(Object.keys(list.files)).toEqual(expect.arrayContaining(["package.json", "sub/x.js"]));
   });
 });

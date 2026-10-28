@@ -222,7 +222,9 @@ export function waitingFind(
  * - A live path, or a pinned-looking one that isn't canonical: a 307 to its pinned form, whose
  *   list covers just the file asked for; the body is that list, for the service worker to check
  *   and keep.
- * - A canonical pinned path: the bytes, read at `heads` if given (what its file list recorded).
+ * - With `heads`: the file the path names, read at those heads (what its file list recorded),
+ *   whether or not the path is canonical.
+ * - A canonical pinned path: the bytes.
  * - One that doesn't resolve: 404.
  *
  * Pinned heads that never arrive throw {@link AbortHandoff}.
@@ -265,6 +267,19 @@ async function resolveWalkPath(
     });
   }
 
+  if (heads) {
+    // A file a list recorded, read at the heads it recorded. A file in a
+    // package's nested folder is reached by name, through a link without
+    // heads, so the path needn't be canonical; the service worker checks the
+    // bytes against the list either way.
+    const read = await readPath(repo, path, { ...options, heads: parseHeads(heads) });
+    if (!read) return notFound();
+    return new Response(toBytes(read.content) as BlobPart, {
+      status: 200,
+      headers: { "content-type": read.type },
+    });
+  }
+
   const end = await walkPath(repo, path, options);
   if (!end) return notFound();
   if (!end.canonical) {
@@ -287,9 +302,7 @@ async function resolveWalkPath(
     });
   }
 
-  const read = heads
-    ? await readPath(repo, path, { ...options, heads: parseHeads(heads) })
-    : await readNode(repo, end.node);
+  const read = await readNode(repo, end.node);
   if (!read) return notFound();
   return new Response(toBytes(read.content) as BlobPart, {
     status: 200,

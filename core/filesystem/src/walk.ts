@@ -19,6 +19,7 @@ import {
   type Child,
   type Lookup,
   directoryProvider,
+  folderProvider,
   type PathProvider,
   accountProvider,
   branchesProvider,
@@ -351,9 +352,12 @@ export async function pinnedPath(
   const end = await walkPath(repo, path, options);
   if (!end) return undefined;
   if (!end.container) return { path: end.pinned };
+  // A path that ends at a container lists the whole container; one that ends
+  // at a file, just that file.
+  const atContainer = end.tail === "" && end.atDocument;
   const built = await buildFileList(repo, end.container.pinned, {
     ...options,
-    only: options.only === "end" ? [end.tail] : undefined,
+    only: options.only === "end" && !atContainer ? [end.tail] : undefined,
   });
   if (!built) return { path: end.pinned };
   if (built.missing.length) throw new IncompleteFileListError(built.missing);
@@ -485,20 +489,33 @@ const LIST_CONCURRENCY = 8;
 export async function listFiles(
   repo: Repo,
   path: string,
-  options: WalkOptions & { findFile?: WalkOptions["find"]; only?: string[] }
+  options: WalkOptions & {
+    findFile?: WalkOptions["find"];
+    only?: string[];
+    /** List into nested folders. Default: when the container has a `package.json`. */
+    deep?: boolean;
+  }
 ): Promise<{ prefix: string; files: ListedFile[]; missing: string[] } | undefined> {
   const end = await walkPath(repo, path, options);
   if (!end?.canonical || !end.container) return undefined;
   const find =
     options.findFile ?? options.find ?? ((url: AutomergeUrl) => repo.find(url));
   const root = end.container.handle.doc();
-  const provider = providerFor(root);
-  const documentId = end.container.handle.documentId;
+  const rootProvider = providerFor(root);
+  const rootId = end.container.handle.documentId;
+  // A package's relative imports reach into its nested folders by name, so a
+  // package lists everything under it. Anything else lists its own files.
+  const deep =
+    options.deep ??
+    (rootProvider?.list(root) ?? []).some((child) => child.name === "package.json");
 
   const found = new Map<string, { keys: number[]; file: ListedFile }>();
   const missing: string[] = [];
   const tailOf = (parts: string[]) => parts.map(encodeURIComponent).join("/");
   const wanted = (parts: string[]) => !options.only || options.only.includes(tailOf(parts));
+  // A folder is worth entering if anything wanted could be under it.
+  const wantedBelow = (parts: string[]) =>
+    !options.only || options.only.some((tail) => tail.startsWith(`${tailOf(parts)}/`));
   const add = async (
     parts: string[],
     keys: number[],
@@ -521,7 +538,14 @@ export async function listFiles(
 
   // Values are read in place; links are gathered and read below.
   const links: { parts: string[]; keys: number[]; link: AutomergeUrl }[] = [];
-  const visit = async (node: unknown, parts: string[], keys: number[]) => {
+  const entered = new Set<string>([rootId]);
+  const visit = async (
+    node: unknown,
+    provider: PathProvider | undefined,
+    holder: DocumentId,
+    parts: string[],
+    keys: number[]
+  ) => {
     for (const child of provider?.list(node) ?? []) {
       // Only a directory's keys span several path segments; a folder entry's name is one.
       const names =
@@ -529,18 +553,21 @@ export async function listFiles(
       const childParts = [...parts, ...names];
       const childKeys = [...keys, names.length];
       if ("value" in child) {
-        await add(childParts, childKeys, child.value, documentId);
+        await add(childParts, childKeys, child.value, holder);
         // Nested values are addressable by path only inside a directory doc.
         if (provider === directoryProvider && isNested(child.value)) {
-          await visit(child.value, childParts, childKeys);
+          await visit(child.value, provider, holder, childParts, childKeys);
         }
-      } else if ("link" in child && wanted(childParts)) {
+      } else if (
+        "link" in child &&
+        (wanted(childParts) || (deep && wantedBelow(childParts)))
+      ) {
         links.push({ parts: childParts, keys: childKeys, link: child.link });
       }
     }
   };
-  await add([], [], root, documentId);
-  await visit(root, [], []);
+  await add([], [], root, rootId);
+  await visit(root, rootProvider, rootId, [], []);
 
   let next = 0;
   const readLinks = async () => {
@@ -554,8 +581,20 @@ export async function listFiles(
         );
         const heads = parsed.heads ?? live.heads();
         const doc = live.view(heads).doc();
-        if (doc === undefined || providerFor(doc)) continue;
-        await add(parts, keys, doc, parsed.documentId, heads);
+        if (doc === undefined) continue;
+        const provider = providerFor(doc);
+        if (!provider) {
+          await add(parts, keys, doc, parsed.documentId, heads);
+        } else if (
+          deep &&
+          (provider === folderProvider || provider === directoryProvider) &&
+          !entered.has(parsed.documentId)
+        ) {
+          // Into a nested folder, by name: its files are under its name here.
+          entered.add(parsed.documentId);
+          await add(parts, keys, doc, parsed.documentId, heads);
+          await visit(doc, provider, parsed.documentId, parts, keys);
+        }
       } catch {
         missing.push(tailOf(parts));
       }
