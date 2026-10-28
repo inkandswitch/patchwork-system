@@ -1,4 +1,7 @@
+export * from "./content-hash.js";
+export * from "./file-list.js";
 export * from "./find-handle.js";
+export * from "./keyhive.js";
 export * from "./metadata.js";
 export * from "./module-watcher.js";
 export * from "./package-tracker.js";

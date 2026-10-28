@@ -13,7 +13,7 @@ import {
   type WalkOptions,
 } from "@inkandswitch/patchwork-filesystem";
 import { isKeyhiveDoc } from "@inkandswitch/patchwork-plugins";
-import { contentHash, toBytes } from "./content-hash.js";
+import { contentHash, toBytes } from "@inkandswitch/patchwork-filesystem";
 import { postIndexAnswer } from "./index-channel.js";
 import type {
   IndexAnswer,

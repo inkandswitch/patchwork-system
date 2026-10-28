@@ -1,6 +1,7 @@
 // A small account to walk: / is a folder of Projects, /packages a union of two folders.
 import { Repo, type AutomergeUrl, type DocHandle } from "@automerge/automerge-repo";
 import { docStep, idhash } from "../src/paths.js";
+import { walkPath } from "../src/walk.js";
 
 export const step = async (handle: DocHandle<unknown>) =>
   docStep(await idhash(handle.documentId), handle.heads());
@@ -70,3 +71,10 @@ export async function fixture() {
 }
 
 export const text = (handle: DocHandle<any> | undefined) => handle?.doc()?.content;
+
+/** A path's chain of doc steps, without file lists: what the walk writes. */
+export const chain = async (
+  repo: Repo,
+  path: string,
+  accounts: ReadonlyMap<string, AutomergeUrl>
+) => (await walkPath(repo, path, { accounts }))?.pinned;

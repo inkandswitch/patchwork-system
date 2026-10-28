@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { cacheStore } from "../src/content-store.js";
-import { contentHash, toBytes } from "../src/content-hash.js";
+import { contentHash, toBytes } from "@inkandswitch/patchwork-filesystem";
 
 /** Enough of Cache for the store: put, match and delete by url. */
 export class FakeCache {

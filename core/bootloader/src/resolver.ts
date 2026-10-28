@@ -24,7 +24,7 @@ import {
   walkPath,
   type WalkOptions,
 } from "@inkandswitch/patchwork-filesystem";
-import { toBytes } from "./content-hash.js";
+import { toBytes } from "@inkandswitch/patchwork-filesystem";
 
 import type {
   HandoffReplyMessage,

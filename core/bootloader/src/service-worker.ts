@@ -15,7 +15,7 @@ import {
   type ResolveAcceptedMessage,
   type ResolveRequestMessage,
 } from "./types.js";
-import { contentHash, toBytes } from "./content-hash.js";
+import { contentHash, toBytes } from "@inkandswitch/patchwork-filesystem";
 import {
   CONTENT_CACHE_PREFIX,
   cacheStore,

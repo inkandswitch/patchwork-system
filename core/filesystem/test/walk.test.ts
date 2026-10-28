@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { Repo, type AutomergeUrl } from "@automerge/automerge-repo";
 import { docStep, idhash, livePath } from "../src/paths.js";
-import { file, fixture, step, text } from "./namespace-fixture.js";
+import { chain, file, fixture, step, text } from "./namespace-fixture.js";
+import { contentHash } from "../src/content-hash.js";
 import {
   listChildren,
   listUnion,
@@ -44,7 +45,7 @@ describe("resolveLivePath", () => {
 
   it("a pinned path keeps resolving to the same version after a rename", async () => {
     const { repo, a, accounts, projects, foo } = await fixture();
-    const pinned = await pinnedPath(repo, livePath(a, ["Projects", "foo"]), { accounts });
+    const pinned = await chain(repo, livePath(a, ["Projects", "foo"]), accounts);
     const before = foo.heads();
 
     projects.change((d: any) => (d.docs[0].name = "bar"));
@@ -182,26 +183,33 @@ describe("resolveLivePath", () => {
 });
 
 describe("pinnedPath", () => {
-  it("pins every container the walk enters, and keeps the tail after the last one as names", async () => {
+  const listHashOf = async (list: Uint8Array | undefined) => contentHash(list!);
+
+  it("pins every container the walk enters, lists the last, and keeps the tail as names", async () => {
     const { repo, a, accounts, account, mine, minePkg } = await fixture();
     const pinned = await pinnedPath(
       repo,
       livePath(a, ["packages", "foo", "dist", "index.js"]),
       { accounts }
     );
-    expect(pinned).toBe(
-      `${docStep(a, account.heads())}/packages/${await step(mine)}/${await step(minePkg)}/dist/index.js`
+    const listed = docStep(
+      await idhash(minePkg.documentId),
+      minePkg.heads(),
+      await listHashOf(pinned?.list)
     );
-    const index = await resolveLivePath(repo, pinned!, { accounts });
+    expect(pinned?.path).toBe(
+      `${docStep(a, account.heads())}/packages/${await step(mine)}/${listed}/dist/index.js`
+    );
+    const index = await resolveLivePath(repo, pinned!.path, { accounts });
     expect(text(index)).toBe("mine");
   });
 
   it("writes the / binding as a doc step with no name", async () => {
     const { repo, a, accounts, account, root, projects, foo } = await fixture();
-    expect(
-      await pinnedPath(repo, livePath(a, ["Projects", "foo"]), { accounts })
-    ).toBe(
-      [docStep(a, account.heads()), await step(root), await step(projects), await step(foo)].join("/")
+    const pinned = await pinnedPath(repo, livePath(a, ["Projects", "foo"]), { accounts });
+    const listed = docStep(await idhash(foo.documentId), foo.heads(), await listHashOf(pinned?.list));
+    expect(pinned?.path).toBe(
+      [docStep(a, account.heads()), await step(root), await step(projects), listed].join("/")
     );
   });
 
@@ -212,10 +220,15 @@ describe("pinnedPath", () => {
       livePath(a, ["packages", "branchy", "dist", "index.js"]),
       { accounts }
     );
-    expect(pinned).toBe(
-      `${docStep(a, account.heads())}/packages/${await step(team)}/${await step(branchy)}/${await step(branchyPkg)}/dist/index.js`
+    const listed = docStep(
+      await idhash(branchyPkg.documentId),
+      branchyPkg.heads(),
+      await listHashOf(pinned?.list)
     );
-    expect(text(await resolveLivePath(repo, pinned!, { accounts }))).toBe("branchy");
+    expect(pinned?.path).toBe(
+      `${docStep(a, account.heads())}/packages/${await step(team)}/${await step(branchy)}/${listed}/dist/index.js`
+    );
+    expect(text(await resolveLivePath(repo, pinned!.path, { accounts }))).toBe("branchy");
     // a path that ends at a branches doc stands for its default branch
     const end = await resolveLivePath(repo, livePath(a, ["packages", "branchy"]), { accounts });
     expect(end?.url).toBe(branchyPkg.url);
@@ -228,26 +241,7 @@ describe("pinnedPath", () => {
       livePath(a, ["packages", "bar", "dist", "index.js"]),
       { accounts }
     );
-    expect(await pinnedPath(repo, pinned!, { accounts })).toBe(pinned);
-  });
-});
-
-describe("file list hashes in a walk", () => {
-  it("keeps a container's list hash and says which tail follows it", async () => {
-    const { repo, a, accounts } = await fixture();
-    const pinned = await pinnedPath(repo, livePath(a, ["packages", "foo"]), { accounts });
-    const end = await walkPath(repo, `${pinned}~L/dist/index.js`, { accounts });
-    expect(end?.container?.listHash).toBe("L");
-    expect(end?.container?.pinned).toBe(pinned);
-    expect(end?.tail).toBe("dist/index.js");
-    expect(end?.pinned).toBe(`${pinned}~L/dist/index.js`);
-    expect(end?.canonical).toBe(true);
-  });
-
-  it("says the tail is empty at the container itself", async () => {
-    const { repo, a, accounts } = await fixture();
-    const end = await walkPath(repo, livePath(a, ["packages", "foo"]), { accounts });
-    expect(end?.tail).toBe("");
+    expect((await pinnedPath(repo, pinned!.path, { accounts }))?.path).toBe(pinned?.path);
   });
 });
 
@@ -256,8 +250,8 @@ describe("pinPath", () => {
     vi.stubGlobal("location", { origin: "https://patchwork.test" });
     const { repo, a, accounts } = await fixture();
     const pinned = await pinnedPath(repo, livePath(a, ["Projects"]), { accounts });
-    expect(await pinPath(repo, livePath(a, ["Projects"]), { accounts })).toBe(
-      `https://patchwork.test/@/${pinned}`
+    expect((await pinPath(repo, livePath(a, ["Projects"]), { accounts }))?.url).toBe(
+      `https://patchwork.test/@/${pinned?.path}`
     );
   });
 });

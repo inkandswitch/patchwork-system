@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { contentHash, toBytes } from "../src/content-hash.js";
+import { contentHash, toBytes } from "@inkandswitch/patchwork-filesystem";
 import type { ContentStore } from "../src/content-store.js";
 import {
   PinnedAbort,

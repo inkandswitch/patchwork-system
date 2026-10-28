@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { Repo, type AutomergeUrl } from "@automerge/automerge-repo";
 import { formatHeads, idhash, livePath, pinnedPath } from "@inkandswitch/patchwork-filesystem";
 import { buildManifest } from "../src/manifest.js";
-import { contentHash } from "../src/content-hash.js";
+import { contentHash } from "@inkandswitch/patchwork-filesystem";
 
 const file = (repo: Repo, content: string) =>
   repo.create({ "@patchwork": { type: "file" }, content, mimeType: "text/plain" }).url;

@@ -1,5 +1,6 @@
-// The one way content is hashed, by the automerge worker building a manifest and by the
-// service worker checking what it serves: SHA-256 over the bytes, base64url without padding.
+// The one way content is hashed, by whoever builds a file list and by the service worker
+// checking what it serves: SHA-256 over the bytes, base64url without padding. A file list's own
+// hash, the `~listHash` in a pinned path, is this too.
 
 /** Bytes as served: strings as UTF-8, which is what a Response body of a string sends. */
 export function toBytes(content: string | Uint8Array): Uint8Array {

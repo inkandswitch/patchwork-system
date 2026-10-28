@@ -25,6 +25,7 @@ import {
   defaultBranch,
   providerFor,
 } from "./providers.js";
+import { buildFileList } from "./file-list.js";
 import { readNode } from "./resolve.js";
 import { documentBaseOrigin } from "./urls.js";
 
@@ -320,22 +321,41 @@ export async function resolveLivePath(
   return repo.find(stringifyAutomergeUrl({ documentId: end.handle.documentId }));
 }
 
+/**
+ * The pinned form of a path, with a file list on the last container it enters: every file
+ * under that container, or with `only: "end"`, only the one the path ends at (what a live →
+ * pinned redirect hands out). Returns the path and the list's bytes, which whoever pins hands to
+ * the service worker. No list if the path enters no container.
+ */
 export async function pinnedPath(
   repo: Repo,
   path: string,
-  options: WalkOptions
-): Promise<string | undefined> {
-  return (await walkPath(repo, path, options))?.pinned;
+  options: WalkOptions & {
+    findFile?: WalkOptions["find"];
+    only?: "end";
+    isProtected?: (documentId: DocumentId) => boolean;
+  }
+): Promise<{ path: string; list?: Uint8Array } | undefined> {
+  const end = await walkPath(repo, path, options);
+  if (!end) return undefined;
+  if (!end.container) return { path: end.pinned };
+  const built = await buildFileList(repo, end.container.pinned, {
+    ...options,
+    only: options.only === "end" ? [end.tail] : undefined,
+  });
+  if (!built) return { path: end.pinned };
+  const listed = `${end.container.pinned}~${built.listHash}`;
+  return { path: end.tail ? `${listed}/${end.tail}` : listed, list: built.bytes };
 }
 
-/** The pinned service worker URL for a path, for fetching or importing. */
+/** The pinned service worker URL for a path, for fetching or importing, and its file list. */
 export async function pinPath(
   repo: Repo,
   path: string,
-  options: WalkOptions
-): Promise<string | undefined> {
+  options: Parameters<typeof pinnedPath>[2]
+): Promise<{ url: string; list?: Uint8Array } | undefined> {
   const pinned = await pinnedPath(repo, path, options);
-  return pinned && `${documentBaseOrigin()}/@/${pinned}`;
+  return pinned && { url: `${documentBaseOrigin()}/@/${pinned.path}`, list: pinned.list };
 }
 
 /** Every binding's children, concatenated in binding order. */
@@ -383,20 +403,41 @@ export async function listChildren(
 
 export type FileContent = { content: string | Uint8Array; type: string };
 
-/** What a path names, read: its pinned form, whether the input was canonical, and the bytes. */
+/**
+ * What a path names, read: its pinned form, whether the input was canonical, and the bytes.
+ * With `heads`, the document the path ends at is read at those heads instead: how a file is
+ * read at the heads its file list recorded, after it has changed.
+ */
 export async function readPath(
   repo: Repo,
   path: string,
-  options: WalkOptions
+  options: WalkOptions & { heads?: UrlHeads }
 ): Promise<(FileContent & { pinned: string; canonical: boolean }) | undefined> {
   const end = await walkPath(repo, path, options);
   if (!end) return undefined;
-  const read = await readNode(repo, end.node);
+  let node = end.node;
+  if (options.heads && end.atDocument) {
+    try {
+      const find = options.find ?? ((url: AutomergeUrl) => repo.find(url));
+      const bare = stringifyAutomergeUrl({ documentId: end.handle.documentId });
+      node = (await find(bare, options.heads)).view(options.heads).doc();
+    } catch {
+      return undefined;
+    }
+  }
+  const read = await readNode(repo, node);
   return read && { ...read, pinned: end.pinned, canonical: end.canonical };
 }
 
-/** A file under a pinned document, and the document that holds its bytes. */
-export type ListedFile = FileContent & { tail: string; documentId: DocumentId };
+/**
+ * A file under a pinned document, the document that holds its bytes, and the heads that
+ * document was read at if it was reached by a link.
+ */
+export type ListedFile = FileContent & {
+  tail: string;
+  documentId: DocumentId;
+  heads?: UrlHeads;
+};
 
 const isNested = (value: unknown): value is Record<string, unknown> =>
   !!value &&
@@ -431,7 +472,7 @@ const LIST_CONCURRENCY = 8;
 export async function listFiles(
   repo: Repo,
   path: string,
-  options: WalkOptions & { findFile?: WalkOptions["find"] }
+  options: WalkOptions & { findFile?: WalkOptions["find"]; only?: string[] }
 ): Promise<{ prefix: string; files: ListedFile[]; missing: string[] } | undefined> {
   const end = await walkPath(repo, path, options);
   if (!end?.canonical || !end.container) return undefined;
@@ -444,17 +485,25 @@ export async function listFiles(
   const found = new Map<string, { keys: number[]; file: ListedFile }>();
   const missing: string[] = [];
   const tailOf = (parts: string[]) => parts.map(encodeURIComponent).join("/");
+  const wanted = (parts: string[]) => !options.only || options.only.includes(tailOf(parts));
   const add = async (
     parts: string[],
     keys: number[],
     node: unknown,
-    holder: DocumentId
+    holder: DocumentId,
+    heads?: UrlHeads
   ) => {
+    if (!wanted(parts)) return;
     const tail = tailOf(parts);
     const existing = found.get(tail);
     if (existing && !walkPrefers(keys, existing.keys)) return;
     const read = await readNode(repo, node);
-    if (read) found.set(tail, { keys, file: { ...read, tail, documentId: holder } });
+    if (read) {
+      found.set(tail, {
+        keys,
+        file: { ...read, tail, documentId: holder, ...(heads ? { heads } : {}) },
+      });
+    }
   };
 
   // Values are read in place; links are gathered and read below.
@@ -472,7 +521,7 @@ export async function listFiles(
         if (provider === directoryProvider && isNested(child.value)) {
           await visit(child.value, childParts, childKeys);
         }
-      } else if ("link" in child) {
+      } else if ("link" in child && wanted(childParts)) {
         links.push({ parts: childParts, keys: childKeys, link: child.link });
       }
     }
@@ -490,9 +539,10 @@ export async function listFiles(
           stringifyAutomergeUrl({ documentId: parsed.documentId }),
           parsed.heads
         );
-        const doc = live.view(parsed.heads ?? live.heads()).doc();
+        const heads = parsed.heads ?? live.heads();
+        const doc = live.view(heads).doc();
         if (doc === undefined || providerFor(doc)) continue;
-        await add(parts, keys, doc, parsed.documentId);
+        await add(parts, keys, doc, parsed.documentId, heads);
       } catch {
         missing.push(tailOf(parts));
       }
