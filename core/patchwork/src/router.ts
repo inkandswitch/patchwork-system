@@ -77,10 +77,16 @@ export function createRouter({
     params.delete("path");
     window.location.hash = serializeHashParams(params);
   };
-  /** `doc=` says what is open; when `path=` names something else, `doc=` wins. */
+  /**
+   * `doc=` says what is open; when `path=` names something else, `doc=` wins.
+   * A path that doesn't resolve stays: it may name something not synced yet.
+   */
   const checkPath = async (docUrl: AutomergeUrl, path: string) => {
     const handle = await resolvePathParam(path);
-    if (!handle) return dropPath(path, "it names nothing");
+    if (!handle) {
+      console.warn(`patchwork: path=${path} doesn't resolve here (yet)`);
+      return;
+    }
     if (handle.documentId !== parseAutomergeUrl(docUrl).documentId) {
       dropPath(path, `it names ${handle.url}, not ${docUrl}`);
     }
@@ -163,10 +169,14 @@ export function createRouter({
       open(docUrl);
       if (path) void checkPath(docUrl, path);
     } else if (path) {
-      // Just a path: open what it names.
+      // Just a path: open what it names, unless the hash has moved on while
+      // it was walked. One that doesn't resolve is left in the address bar,
+      // to be fixed or retried.
       const handle = await resolvePathParam(path);
+      const now = parseHashParams(window.location.hash.slice(1));
+      if (now.get("path") !== path || now.get("doc")) return;
       if (handle) open(handle.url);
-      else dropPath(path, "it names nothing");
+      else console.warn(`patchwork: path=${path} doesn't resolve here (yet); opening nothing`);
     }
   };
 
@@ -187,15 +197,16 @@ export function createRouter({
     // navigating to a different document invalidates the selection, while
     // same-doc navigation (tool switches, heads changes) keeps it.
     const prevDoc = docParamToUrl(params.get("doc"));
-    if (
-      prevDoc &&
-      parseAutomergeUrl(prevDoc).documentId !== parseAutomergeUrl(url).documentId
-    ) {
-      params.delete("draft");
-    }
+    const sameDoc =
+      !!prevDoc &&
+      parseAutomergeUrl(prevDoc).documentId === parseAutomergeUrl(url).documentId;
+    if (prevDoc && !sameDoc) params.delete("draft");
+    // Where the doc was opened from survives a tool switch or heads change on
+    // the same doc, as `draft` does.
+    const keptPath = !path && sameDoc ? params.get("path") ?? undefined : path;
     params.set("doc", url);
     for (const [key, value] of [
-      ["path", path],
+      ["path", keptPath],
       ["tool", toolId],
       ["title", title],
       ["type", type],

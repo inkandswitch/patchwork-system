@@ -25,17 +25,31 @@ class FakeElement extends EventTarget {
   }
 }
 
-/** A location whose hash reads back with its "#", as a browser's does. */
-function fakeLocation(initial: string) {
+/**
+ * A window whose location's hash reads back with its "#", and which fires
+ * hashchange (after the current task) only when the hash really changes, as a
+ * browser does.
+ */
+function fakeWindow(initial: string) {
   let hash = initial;
-  return {
+  const target = new EventTarget();
+  const location = {
     get hash() {
       return hash ? `#${hash}` : "";
     },
     set hash(value: string) {
-      hash = value.replace(/^#/, "");
+      const next = value.replace(/^#/, "");
+      if (next === hash) return;
+      hash = next;
+      setTimeout(() => target.dispatchEvent(new Event("hashchange")));
     },
   };
+  const window = {
+    location,
+    addEventListener: (type: string, listener: EventListener) =>
+      target.addEventListener(type, listener),
+  };
+  return { window, location };
 }
 
 async function setup(hash: (a: string, notes: AutomergeUrl) => string) {
@@ -56,9 +70,9 @@ async function setup(hash: (a: string, notes: AutomergeUrl) => string) {
   });
   const a = await idhash(account.documentId);
 
-  const location = fakeLocation(hash(a, notes.url));
+  const { window, location } = fakeWindow(hash(a, notes.url));
   vi.stubGlobal("location", location);
-  vi.stubGlobal("window", { location, addEventListener() {} });
+  vi.stubGlobal("window", window);
   vi.stubGlobal("document", { title: "" });
 
   const rootElement = new FakeElement();
@@ -83,7 +97,14 @@ const hashParam = (location: { hash: string }, key: string) =>
 // A document this repo doesn't have, for a doc= the path disagrees with.
 const OTHER = "automerge:2j9knpCseyhnK8izDmLpGP5WMdZQ";
 
-afterEach(() => vi.unstubAllGlobals());
+/** Let the router's background work (path walks, hashchanges) settle. */
+const settle = () => new Promise((resolve) => setTimeout(resolve, 300));
+
+afterEach(async () => {
+  await settle();
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("router: path=", () => {
   it("writes an opened document's path to the hash", async () => {
@@ -95,9 +116,10 @@ describe("router: path=", () => {
     expect(hashParam(location, "path")).toBe(live);
   });
 
-  it("drops path from the hash when a document is opened without one", async () => {
-    const { other, location, rootElement } = await setup(
-      (_, n) => `doc=${n}&path=${livePath("x", ["y"])}`
+  it("drops path from the hash when another document is opened without one", async () => {
+    const { live, notes, other, location, rootElement } = await setup(() => "");
+    rootElement.dispatchEvent(
+      new CustomEvent("patchwork:open-document", { detail: { url: notes.url, path: live } })
     );
     rootElement.dispatchEvent(
       new CustomEvent("patchwork:open-document", { detail: { url: other.url } })
@@ -109,17 +131,62 @@ describe("router: path=", () => {
     const { live, notes, opened, location } = await setup((a) =>
       `path=${livePath(a, ["Projects", "foo", "notes"])}`
     );
-    await vi.waitFor(() => expect(opened).toHaveLength(1));
+    await vi.waitFor(() => expect(opened.length).toBeGreaterThanOrEqual(1));
     expect(opened[0]).toMatchObject({ url: notes.url, path: live });
     expect(hashParam(location, "doc")).toBe(notes.url);
   });
 
-  it("warns and drops a path that names nothing, opening nothing", async () => {
+  it("keeps path when the same document is opened without one, as on a tool switch", async () => {
+    const { live, notes, location, rootElement } = await setup(() => "");
+    rootElement.dispatchEvent(
+      new CustomEvent("patchwork:open-document", { detail: { url: notes.url, path: live } })
+    );
+    rootElement.dispatchEvent(
+      new CustomEvent("patchwork:open-document", { detail: { url: notes.url, toolId: "other" } })
+    );
+    expect(hashParam(location, "path")).toBe(live);
+    expect(hashParam(location, "tool")).toBe("other");
+  });
+
+  it("warns about a path that names nothing, opens nothing, and leaves the hash", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const { opened, location } = await setup((a) => `path=${livePath(a, ["nope"])}`);
-    await vi.waitFor(() => expect(hashParam(location, "path")).toBeUndefined());
+    const { a, opened, location } = await setup((a) => `path=${livePath(a, ["nope"])}`);
+    await vi.waitFor(() => expect(warn).toHaveBeenCalled());
+    await settle();
     expect(opened).toHaveLength(0);
-    expect(warn).toHaveBeenCalled();
+    expect(hashParam(location, "path")).toBe(livePath(a, ["nope"]));
+  });
+
+  it("keeps a path beside doc when the path can't be resolved", async () => {
+    const { a, location } = await setup((a, n) => `doc=${n}&path=${livePath(a, ["nope"])}`);
+    await settle();
+    expect(hashParam(location, "path")).toBe(livePath(a, ["nope"]));
+  });
+
+  it("doesn't open a path's document after the hash has moved on", async () => {
+    const { notes, opened, location } = await setup(
+      (a) => `path=${livePath(a, ["Projects", "foo", "notes"])}`
+    );
+    // a click lands while the path is still being walked
+    location.hash = `doc=${OTHER}`;
+    await settle();
+    expect(opened.map((o) => o.url)).not.toContain(notes.url);
+  });
+
+  it("settles after opening from a path alone: doc= and path= stay, nothing loops", async () => {
+    const { live, notes, opened, location } = await setup(
+      (a) => `path=${livePath(a, ["Projects", "foo", "notes"])}`
+    );
+    await vi.waitFor(() => expect(hashParam(location, "doc")).toBe(notes.url));
+    await settle();
+    const settledHash = location.hash;
+    const count = opened.length;
+    await settle();
+    expect(location.hash).toBe(settledHash);
+    expect(opened.length).toBe(count);
+    expect(hashParam(location, "path")).toBe(live);
+    // the open, then the hashchange it caused: no more than that
+    expect(count).toBeLessThanOrEqual(2);
   });
 
   it("keeps a path that agrees with doc, opening once", async () => {
