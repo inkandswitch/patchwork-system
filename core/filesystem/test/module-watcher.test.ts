@@ -992,3 +992,56 @@ describe("ModuleWatcher lookup retries", () => {
     await repo.shutdown().catch(() => {});
   });
 });
+
+describe("ModuleWatcher package status", () => {
+  function setup(module: string) {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const doc = repo.create<any>({ "@patchwork": { type: "directory" } });
+    const tracker: PackageTracker = {
+      findLatest: async () => dataModule(module) as any,
+      watch: () => () => {},
+    };
+    const watcher = new ModuleWatcher(repo, {}, () => {}, undefined, undefined, tracker);
+    const events: string[] = [];
+    watcher.addEventListener("status", () =>
+      events.push(watcher.packageStatus(doc.url)?.state ?? "none")
+    );
+    const add = () =>
+      watcher.addPackagesFolder(
+        "packages",
+        () => [{ url: doc.url, name: "p", memberStep: "m@h" }],
+        () => () => {}
+      );
+    return { repo, doc, watcher, events, add };
+  }
+
+  it("says a package loaded, and which plugins it brought", async () => {
+    const { repo, doc, watcher, events, add } = setup(
+      "export const plugins = [{ type: 'patchwork:tool', id: 'demo' }]"
+    );
+    await add();
+    expect(watcher.packageStatus(doc.url)).toEqual({ state: "loaded", plugins: ["demo"] });
+    expect(watcher.packageStatus(doc.documentId)?.state).toBe("loaded");
+    expect(events).toContain("loading");
+    expect(events.at(-1)).toBe("loaded");
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("says a package failed, and why", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { repo, doc, watcher, add } = setup("throw new Error('kaboom')");
+    await add();
+    expect(watcher.packageStatus(doc.url)).toMatchObject({ state: "failed" });
+    expect(watcher.packageStatus(doc.url)?.error).toContain("kaboom");
+    watcher.dispose();
+    errors.mockRestore();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("knows nothing of a document that isn't a package", async () => {
+    const { repo, watcher } = setup("export const plugins = []");
+    expect(watcher.packageStatus("automerge:4NMNnkMhL8jXrdJ9jamS58PAVdXu")).toBeUndefined();
+    await repo.shutdown().catch(() => {});
+  });
+});
