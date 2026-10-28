@@ -17,9 +17,12 @@ import initSubduction from "@automerge/automerge-subduction/slim";
 
 import {
   Repo,
+  parseAutomergeUrl,
+  type AutomergeUrl,
   type DocumentId,
   type PeerId,
 } from "@automerge/automerge-repo/slim";
+import { idhash } from "@inkandswitch/patchwork-filesystem";
 
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import type {
@@ -31,12 +34,15 @@ import { loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
 import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
-import { createResolver } from "./resolver.js";
+import { createManifestHandler } from "./manifest.js";
+import { createResolver, waitingFind } from "./resolver.js";
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
   type HandoffOnlineMessage,
   type HandoffRequestMessage,
+  type ManifestRequestMessage,
+  type RegisterAccountMessage,
 } from "./types.js";
 
 declare const __SYNC_SERVER__: {
@@ -50,11 +56,30 @@ const syncServer =
     ? __SYNC_SERVER__
     : { url: "wss://subduction.sync.inkandswitch.com" };
 
+// acctHash → account url: the accounts whose `/@/` paths this worker resolves.
+// Tabs tell us theirs; the hash is computed here, so no tab can name an
+// account by the wrong one.
+const accounts = new Map<string, AutomergeUrl>();
+
+async function registerAccount({ url }: RegisterAccountMessage) {
+  try {
+    const { documentId } = parseAutomergeUrl(url as AutomergeUrl);
+    accounts.set(await idhash(documentId), url as AutomergeUrl);
+  } catch (error) {
+    console.warn(`ignoring a register-account for ${url}`, error);
+  }
+}
+
 const control = startWorkerControl("automerge-protocol-handler-worker", {
   onRestart: drainForRestart,
   // Held only so the tabs and the service worker can tell whether this
   // instance is still around; nothing here waits for it.
   lock: AUTOMERGE_WORKER_LOCK,
+  onMessage(data) {
+    if (data?.type === "register-account") {
+      void registerAccount(data as RegisterAccountMessage);
+    }
+  },
 });
 const log = control.log;
 
@@ -169,7 +194,19 @@ async function buildKeyhiveRepo(
 // them can (one still booting, one from an older build, a site that brings
 // its own Repo).
 
-const resolver = createResolver(getRepo, log);
+const resolver = createResolver(getRepo, log, () => accounts);
+
+// The service worker stops waiting for a manifest after 10s; walking to it
+// gets no longer than that.
+const MANIFEST_WALK_TIMEOUT_MS = 10_000;
+
+// Manifests are what the service worker checks every pinned `/@/` URL
+// against. Only this worker answers them: tabs run package code.
+const answerManifest = createManifestHandler(getRepo, () => accounts, {
+  find: (repo) =>
+    waitingFind(repo, AbortSignal.timeout(MANIFEST_WALK_TIMEOUT_MS), new Set()),
+  log,
+});
 const handoffChannel = new BroadcastChannel(HANDOFF_CHANNEL);
 
 const EVICT_IDLE_MS = 5_000;
@@ -312,9 +349,17 @@ async function drainForRestart(): Promise<void> {
 }
 
 handoffChannel.addEventListener("message", (event) => {
-  if (event.data?.type !== "request") return;
+  const type = event.data?.type;
+  if (type !== "request" && type !== "manifest") return;
   if (draining) {
-    log(`ignoring handoff ${event.data.id} while restarting`);
+    log(`ignoring ${type} ${event.data.id} while restarting`);
+    return;
+  }
+  if (type === "manifest") {
+    handoffStarted();
+    void answerManifest(event.data as ManifestRequestMessage).finally(
+      handoffFinished
+    );
     return;
   }
   void handleHandoffRequest(event.data as HandoffRequestMessage);

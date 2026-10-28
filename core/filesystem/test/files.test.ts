@@ -108,6 +108,21 @@ describe("listFiles", () => {
     }
   });
 
+  it("lists the package a file path is in", async () => {
+    const { repo, a, accounts } = await fixture();
+    const prefix = await pinnedPath(repo, livePath(a, ["packages", "foo"]), { accounts });
+    const listed = await listFiles(repo, `${prefix}/dist/index.js`, { accounts });
+    expect(listed?.prefix).toBe(prefix);
+    expect((await collect(listed!.files)).map((f) => f.tail)).toContain("dist/index.js");
+  });
+
+  it("lists the package for a path that ends inside it", async () => {
+    const { repo, a, accounts, minePkg } = await fixture();
+    minePkg.change((d: any) => (d.dist = { "a.js": "x" }));
+    const prefix = await pinnedPath(repo, livePath(a, ["packages", "foo"]), { accounts });
+    expect((await listFiles(repo, `${prefix}/dist`, { accounts }))?.prefix).toBe(prefix);
+  });
+
   it("lists nothing for a path that isn't canonical", async () => {
     const { repo, a, accounts } = await fixture();
     expect(

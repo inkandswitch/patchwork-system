@@ -66,6 +66,11 @@ export type WalkEnd = {
    * not, since the names resolve at whatever the documents below it hold now.
    */
   canonical: boolean;
+  /**
+   * The last document the walk entered that has a provider (a folder, a directory, …), and its
+   * pinned path: what a manifest of the files around the end of the path covers.
+   */
+  container?: { handle: DocHandle<unknown>; pinned: string };
 };
 
 /** Where a walk is: inside a document, or at a mount whose binding the next step picks. */
@@ -166,8 +171,16 @@ export async function walkPath(
     out.push(`automerge:${root.documentId}@${formatHeads(root.heads)}`);
   }
 
+  let container: WalkEnd["container"];
+  const noteContainer = () => {
+    if (at?.kind === "doc" && at.provider && !at.inside) {
+      container = { handle: at.handle, pinned: out.join("/") };
+    }
+  };
+
   let i = 0;
   while (true) {
+    noteContainer();
     const segment = segments[i] as (typeof segments)[number] | undefined;
 
     if (at.kind === "union") {
@@ -255,12 +268,14 @@ export async function walkPath(
     }
   }
 
+  noteContainer();
   return {
     handle: at.handle,
     node: at.node,
     atDocument: !at.inside,
     pinned: out.join("/"),
     canonical: !live,
+    container,
   };
 }
 
@@ -378,9 +393,10 @@ function walkPrefers(a: number[], b: number[]): boolean {
 }
 
 /**
- * Every file under the last document a canonical pinned path enters, keyed by tail: "" for the
- * document itself, encoded names joined with "/" below it. Containers aren't listed; they have
- * their own doc steps. Undefined unless `path` is canonical and ends at a document.
+ * Every file under the last container a canonical pinned path enters (see
+ * {@link WalkEnd.container}), keyed by tail: "" for the container itself, encoded names joined
+ * with "/" below it. Containers below it aren't listed; they have their own doc steps. `path`
+ * may name the container or anything in it. Undefined unless `path` is canonical.
  *
  * A file reached by a link without heads is read as it is now, so the list is a snapshot.
  */
@@ -390,10 +406,11 @@ export async function listFiles(
   options: WalkOptions
 ): Promise<{ prefix: string; files: AsyncIterable<ListedFile> } | undefined> {
   const end = await walkPath(repo, path, options);
-  if (!end?.canonical || !end.atDocument) return undefined;
+  if (!end?.canonical || !end.container) return undefined;
   const find = options.find ?? ((url: AutomergeUrl) => repo.find(url));
-  const provider = providerFor(end.node);
-  const documentId = end.handle.documentId;
+  const root = end.container.handle.doc();
+  const provider = providerFor(root);
+  const documentId = end.container.handle.documentId;
 
   async function* files(): AsyncIterable<ListedFile> {
     const found = new Map<string, { keys: number[]; file: ListedFile }>();
@@ -440,10 +457,10 @@ export async function listFiles(
       }
     };
 
-    await add([], [], end!.node, documentId);
-    await visit(end!.node, [], []);
+    await add([], [], root, documentId);
+    await visit(root, [], []);
     for (const { file } of found.values()) yield file;
   }
 
-  return { prefix: end.pinned, files: files() };
+  return { prefix: end.container.pinned, files: files() };
 }

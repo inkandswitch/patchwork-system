@@ -49,6 +49,7 @@ import {
 import * as plugins from "@inkandswitch/patchwork-plugins";
 import setupServiceWorker, {
   connectClassicSync,
+  registerAccount,
   resolveHandoffsWith,
 } from "@inkandswitch/patchwork-bootloader";
 import debug from "debug";
@@ -202,6 +203,8 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
+  // So /@/<acctHash>/… paths under it resolve, here and in the automerge worker.
+  await registerAccount(accountDocHandle.url);
 
   wireModuleSettings(accountDocHandle, moduleWatcher);
 

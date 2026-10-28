@@ -190,7 +190,7 @@ function impatience(limit: number) {
  * the sync server, within `signal`. Heads that never arrive are remembered in `missing`, so a
  * walk that fails because of them answers with a network error rather than a 404.
  */
-function waitingFind(
+export function waitingFind(
   repo: Repo,
   signal: AbortSignal,
   missing: Set<string>
