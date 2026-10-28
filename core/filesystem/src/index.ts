@@ -7,4 +7,5 @@ export * from "./paths.js";
 export * from "./providers.js";
 export * from "./resolve.js";
 export * from "./urls.js";
+export * from "./walk.js";
 export type * from "./types.js";
