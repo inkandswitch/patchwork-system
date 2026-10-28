@@ -64,7 +64,7 @@ const MOUNT_POINT = /^\/[^/@]*$/;
 
 /**
  * Mount point → its bindings, in order. `/` falls back to `rootFolderUrl` when the namespace
- * doesn't bind it, so older accounts keep working. Malformed mount points and bindings are
+ * binds nothing valid there, so older accounts keep working. Malformed mount points and bindings are
  * skipped with a warning.
  */
 export function accountBindings(
@@ -85,7 +85,7 @@ export function accountBindings(
     bindings.set(mount, urls);
   }
   const root = asLink(doc.rootFolderUrl);
-  if (!bindings.has("/") && root) bindings.set("/", [root]);
+  if (!bindings.get("/")?.length && root) bindings.set("/", [root]);
   return bindings;
 }
 
@@ -149,14 +149,14 @@ export const folderProvider: PathProvider = {
   },
   lookup(node, names) {
     const entry = (node as FolderDoc).docs.find(
-      (doc) => String(doc.name) === names[0]
+      (doc) => doc && String(doc.name) === names[0]
     );
     const link = asLink(entry?.url);
     return link ? { child: { name: names[0], link }, consumed: 1 } : undefined;
   },
   list(node) {
     return (node as FolderDoc).docs.flatMap((doc) => {
-      const link = asLink(doc.url);
+      const link = asLink(doc?.url);
       return link ? [{ name: String(doc.name), link }] : [];
     });
   },

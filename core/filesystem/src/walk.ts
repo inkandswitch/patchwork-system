@@ -38,6 +38,12 @@ export type WalkEnd = {
   atDocument: boolean;
   /** The pinned path, without a leading slash. */
   pinned: string;
+  /**
+   * True when every document the pinned path names was entered at heads the input gave: the
+   * input was already pinned and means what `pinned` means. A pinned root followed by names is
+   * not, since the names resolve at whatever the documents below it hold now.
+   */
+  canonical: boolean;
 };
 
 /** Where a walk is: inside a document, or at a mount whose binding the next step picks. */
@@ -115,19 +121,19 @@ export async function walkPath(
     return true;
   };
 
-  // The run of names starting at i. A doc step that matched no link reads as a name.
-  const namesFrom = (i: number) => {
-    const names: string[] = [];
-    for (let j = i; j < segments.length; j++) {
-      const segment = segments[j];
-      if (segment.kind === "name") names.push(segment.name);
-      else if (j === i) names.push(decodeURIComponent(segment.raw));
-      else break;
-    }
-    return names;
-  };
+  // The names from i on, for a lookup that may consume several (a directory key like
+  // "vendor/react@18.3.1/index.js"). A doc step reads as a name here: one is only taken as a step
+  // at the front, and only when it matches a link.
+  const namesFrom = (i: number) =>
+    segments
+      .slice(i)
+      .map((segment) =>
+        segment.kind === "name" ? segment.name : decodeURIComponent(segment.raw)
+      );
 
   const out: string[] = [];
+  // Set once a document the pinned path names was entered at its current heads.
+  let live = !root.heads;
   let at: At | undefined;
   if (root.kind === "account") {
     const url = options.accounts.get(root.acctHash);
@@ -166,6 +172,7 @@ export async function walkPath(
           }
         }
         if (!member || !guard(member, segments.length - i)) return undefined;
+        live = true;
       }
       if (!next) return undefined;
       out.push(await stepOf(next.handle));
@@ -181,6 +188,7 @@ export async function walkPath(
       const next = await enter(link);
       if (!next) return undefined;
       out.push(await stepOf(next.handle));
+      live = true;
       at = next;
       continue;
     }
@@ -219,8 +227,10 @@ export async function walkPath(
       if (!consumed && !guard(child.link, segments.length - i)) return undefined;
       const next = await enter(child.link);
       if (!next) return undefined;
-      if (next.provider || !consumed) out.push(await stepOf(next.handle));
-      else out.push(...written);
+      if (next.provider || !consumed) {
+        out.push(await stepOf(next.handle));
+        live = true;
+      } else out.push(...written);
       at = next;
     }
   }
@@ -230,23 +240,25 @@ export async function walkPath(
     node: at.node,
     atDocument: !at.inside,
     pinned: out.join("/"),
+    canonical: !live,
   };
 }
 
 /**
- * The document a live or pinned path names: the live handle for a live path, a view at the
- * pinned heads for a pinned one. Undefined if the path doesn't resolve, or ends at a value inside
- * a document.
+ * The document a live or pinned path names. For a canonical pinned path (see
+ * {@link WalkEnd.canonical}) that is a view at the heads it was read at; a file reached by name
+ * after the last pinned document is read at its current heads, or the heads its link carries.
+ * Anything else gets the live handle. Undefined if the path doesn't resolve, or ends at a value
+ * inside a document.
  */
 export async function resolveLivePath(
   repo: Repo,
   path: string,
   options: WalkOptions
 ): Promise<DocHandle<unknown> | undefined> {
-  const { root } = parsePath(path);
   const end = await walkPath(repo, path, options);
   if (!end?.atDocument) return undefined;
-  if (root.heads) return end.handle;
+  if (end.canonical) return end.handle;
   return repo.find(stringifyAutomergeUrl({ documentId: end.handle.documentId }));
 }
 

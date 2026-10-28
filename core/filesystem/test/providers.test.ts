@@ -74,6 +74,14 @@ describe("accountProvider", () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  it("falls back to rootFolderUrl when every / binding is malformed", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bindings = accountBindings(
+      account({ rootFolderUrl: R, namespace: { "/": [{ url: "nope" }] } })
+    );
+    expect(bindings.get("/")).toEqual([R]);
+  });
+
   it("lists every mount as a union child", () => {
     expect(accountProvider.list(doc)).toEqual([
       { name: "", union: [R] },

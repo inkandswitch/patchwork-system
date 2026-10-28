@@ -7,6 +7,7 @@ import {
   pinnedPath,
   pinPath,
   resolveLivePath,
+  walkPath,
 } from "../src/walk.js";
 
 const step = async (handle: DocHandle<unknown>) =>
@@ -163,6 +164,37 @@ describe("resolveLivePath", () => {
     expect(
       await resolveLivePath(repo, `${a}@3vQB7B6MrGQZaxCuFg4oh/Projects`, { accounts })
     ).toBeUndefined();
+  });
+
+  it("reaches a directory key whose later segments look like doc steps", async () => {
+    const { repo, a, accounts, minePkg } = await fixture();
+    const vendored = file(repo, "react");
+    minePkg.change((d: any) => (d["vendor/react@18.3.1/index.js"] = vendored.url));
+    const handle = await resolveLivePath(
+      repo,
+      `${a}/packages/foo/vendor/react@18.3.1/index.js`,
+      { accounts }
+    );
+    expect(handle?.url).toBe(vendored.url);
+  });
+
+  it("skips a null folder entry", async () => {
+    const { repo, a, accounts, projects, foo } = await fixture();
+    projects.change((d: any) => d.docs.unshift(null));
+    const handle = await resolveLivePath(repo, livePath(a, ["Projects", "foo"]), { accounts });
+    expect(handle?.url).toBe(foo.url);
+  });
+
+  it("treats a pinned root followed by live steps as live, not pinned", async () => {
+    const { repo, a, accounts, account, foo } = await fixture();
+    const mixed = `${docStep(a, account.heads())}/Projects/foo`;
+    const end = await walkPath(repo, mixed, { accounts });
+    expect(end?.canonical).toBe(false);
+    // a live path's answer: the live handle, not a view whose heads look pinned
+    expect((await resolveLivePath(repo, mixed, { accounts }))?.url).toBe(foo.url);
+
+    const canonical = await walkPath(repo, end!.pinned, { accounts });
+    expect(canonical?.canonical).toBe(true);
   });
 
   it("returns undefined for a path that ends inside a document", async () => {

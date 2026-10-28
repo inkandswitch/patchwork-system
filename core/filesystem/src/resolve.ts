@@ -33,6 +33,9 @@ type Walk = {
 /** A URL carries heads when it has a fragment: `automerge:abc#heads`. */
 const hasHeads = (url: unknown): boolean => String(url).includes("#");
 
+/** @deprecated Use {@link PathProvider}, which replaces it. */
+export type FolderStrategy = PathProvider;
+
 /**
  * Resolve `parts` against `node`, a document or a value inside one, using the provider of the
  * document it belongs to. Following a link hands the rest to that document's own provider.
