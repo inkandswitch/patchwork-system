@@ -6,6 +6,7 @@ export * from "./metadata.js";
 export * from "./module-watcher.js";
 export * from "./package-tracker.js";
 export * from "./packages.js";
+export * from "./packages-folder.js";
 export * from "./paths.js";
 export * from "./providers.js";
 export * from "./resolve.js";
