@@ -5,7 +5,15 @@ import {
   stringifyAutomergeUrl,
   type AutomergeUrl,
 } from "@automerge/automerge-repo";
-import { idhash, livePath, pinnedPath } from "@inkandswitch/patchwork-filesystem";
+import {
+  contentHash,
+  formatHeads,
+  idhash,
+  livePath,
+  parseFileList,
+  pinnedPath,
+  walkPath,
+} from "@inkandswitch/patchwork-filesystem";
 import { createResolver } from "../src/resolver.js";
 import { registerAccount, resolveHandoffsWith, handleResolveRequest } from "../src/tab-resolver.js";
 import type { HandoffRequestMessage, HandoffResponseMessage } from "../src/types.js";
@@ -22,7 +30,8 @@ const folder = (repo: Repo, entries: Record<string, AutomergeUrl>) =>
 
 async function fixture() {
   const repo = new Repo();
-  const foo = folder(repo, { notes: file(repo, "hi") });
+  const notes = file(repo, "hi");
+  const foo = folder(repo, { notes });
   const root = folder(repo, { Projects: folder(repo, { foo: foo.url }).url });
   const account = repo.create({
     "@patchwork": { type: "account" },
@@ -31,8 +40,20 @@ async function fixture() {
   const a = await idhash(account.documentId);
   const accounts = new Map([[a, account.url]]);
   const resolver = createResolver(() => Promise.resolve(repo), undefined, () => accounts);
-  return { repo, a, accounts, account, resolver };
+  return { repo, a, accounts, account, resolver, notes };
 }
+
+/** A path's chain of doc steps, without file lists: what a resolver is asked to read. */
+const chain = async (repo: Repo, path: string, accounts: ReadonlyMap<string, AutomergeUrl>) =>
+  (await walkPath(repo, path, { accounts }))!.pinned;
+
+const withRequest = (
+  path: string,
+  extra: { heads?: string; list?: boolean }
+): HandoffRequestMessage => {
+  const message = pathRequest(path);
+  return { ...message, request: { ...message.request, ...extra } };
+};
 
 const pathRequest = (path: string): HandoffRequestMessage => ({
   id: "1",
@@ -56,22 +77,43 @@ const body = (reply: unknown) => {
 };
 
 describe("resolver: /@/ paths", () => {
-  it("redirects a live path to its pinned form", async () => {
+  it("answers a live path with a 307 whose body is the list it names", async () => {
     const { repo, a, accounts, resolver } = await fixture();
     const live = livePath(a, ["Projects", "foo", "notes"]);
     const reply = await resolver.answer(pathRequest(live));
     expect(reply?.type).toBe("response");
     expect(inline(reply).status).toBe(307);
-    expect(inline(reply).headers?.location).toBe(
-      `/@/${await pinnedPath(repo, live, { accounts })}`
-    );
+    const pinned = await pinnedPath(repo, live, { accounts, only: "end" });
+    expect(inline(reply).headers?.location).toBe(`/@/${pinned!.path}`);
     expect(inline(reply).headers?.["cache-control"]).toBe("no-store");
+    const list = inline(reply).body as Uint8Array;
+    expect(pinned!.path).toContain(`~${await contentHash(list)}/notes`);
+    expect(Object.keys(parseFileList(list)!.files)).toEqual(["notes"]);
+  });
+
+  it("answers a container's full list", async () => {
+    const { repo, a, accounts, resolver } = await fixture();
+    const foo = await chain(repo, livePath(a, ["Projects", "foo"]), accounts);
+    const reply = await resolver.answer(withRequest(foo, { list: true }));
+    expect(inline(reply).status).toBe(200);
+    const pinned = await pinnedPath(repo, foo, { accounts });
+    expect(inline(reply).body).toEqual(pinned!.list);
+  });
+
+  it("reads a file at given heads, after it changed", async () => {
+    const { repo, a, accounts, resolver, notes } = await fixture();
+    const path = await chain(repo, livePath(a, ["Projects", "foo", "notes"]), accounts);
+    const handle = await repo.find<{ content: string }>(notes);
+    const heads = formatHeads(handle.heads());
+    handle.change((d) => (d.content = "changed"));
+    expect(body(await resolver.answer(pathRequest(path)))).toBe("changed");
+    expect(body(await resolver.answer(withRequest(path, { heads })))).toBe("hi");
   });
 
   it("answers a pinned path with its bytes inline", async () => {
     const { repo, a, accounts, resolver } = await fixture();
-    const pinned = await pinnedPath(repo, livePath(a, ["Projects", "foo", "notes"]), { accounts });
-    const reply = await resolver.answer(pathRequest(pinned!));
+    const pinned = await chain(repo, livePath(a, ["Projects", "foo", "notes"]), accounts);
+    const reply = await resolver.answer(pathRequest(pinned));
     expect(inline(reply).status).toBe(200);
     expect(inline(reply).headers?.["content-type"]).toBe("text/plain");
     expect(body(reply)).toBe("hi");

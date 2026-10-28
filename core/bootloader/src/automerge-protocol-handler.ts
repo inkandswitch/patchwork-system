@@ -34,14 +34,12 @@ import { loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
 import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
-import { createManifestHandler } from "./manifest.js";
-import { createResolver, waitingFind } from "./resolver.js";
+import { createResolver } from "./resolver.js";
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
   type HandoffOnlineMessage,
   type HandoffRequestMessage,
-  type ManifestRequestMessage,
   type RegisterAccountMessage,
 } from "./types.js";
 
@@ -195,27 +193,6 @@ async function buildKeyhiveRepo(
 // its own Repo).
 
 const resolver = createResolver(getRepo, log, () => accounts);
-
-// The service worker stops waiting for a manifest after 10s; walking to it
-// gets no longer than that.
-const MANIFEST_WALK_TIMEOUT_MS = 10_000;
-const MANIFEST_LIST_TIMEOUT_MS = 30_000;
-
-// Manifests are what the service worker checks every pinned `/@/` URL
-// against. Only this worker answers them: tabs run package code.
-const answerManifest = createManifestHandler(getRepo, () => accounts, {
-  find: (repo) =>
-    waitingFind(repo, AbortSignal.timeout(MANIFEST_WALK_TIMEOUT_MS), new Set()),
-  // Listing a package reads every file doc in it. Each is read as this node
-  // has it, without waiting for peers, and the listing gets its own budget: a
-  // manifest finished after the service worker stopped waiting is still kept
-  // for the next request.
-  findFile: (repo) =>
-    waitingFind(repo, AbortSignal.timeout(MANIFEST_LIST_TIMEOUT_MS), new Set(), {
-      catchUp: false,
-    }),
-  log,
-});
 const handoffChannel = new BroadcastChannel(HANDOFF_CHANNEL);
 
 const EVICT_IDLE_MS = 5_000;
@@ -358,17 +335,9 @@ async function drainForRestart(): Promise<void> {
 }
 
 handoffChannel.addEventListener("message", (event) => {
-  const type = event.data?.type;
-  if (type !== "request" && type !== "manifest") return;
+  if (event.data?.type !== "request") return;
   if (draining) {
-    log(`ignoring ${type} ${event.data.id} while restarting`);
-    return;
-  }
-  if (type === "manifest") {
-    handoffStarted();
-    void answerManifest(event.data as ManifestRequestMessage).finally(
-      handoffFinished
-    );
+    log(`ignoring handoff ${event.data.id} while restarting`);
     return;
   }
   void handleHandoffRequest(event.data as HandoffRequestMessage);

@@ -17,14 +17,18 @@ import {
   type UrlHeads,
 } from "@automerge/automerge-repo/slim";
 import {
+  buildFileList,
   getDefaultBranch,
+  parseHeads,
   parsePath,
+  pinnedPath,
   readNode,
+  readPath,
   resolvePath,
+  toBytes,
   walkPath,
   type WalkOptions,
 } from "@inkandswitch/patchwork-filesystem";
-import { toBytes } from "@inkandswitch/patchwork-filesystem";
 
 import type {
   HandoffReplyMessage,
@@ -211,15 +215,23 @@ export function waitingFind(
 }
 
 /**
- * A `/@/` path, answered inline: a 307 to the pinned form for a live path (or a pinned-looking
- * one that isn't canonical), the bytes for a canonical pinned one, 404 for one that doesn't
- * resolve. Pinned heads that never arrive throw {@link AbortHandoff}.
+ * A `/@/` path, answered inline:
+ *
+ * - `list`: the file list of the container the path names (canonical), as its bytes.
+ * - A live path, or a pinned-looking one that isn't canonical: a 307 to its pinned form, whose
+ *   list covers just the file asked for; the body is that list, for the service worker to check
+ *   and keep.
+ * - A canonical pinned path: the bytes, read at `heads` if given (what its file list recorded).
+ * - One that doesn't resolve: 404.
+ *
+ * Pinned heads that never arrive throw {@link AbortHandoff}.
  */
 async function resolveWalkPath(
   repo: Repo,
   path: string,
   accounts: ReadonlyMap<string, AutomergeUrl>,
-  signal: AbortSignal
+  signal: AbortSignal,
+  { heads, list }: { heads?: string; list?: boolean } = {}
 ): Promise<Response> {
   try {
     parsePath(path);
@@ -227,11 +239,8 @@ async function resolveWalkPath(
     return new Response(String(error), { status: 400 });
   }
   const missing = new Set<string>();
-  const end = await walkPath(repo, path, {
-    accounts,
-    find: waitingFind(repo, signal, missing),
-  });
-  if (!end) {
+  const options = { accounts, find: waitingFind(repo, signal, missing) };
+  const notFound = () => {
     if (missing.size) {
       throw new AbortHandoff(`heads not found for ${[...missing].join(", ")}`);
     }
@@ -239,15 +248,40 @@ async function resolveWalkPath(
       status: 404,
       headers: { "cache-control": "no-store" },
     });
-  }
-  if (!end.canonical) {
-    return new Response(null, {
-      status: 307,
-      headers: { location: `/@/${end.pinned}`, "cache-control": "no-store" },
+  };
+
+  if (list) {
+    const built = await buildFileList(repo, path, {
+      ...options,
+      // Each file as this node has it, without waiting on peers for every one.
+      findFile: waitingFind(repo, signal, missing, { catchUp: false }),
+    });
+    if (!built) return notFound();
+    return new Response(built.bytes as BlobPart, {
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
     });
   }
-  const read = await readNode(repo, end.node);
-  if (!read) return new Response(`can't read ${path}`, { status: 404 });
+
+  const end = await walkPath(repo, path, options);
+  if (!end) return notFound();
+  if (!end.canonical) {
+    const pinned = await pinnedPath(repo, path, { ...options, only: "end" });
+    if (!pinned) return notFound();
+    return new Response((pinned.list ?? null) as BlobPart | null, {
+      status: 307,
+      headers: {
+        location: `/@/${pinned.path}`,
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  const read = heads
+    ? await readPath(repo, path, { ...options, heads: parseHeads(heads) })
+    : await readNode(repo, end.node);
+  if (!read) return notFound();
   return new Response(toBytes(read.content) as BlobPart, {
     status: 200,
     headers: { "content-type": read.type },
@@ -361,7 +395,7 @@ export function createResolver(
           const limit = within(signal);
           log(`resolving handoff ${id} for /@/${request.path}`);
           response = await Promise.race([
-            resolveWalkPath(repo, request.path, accounts(), limit),
+            resolveWalkPath(repo, request.path, accounts(), limit, request),
             new Promise<never>((_, reject) =>
               limit.addEventListener("abort", () =>
                 reject(new AbortHandoff(`resolving /@/${request.path} timed out`))
