@@ -28,6 +28,11 @@ export type AccountDoc = {
    */
   namespace?: Namespace;
   rootFolderUrl?: AutomergeUrl;
+  /**
+   * @deprecated Package management is whatever is bound at `/packages` in
+   * {@link AccountDoc.namespace}. Still read, since the Packages UI installs
+   * into it.
+   */
   moduleSettingsUrl?: AutomergeUrl;
   contactUrl?: AutomergeUrl;
 };

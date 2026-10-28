@@ -5,7 +5,7 @@ import type {
 } from "@inkandswitch/patchwork-plugins";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
 
-async function createSubdoc<D>(
+export async function createSubdoc<D>(
   repo: Repo,
   type: string,
   init: (doc: D) => void
@@ -22,9 +22,13 @@ export const createDefaultAccount: AccountCreator<AccountDoc> = async (
   accountHandle,
   repo
 ) => {
-  const [rootFolder, moduleSettings, contact] = await Promise.all([
+  const [rootFolder, packagesFolder, moduleSettings, contact] = await Promise.all([
     createSubdoc<{ title: string; docs: unknown[] }>(repo, "folder", (doc) => {
       doc.title = "New Folder";
+      doc.docs = [];
+    }),
+    createSubdoc<{ title: string; docs: unknown[] }>(repo, "folder", (doc) => {
+      doc.title = "Packages";
       doc.docs = [];
     }),
     createSubdoc<{ modules: string[] }>(
@@ -41,6 +45,12 @@ export const createDefaultAccount: AccountCreator<AccountDoc> = async (
 
   accountHandle.change((doc) => {
     doc.rootFolderUrl = rootFolder.url;
+    doc.namespace = {
+      "/": [{ url: rootFolder.url }],
+      // Package management: whatever is bound here.
+      "/packages": [{ url: packagesFolder.url }],
+    };
+    // Still made: the Packages UI installs into it.
     doc.moduleSettingsUrl = moduleSettings.url;
     doc.contactUrl = contact.url;
   });
