@@ -1,32 +1,37 @@
-// Serving a pinned `/@/` URL: find what its bytes must hash to, read them from the content
-// store or a resolver, check them, and decide whether to keep them. Only the automerge worker's
-// manifests say what a URL's bytes must hash to (see index-channel.ts); a store entry or a
-// resolver's answer that doesn't match is never served.
+// Serving a pinned `/@/` URL. Its last container step names a file list by hash
+// (`<idhash>@<heads>~<listHash>`), so the URL vouches for the list and the list for each file's
+// bytes. Lists, store entries and resolvers' answers are all checked against those hashes; none
+// is trusted for who made it (spec, section 5).
+import {
+  parseFileList,
+  type FileList,
+} from "@inkandswitch/patchwork-filesystem";
 import type { ContentStore } from "./content-store.js";
-import type {
-  HandoffRequestMessage,
-  IndexAnswer,
-  IndexEntry,
-  Manifest,
-  ManifestRequestMessage,
-} from "./types.js";
+import type { HandoffRequestMessage } from "./types.js";
 
 const BASE58 = "[1-9A-HJ-NP-Za-km-z]+";
-const DOC_STEP = new RegExp(`^${BASE58}@${BASE58}(\\.${BASE58})*$`);
-const ACCOUNT_ROOT = new RegExp(`^(${BASE58})(@${BASE58}(\\.${BASE58})*)?$`);
+const LIST = "~[A-Za-z0-9_-]+";
+const DOC_STEP = new RegExp(`^${BASE58}@${BASE58}(?:\\.${BASE58})*(?:${LIST})?$`);
+const ACCOUNT_ROOT = new RegExp(`^(${BASE58})(@${BASE58}(?:\\.${BASE58})*(?:${LIST})?)?$`);
 const SHARE_PREFIX = "automerge:";
 
 const reencode = (segment: string) => encodeURIComponent(decodeURIComponent(segment));
+const listHashOf = (step: string) => /~([A-Za-z0-9_-]+)$/.exec(step)?.[1];
+const withoutList = (step: string) => step.replace(/~[A-Za-z0-9_-]+$/, "");
+
+/**
+ * One reading of a pinned path: the container's pinned path (without its own `~listHash`), the
+ * names after it, and the list hash its step carries, if any.
+ */
+export type Candidate = { prefix: string; tail: string; listHash?: string };
 
 export type NormalizedPath = {
   /**
-   * The keys this path may be indexed under, most likely first. A segment shaped like a doc step
-   * (`react@18.3.1`) may be a name, and only the worker's manifest can say, so there's a key for
-   * each place the doc steps could end; every name after that point is re-encoded.
+   * The readings of this path, most likely first. A segment shaped like a doc step
+   * (`react@18.3.1`) may be a name, so there's a reading for each place the container could be;
+   * every segment after it is a name, re-encoded.
    */
-  keys: string[];
-  /** The first key up to and including its last doc step: the document its manifest covers. */
-  prefix: string;
+  candidates: Candidate[];
   acctHash?: string;
   /** False for a live path, whose names resolve at current heads. */
   pinned: boolean;
@@ -35,61 +40,51 @@ export type NormalizedPath = {
 };
 
 /**
- * The path after `/@/`, normalized so every spelling of one file has one key among its
- * candidates: segments are percent-decoded and re-encoded, and empty ones dropped. Undefined for
- * a malformed escape or a root that isn't an account hash or a share link.
+ * The path after `/@/`, normalized so every spelling of one file has the same candidates:
+ * segments are percent-decoded and re-encoded, and empty ones dropped. Undefined for a malformed
+ * escape or a root that isn't an account hash or a share link.
  */
 export function normalizePinned(path: string): NormalizedPath | undefined {
   const [root, ...rest] = path.split("/").filter(Boolean);
   if (!root) return undefined;
   try {
     const decodedRoot = decodeURIComponent(root);
-    let head: string;
-    let acctHash: string | undefined;
-    let pinned: boolean;
     const share = decodedRoot.startsWith(SHARE_PREFIX);
-    if (share) {
-      head = decodedRoot;
-      pinned = true;
-    } else {
+    let acctHash: string | undefined;
+    let pinned = true;
+    if (!share) {
       const match = ACCOUNT_ROOT.exec(root);
       if (!match) return undefined;
-      head = root;
       acctHash = match[1];
       pinned = !!match[2];
     }
+    const head = share ? decodedRoot : root;
 
-    // Doc-step-shaped segments after the root, latest first.
+    // The container is the segment at `split`, or the root at -1.
+    const reading = (split: number): Candidate => {
+      const container = split < 0 ? head : rest[split];
+      const before =
+        split < 0
+          ? []
+          : [head, ...rest.slice(0, split).map((s) => (DOC_STEP.test(s) ? s : reencode(s)))];
+      const listHash = listHashOf(container);
+      return {
+        prefix: [...before, withoutList(container)].join("/"),
+        tail: rest.slice(split + 1).map(reencode).join("/"),
+        ...(listHash ? { listHash } : {}),
+      };
+    };
+
+    // Doc-step-shaped segments after the root, latest first; then the root, when it's a
+    // container step itself (a share link, or a root that names a list), or when nothing else is.
     const splits = rest
       .map((segment, i) => (DOC_STEP.test(segment) ? i : -1))
       .filter((i) => i >= 0)
       .reverse();
-    const keyAt = (split: number) =>
-      [
-        head,
-        ...rest.map((segment, i) =>
-          i <= split && DOC_STEP.test(segment) ? segment : reencode(segment)
-        ),
-      ].join("/");
-    const keys = splits.length ? splits.map(keyAt) : [keyAt(-1)];
-    // Encoded segments hold no "/", so the first key splits back into its segments.
-    const prefix = keys[0]
-      .split("/")
-      .slice(0, (splits[0] ?? -1) + 2)
-      .join("/");
-    return { keys, prefix, acctHash, pinned, share };
+    if (share || listHashOf(head) || !splits.length) splits.push(-1);
+    return { candidates: splits.map(reading), acctHash, pinned, share };
   } catch {
     return undefined;
-  }
-}
-
-/** Add a manifest's entries to the index, under `prefix/tail`. */
-export function indexManifest(
-  index: Map<string, IndexEntry>,
-  manifest: Manifest
-): void {
-  for (const [tail, entry] of Object.entries(manifest.entries)) {
-    index.set(tail ? `${manifest.prefix}/${tail}` : manifest.prefix, entry);
   }
 }
 
@@ -97,31 +92,65 @@ export function indexManifest(
 export class PinnedAbort extends Error {}
 
 export type PinnedDeps = {
-  index: Map<string, IndexEntry>;
+  /** File lists held in memory, by list hash: ones that may not be stored, and a cache. */
+  lists: Map<string, FileList>;
   /** Undefined: nothing is read or written (a share link). */
   store: ContentStore | undefined;
   hash(bytes: Uint8Array): Promise<string>;
-  /** Ask the automerge worker for the manifest covering `key`; undefined if it can't answer. */
-  manifest(key: string): Promise<Manifest | undefined>;
+  /** Ask a resolver for the full list of the container at `prefix`: its bytes, or undefined. */
+  buildList(prefix: string): Promise<Uint8Array | undefined>;
   /**
-   * Ask a tab or the automerge worker for `key`'s bytes: undefined if it doesn't resolve, a
-   * Response for any answer that isn't bytes (a redirect for a path that isn't canonical).
+   * Ask a tab or the automerge worker for the file at `path`, read at `heads` if given: its
+   * bytes, a Response for any other answer (a redirect, a 404), or undefined.
    */
   resolve(
-    key: string
+    path: string,
+    heads?: string
   ): Promise<{ body: Uint8Array; contentType: string } | Response | undefined>;
   warn(message: string): void;
   /** Keep the service worker alive for work that outlives the response. */
   keep(work: Promise<unknown>): void;
 };
 
-const lookup = (index: Map<string, IndexEntry>, keys: string[]) => {
-  for (const key of keys) {
-    const entry = index.get(key);
-    if (entry) return entry;
+/**
+ * Keep a list if `bytes` hash to `listHash`: in memory always, and in the store too when every
+ * file in it may be stored. False if they don't match, or aren't a list.
+ */
+export async function keepFileList(
+  bytes: Uint8Array,
+  listHash: string,
+  deps: Pick<PinnedDeps, "lists" | "store" | "hash" | "keep">
+): Promise<boolean> {
+  if ((await deps.hash(bytes)) !== listHash) return false;
+  const list = parseFileList(bytes);
+  if (!list) return false;
+  deps.lists.set(listHash, list);
+  if (deps.store && Object.values(list.files).every((entry) => entry.store)) {
+    deps.keep(deps.store.put(listHash, bytes));
   }
+  return true;
+}
+
+/** The list a URL names: from memory, from the store (checked), or rebuilt (checked). */
+async function loadList(
+  { prefix, listHash }: { prefix: string; listHash: string },
+  deps: PinnedDeps
+): Promise<FileList | undefined> {
+  const known = deps.lists.get(listHash);
+  if (known) return known;
+  const stored = await deps.store?.get(listHash);
+  if (stored) {
+    // Already in the store: kept in memory only.
+    if (await keepFileList(stored, listHash, { ...deps, store: undefined })) {
+      return deps.lists.get(listHash);
+    }
+    deps.warn(`content store entry ${listHash} isn't the file list it's named for; deleting it`);
+    await deps.store!.delete(listHash);
+  }
+  const built = await deps.buildList(prefix);
+  if (built && (await keepFileList(built, listHash, deps))) return deps.lists.get(listHash);
   return undefined;
-};
+}
 
 const respond = (bytes: Uint8Array, contentType: string, immutable: boolean) =>
   new Response(bytes as BlobPart, {
@@ -131,83 +160,84 @@ const respond = (bytes: Uint8Array, contentType: string, immutable: boolean) =>
     },
   });
 
+const join = (prefix: string, tail: string) => (tail ? `${prefix}/${tail}` : prefix);
+
 /**
- * Serve a pinned URL, given its candidate keys (see {@link normalizePinned}):
+ * Serve a pinned URL (see the spec's *Request flow for a pinned URL*):
  *
- * 1. Find its index entry, asking for a manifest on a miss.
- * 2. With an entry, read the store and hash what's there: a match is served; a mismatch is
- *    deleted, warned about, and treated as a miss.
- * 3. Ask a resolver and hash its bytes. With an entry, a match is served (and stored, if the
- *    entry allows) and a mismatch fails as a network error. Without one, because no worker
- *    answered, the bytes are served as they are and kept nowhere.
+ * 1. Load the list its container step names; none to be had fails as a network error.
+ * 2. Look the file up in it; not there, 404.
+ * 3. Read the store by the file's hash and check it; a mismatch is deleted.
+ * 4. Ask a resolver for the file at the heads the list recorded and check that; a match is served
+ *    (and stored, if the list allows), anything else fails as a network error.
+ *
+ * A path with no list anywhere is served live from a resolver: `no-store`, unchecked.
  */
 export async function servePinned(
-  keys: string[],
+  normalized: Pick<NormalizedPath, "candidates">,
   deps: PinnedDeps
 ): Promise<Response> {
-  let entry = lookup(deps.index, keys);
-  if (!entry) {
-    const manifest = await deps.manifest(keys[0]);
-    if (manifest) indexManifest(deps.index, manifest);
-    entry = lookup(deps.index, keys);
+  const listed = normalized.candidates.find(
+    (candidate): candidate is Candidate & { listHash: string } => !!candidate.listHash
+  );
+  if (!listed) {
+    const [first] = normalized.candidates;
+    const path = join(first.prefix, first.tail);
+    const answer = await deps.resolve(path, undefined);
+    if (answer instanceof Response) return answer;
+    if (!answer) return new Response(`nothing at /@/${path}`, { status: 404 });
+    return respond(answer.body, answer.contentType, false);
   }
 
-  if (entry && deps.store) {
+  const path = join(listed.prefix, listed.tail);
+  const list = await loadList(listed, deps);
+  if (!list) {
+    throw new PinnedAbort(`no file list ${listed.listHash} to check /@/${path} against`);
+  }
+  const entry = list.files[listed.tail];
+  if (!entry) {
+    return new Response(`/@/${path} isn't in its file list`, {
+      status: 404,
+      headers: { "content-type": "text/plain", "cache-control": "no-store" },
+    });
+  }
+
+  if (deps.store) {
     const stored = await deps.store.get(entry.sha256);
     if (stored) {
       if ((await deps.hash(stored)) === entry.sha256) {
-        return respond(stored, entry.contentType, true);
+        return respond(stored, entry.type, true);
       }
       deps.warn(
-        `content store entry ${entry.sha256} for ${keys[0]} doesn't hash to its key; deleting it`
+        `content store entry ${entry.sha256} for /@/${path} doesn't hash to its key; deleting it`
       );
       await deps.store.delete(entry.sha256);
     }
   }
 
-  const answer = await deps.resolve(keys[0]);
-  if (!answer) {
-    return new Response(`nothing at ${keys[0]}`, {
-      status: 404,
-      headers: { "content-type": "text/plain", "cache-control": "no-store" },
-    });
-  }
-  if (answer instanceof Response) {
-    if (entry) {
-      throw new PinnedAbort(
-        `${keys[0]} is in the automerge worker's manifest, but a resolver answered ${answer.status}`
-      );
-    }
-    return answer;
-  }
-  if (!entry) return respond(answer.body, answer.contentType, false);
-
-  if ((await deps.hash(answer.body)) !== entry.sha256) {
+  const answer = await deps.resolve(path, entry.heads);
+  if (!answer || answer instanceof Response) {
     throw new PinnedAbort(
-      `${keys[0]} resolved to bytes that don't match the automerge worker's manifest`
+      `/@/${path} is in its file list, but a resolver answered ${answer?.status ?? "nothing"}`
     );
   }
-  if (entry.store && deps.store) {
-    deps.keep(deps.store.put(entry.sha256, answer.body));
+  if ((await deps.hash(answer.body)) !== entry.sha256) {
+    throw new PinnedAbort(`/@/${path} resolved to bytes that don't match its file list`);
   }
-  return respond(answer.body, entry.contentType, true);
+  if (entry.store && deps.store) deps.keep(deps.store.put(entry.sha256, answer.body));
+  return respond(answer.body, entry.type, true);
 }
 
-/**
- * Wrap a manifest fetcher so concurrent calls for one prefix share a request. A settled request
- * is forgotten: its entries are in the index by then.
- */
-export function sharedManifests(
-  fetch: (key: string) => Promise<Manifest | undefined>,
-  prefixOf: (key: string) => string
-): (key: string) => Promise<Manifest | undefined> {
-  const inFlight = new Map<string, Promise<Manifest | undefined>>();
+/** Wrap `fn` so concurrent calls with one key share a request. A settled request is forgotten. */
+export function sharedRequests<T>(
+  fn: (key: string) => Promise<T>
+): (key: string) => Promise<T> {
+  const inFlight = new Map<string, Promise<T>>();
   return (key) => {
-    const prefix = prefixOf(key);
-    let request = inFlight.get(prefix);
+    let request = inFlight.get(key);
     if (!request) {
-      request = fetch(key).finally(() => inFlight.delete(prefix));
-      inFlight.set(prefix, request);
+      request = fn(key).finally(() => inFlight.delete(key));
+      inFlight.set(key, request);
     }
     return request;
   };
@@ -215,89 +245,35 @@ export function sharedManifests(
 
 /**
  * The handoff the service worker sends tabs and the automerge worker: `to` is a legacy special
- * URL (`automerge:…`), or a `/@/` path. A path's `handoffURL` is `patchwork-path:` and the path,
- * which resolvers from before paths parse and then decline.
+ * URL (`automerge:…`), or a `/@/` path, with the heads to read its file at, or a request for
+ * its container's file list. A path's `handoffURL` is `patchwork-path:` and the path, which
+ * resolvers from before paths parse and then decline.
  */
 export function handoffRequest(
   request: Request,
   cachename: string,
-  to: URL | string
+  to: URL | { path: string; heads?: string; list?: boolean }
 ): HandoffRequestMessage {
+  const target =
+    to instanceof URL
+      ? { handoffURL: to.href }
+      : {
+          handoffURL: `patchwork-path:${to.path}`,
+          path: to.path,
+          ...(to.heads ? { heads: to.heads } : {}),
+          ...(to.list ? { list: true } : {}),
+        };
   return {
     id: crypto.randomUUID(),
     type: "request",
     cachename,
     request: {
       url: request.url,
-      handoffURL: typeof to === "string" ? `patchwork-path:${to}` : to.href,
-      ...(typeof to === "string" ? { path: to } : {}),
+      ...target,
       headers: Object.fromEntries(request.headers.entries()),
       method: request.method,
       destination: request.destination,
       referrer: request.referrer,
     },
-  };
-}
-
-/**
- * The service worker's manifest requests to the automerge worker: sent with `send`, settled by
- * an answer for the same id *and* path (requests are broadcast, so a page can get the worker to
- * answer a copy with another path), or given up on after `timeoutMs`. Once one times out, the
- * worker is taken to be away and later requests wait only `quickTimeoutMs`, for `quietMs` or
- * until it answers again, so a missing worker costs each request a moment rather than the
- * whole timeout.
- */
-export function manifestRequests(options: {
-  send(message: ManifestRequestMessage): void;
-  timeoutMs: number;
-  quickTimeoutMs: number;
-  quietMs: number;
-  onTimeout(path: string): void;
-}) {
-  const pending = new Map<
-    string,
-    { message: ManifestRequestMessage; finish(manifest: Manifest | undefined): void }
-  >();
-  let quietUntil = 0;
-
-  return {
-    request(path: string): Promise<Manifest | undefined> {
-      const message: ManifestRequestMessage = {
-        type: "manifest",
-        id: crypto.randomUUID(),
-        path,
-      };
-      const quiet = Date.now() < quietUntil;
-      return new Promise((resolve) => {
-        const timer = setTimeout(
-          () => {
-            if (!quiet) {
-              quietUntil = Date.now() + options.quietMs;
-              options.onTimeout(path);
-            }
-            finish(undefined);
-          },
-          quiet ? options.quickTimeoutMs : options.timeoutMs
-        );
-        const finish = (manifest: Manifest | undefined) => {
-          clearTimeout(timer);
-          pending.delete(message.id);
-          resolve(manifest);
-        };
-        pending.set(message.id, { message, finish });
-        options.send(message);
-      });
-    },
-    /** False if `answer` settles nothing: an unknown id, or another path. */
-    settle(answer: IndexAnswer): boolean {
-      const request = pending.get(answer.id);
-      if (!request || answer.path !== request.message.path) return false;
-      quietUntil = 0;
-      request.finish(answer.manifest);
-      return true;
-    },
-    has: (id: string) => pending.has(id),
-    /** What's still waiting, to send again to a worker that restarted. */
-    pending: () => [...pending.values()].map(({ message }) => message),
   };
 }

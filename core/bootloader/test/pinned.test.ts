@@ -1,67 +1,54 @@
 import { describe, it, expect, vi } from "vitest";
-import { contentHash, toBytes } from "@inkandswitch/patchwork-filesystem";
+import {
+  canonicalJson,
+  contentHash,
+  toBytes,
+  type FileList,
+} from "@inkandswitch/patchwork-filesystem";
 import type { ContentStore } from "../src/content-store.js";
 import {
   PinnedAbort,
   handoffRequest,
-  manifestRequests,
+  keepFileList,
   normalizePinned,
   servePinned,
-  sharedManifests,
+  sharedRequests,
   type PinnedDeps,
 } from "../src/pinned.js";
-import type {
-  IndexEntry,
-  Manifest,
-  ManifestRequestMessage,
-} from "../src/types.js";
 
-const keysOf = (path: string) => normalizePinned(path)!.keys;
+const candidatesOf = (path: string) => normalizePinned(path)!.candidates;
 
 describe("normalizePinned", () => {
-  it("gives every spelling of a file one key among its candidates", () => {
-    const canonical = keysOf("acct@h/x@h/a%40b.js")[0];
-    expect(canonical).toBe("acct@h/x@h/a%40b.js");
-    for (const spelling of [
-      "acct@h/x@h/a@b.js",
-      "/acct@h//x@h/a%40b.js/",
-      "acct@h/x@h/a%40b.js",
-    ]) {
-      expect(keysOf(spelling)).toContain(canonical);
+  it("gives every spelling of a file one candidate", () => {
+    const [canonical] = candidatesOf("acct@h/x@h~L/a%40b.js");
+    expect(canonical).toEqual({ prefix: "acct@h/x@h", tail: "a%40b.js", listHash: "L" });
+    for (const spelling of ["acct@h/x@h~L/a@b.js", "/acct@h//x@h~L/a%40b.js/"]) {
+      expect(candidatesOf(spelling)).toContainEqual(canonical);
     }
-    expect(keysOf("acct@h/x@h/日本")).toEqual(
-      keysOf("acct@h/x@h/%E6%97%A5%E6%9C%AC")
-    );
+    expect(candidatesOf("acct@h/x@h~L/日本")).toEqual(candidatesOf("acct@h/x@h~L/%E6%97%A5%E6%9C%AC"));
   });
 
   it("tries the latest doc step first, then each earlier one", () => {
-    expect(keysOf("acct@h/packages/m@h/f@h/vendor/react@18.3.1/index.js")).toEqual([
-      "acct@h/packages/m@h/f@h/vendor/react@18.3.1/index.js",
-      "acct@h/packages/m@h/f@h/vendor/react%4018.3.1/index.js",
-      "acct@h/packages/m@h/f%40h/vendor/react%4018.3.1/index.js",
+    expect(candidatesOf("acct@h/packages/m@h/f@h~L/vendor/react@18.3.1/index.js")).toEqual([
+      { prefix: "acct@h/packages/m@h/f@h~L/vendor/react@18.3.1", tail: "index.js" },
+      { prefix: "acct@h/packages/m@h/f@h", tail: "vendor/react%4018.3.1/index.js", listHash: "L" },
+      { prefix: "acct@h/packages/m@h", tail: "f%40h~L/vendor/react%4018.3.1/index.js" },
     ]);
   });
 
-  it("splits the first key at its last doc step", () => {
-    expect(normalizePinned("acct@h/packages/m@h/f@h/dist/index.js")).toMatchObject({
-      prefix: "acct@h/packages/m@h/f@h",
-      acctHash: "acct",
-      pinned: true,
-      share: false,
-    });
-  });
-
   it("says a live path is live", () => {
-    expect(normalizePinned("acct/Projects")).toMatchObject({
-      pinned: false,
-      acctHash: "acct",
-    });
+    expect(normalizePinned("acct/Projects")).toMatchObject({ pinned: false, acctHash: "acct" });
   });
 
-  it("reads a share root", () => {
-    const n = normalizePinned("automerge%3A2j9knpCseyhnK8izDmLpGP5WMdZQ@h/x");
+  it("reads a share root, and a doc-step-shaped name under it", () => {
+    const id = "2j9knpCseyhnK8izDmLpGP5WMdZQ";
+    const n = normalizePinned(`automerge%3A${id}@h~L/react@18.3.1/x.js`)!;
     expect(n).toMatchObject({ pinned: true, share: true, acctHash: undefined });
-    expect(n!.keys[0]).toBe("automerge:2j9knpCseyhnK8izDmLpGP5WMdZQ@h/x");
+    expect(n.candidates).toContainEqual({
+      prefix: `automerge:${id}@h`,
+      tail: "react%4018.3.1/x.js",
+      listHash: "L",
+    });
   });
 
   it("refuses a malformed escape or a bad root", () => {
@@ -84,171 +71,187 @@ class MemoryStore implements ContentStore {
   }
 }
 
-const KEY = "acct@h/pkg@h/index.js";
 const REAL = toBytes("export default 42");
+const FORGED = toBytes("export default 666");
 
-async function setup(options: { store?: boolean; manifest?: boolean } = {}) {
+async function setup(options: { store?: boolean } = {}) {
   const sha256 = await contentHash(REAL);
-  const entry: IndexEntry = {
-    sha256,
-    contentType: "text/javascript",
-    store: options.store ?? true,
+  const list: FileList = {
+    v: 1,
+    files: {
+      "index.js": { sha256, type: "text/javascript", heads: "fh", store: options.store ?? true },
+    },
   };
-  const manifest: Manifest = {
-    prefix: "acct@h/pkg@h",
-    entries: { "index.js": entry },
-  };
+  const listBytes = new TextEncoder().encode(canonicalJson(list));
+  const listHash = await contentHash(listBytes);
+  const path = `acct@h/pkg@h~${listHash}/index.js`;
   const kept: Promise<unknown>[] = [];
   const deps = {
-    index: new Map<string, IndexEntry>(),
+    lists: new Map<string, FileList>(),
     store: new MemoryStore(),
     hash: contentHash,
-    manifest: vi.fn(async () => (options.manifest === false ? undefined : manifest)),
-    resolve: vi.fn(async () => ({ body: REAL, contentType: "text/javascript" })),
+    buildList: vi.fn(async (_prefix: string) => listBytes as Uint8Array | undefined),
+    resolve: vi.fn(async (_path: string, _heads?: string) => ({
+      body: REAL,
+      contentType: "text/javascript",
+    }) as { body: Uint8Array; contentType: string } | Response | undefined),
     warn: vi.fn(),
     keep: (work: Promise<unknown>) => void kept.push(work),
   } satisfies PinnedDeps;
-  const settle = () => Promise.all(kept);
-  return { deps, sha256, entry, manifest, settle };
+  return {
+    deps,
+    sha256,
+    list,
+    listBytes,
+    listHash,
+    normalized: normalizePinned(path)!,
+    settle: () => Promise.all(kept),
+  };
 }
 
 const text = (response: Response) => response.text();
 
 describe("servePinned", () => {
-  it("serves a store hit whose bytes match, without asking a resolver", async () => {
-    const { deps, sha256 } = await setup();
+  it("serves a file whose list and bytes are in the store, asking no resolver", async () => {
+    const { deps, sha256, listBytes, listHash, normalized } = await setup();
+    await deps.store.put(listHash, listBytes);
     await deps.store.put(sha256, REAL);
-    const response = await servePinned([KEY], deps);
+    const response = await servePinned(normalized, deps);
     expect(await text(response)).toBe("export default 42");
     expect(response.headers.get("content-type")).toBe("text/javascript");
     expect(response.headers.get("cache-control")).toContain("immutable");
     expect(deps.resolve).not.toHaveBeenCalled();
+    expect(deps.buildList).not.toHaveBeenCalled();
   });
 
-  it("deletes a forged store entry, warns, and serves the resolver's real bytes", async () => {
-    const { deps, sha256, settle } = await setup();
-    await deps.store.put(sha256, toBytes("export default 666"));
-    const response = await servePinned([KEY], deps);
+  it("deletes a forged list, rebuilds it, and serves", async () => {
+    const { deps, listHash, listBytes, normalized, settle } = await setup();
+    await deps.store.put(listHash, toBytes('{"v":1,"files":{}}'));
+    expect(await text(await servePinned(normalized, deps))).toBe("export default 42");
     await settle();
-    expect(await text(response)).toBe("export default 42");
+    expect(deps.warn).toHaveBeenCalled();
+    expect(deps.buildList).toHaveBeenCalledWith("acct@h/pkg@h");
+    expect(deps.store.bytes.get(listHash)).toEqual(listBytes);
+  });
+
+  it("fails when the rebuilt list doesn't match the URL", async () => {
+    const { deps, normalized } = await setup();
+    deps.buildList.mockResolvedValue(toBytes('{"files":{},"v":1}'));
+    await expect(servePinned(normalized, deps)).rejects.toBeInstanceOf(PinnedAbort);
+  });
+
+  it("deletes a forged file, rereads it at the list's heads, and serves", async () => {
+    const { deps, sha256, normalized, settle } = await setup();
+    await deps.store.put(sha256, FORGED);
+    expect(await text(await servePinned(normalized, deps))).toBe("export default 42");
+    await settle();
+    expect(deps.resolve).toHaveBeenCalledWith("acct@h/pkg@h/index.js", "fh");
     expect(deps.warn).toHaveBeenCalled();
     expect(deps.store.bytes.get(sha256)).toEqual(REAL);
   });
 
-  it("asks for one manifest on an index miss, then serves", async () => {
+  it("fails on a resolver's bytes that don't match, storing nothing", async () => {
+    const { deps, sha256, normalized, settle } = await setup();
+    deps.resolve.mockResolvedValue({ body: FORGED, contentType: "text/javascript" });
+    await expect(servePinned(normalized, deps)).rejects.toBeInstanceOf(PinnedAbort);
+    await settle();
+    expect(deps.store.bytes.has(sha256)).toBe(false);
+  });
+
+  it("fails when a resolver answers anything but the bytes", async () => {
+    const { deps, normalized } = await setup();
+    deps.resolve.mockResolvedValue(new Response("nope", { status: 404 }));
+    await expect(servePinned(normalized, deps)).rejects.toBeInstanceOf(PinnedAbort);
+  });
+
+  it("answers 404 for a tail the list doesn't cover", async () => {
+    const { deps, listHash } = await setup();
+    const response = await servePinned(normalizePinned(`acct@h/pkg@h~${listHash}/other.js`)!, deps);
+    expect(response.status).toBe(404);
+    expect(deps.resolve).not.toHaveBeenCalled();
+  });
+
+  it("never stores bytes the list says not to", async () => {
+    const { deps, sha256, normalized, settle } = await setup({ store: false });
+    expect(await text(await servePinned(normalized, deps))).toBe("export default 42");
+    await settle();
+    expect(deps.store.bytes.has(sha256)).toBe(false);
+  });
+
+  it("reads and writes no store for a share link", async () => {
+    const { deps, normalized } = await setup();
+    const response = await servePinned(normalized, { ...deps, store: undefined });
+    expect(await text(response)).toBe("export default 42");
+  });
+
+  it("serves a path with no list live and unchecked", async () => {
     const { deps } = await setup();
-    await servePinned([KEY], deps);
-    await servePinned([KEY], deps);
-    expect(deps.manifest).toHaveBeenCalledTimes(1);
-  });
-
-  it("finds the entry under a later candidate key", async () => {
-    const { deps } = await setup();
-    const response = await servePinned(["acct@h/pkg@h/index@x.js", KEY], deps);
-    expect(response.headers.get("cache-control")).toContain("immutable");
-  });
-
-  it("stores resolver bytes that match an entry that allows it", async () => {
-    const { deps, sha256, settle } = await setup();
-    await servePinned([KEY], deps);
-    await settle();
-    expect(deps.store.bytes.get(sha256)).toEqual(REAL);
-  });
-
-  it("never stores when the entry says not to", async () => {
-    const { deps, settle } = await setup({ store: false });
-    expect(await text(await servePinned([KEY], deps))).toBe("export default 42");
-    await settle();
-    expect(deps.store.bytes.size).toBe(0);
-  });
-
-  it("fails as a network error when resolver bytes don't match, storing nothing", async () => {
-    const { deps, settle } = await setup();
-    deps.resolve.mockResolvedValue({
-      body: toBytes("export default 666"),
-      contentType: "text/javascript",
-    });
-    await expect(servePinned([KEY], deps)).rejects.toBeInstanceOf(PinnedAbort);
-    await settle();
-    expect(deps.store.bytes.size).toBe(0);
-  });
-
-  it("serves inline and stores nothing with no manifest", async () => {
-    const { deps, settle } = await setup({ manifest: false });
-    const response = await servePinned([KEY], deps);
-    await settle();
+    const response = await servePinned(normalizePinned("acct@h/pkg@h/index.js")!, deps);
     expect(await text(response)).toBe("export default 42");
     expect(response.headers.get("cache-control")).toBe("no-store");
-    expect(deps.store.bytes.size).toBe(0);
-    expect(deps.index.size).toBe(0);
+    expect(deps.resolve).toHaveBeenCalledWith("acct@h/pkg@h/index.js", undefined);
   });
 
-  it("answers 404 when nothing resolves the path", async () => {
-    const { deps } = await setup({ manifest: false });
-    deps.resolve.mockResolvedValue(undefined as never);
-    expect((await servePinned([KEY], deps)).status).toBe(404);
-  });
-
-  it("passes a resolver's other answer through when there's no entry", async () => {
-    const { deps } = await setup({ manifest: false });
+  it("passes a resolver's redirect through for a path with no list", async () => {
+    const { deps } = await setup();
     deps.resolve.mockResolvedValue(
-      new Response(null, { status: 307, headers: { location: "/@/acct@h/x@h" } }) as never
+      new Response(null, { status: 307, headers: { location: "/@/acct@h/pkg@h~L" } })
     );
-    const response = await servePinned([KEY], deps);
+    const response = await servePinned(normalizePinned("acct@h/pkg@h")!, deps);
     expect(response.status).toBe(307);
-    expect(response.headers.get("location")).toBe("/@/acct@h/x@h");
-  });
-
-  it("fails a resolver's other answer as a network error when there's an entry", async () => {
-    const { deps } = await setup();
-    deps.resolve.mockResolvedValue(new Response("nope", { status: 404 }) as never);
-    await expect(servePinned([KEY], deps)).rejects.toBeInstanceOf(PinnedAbort);
-  });
-
-  it("rebuilds the index after a restart and reuses the store", async () => {
-    const first = await setup();
-    await servePinned([KEY], first.deps);
-    await first.settle();
-    const second = await setup();
-    second.deps.store = first.deps.store;
-    expect(await text(await servePinned([KEY], second.deps))).toBe("export default 42");
-    expect(second.deps.manifest).toHaveBeenCalledTimes(1);
-    expect(second.deps.resolve).not.toHaveBeenCalled();
-  });
-
-  it("reads and writes nothing without a store", async () => {
-    const { deps } = await setup();
-    const response = await servePinned([KEY], { ...deps, store: undefined });
-    expect(await text(response)).toBe("export default 42");
   });
 });
 
-describe("sharedManifests", () => {
-  it("shares one manifest request among concurrent requests for a package", async () => {
-    const { deps, manifest } = await setup();
+describe("keepFileList", () => {
+  it("keeps a list in memory, and stores it only if every entry may be stored", async () => {
+    const stored = await setup();
+    expect(await keepFileList(stored.listBytes, stored.listHash, stored.deps)).toBe(true);
+    await stored.settle();
+    expect(stored.deps.lists.get(stored.listHash)).toEqual(stored.list);
+    expect(stored.deps.store.bytes.has(stored.listHash)).toBe(true);
+
+    const memory = await setup({ store: false });
+    expect(await keepFileList(memory.listBytes, memory.listHash, memory.deps)).toBe(true);
+    await memory.settle();
+    expect(memory.deps.lists.has(memory.listHash)).toBe(true);
+    expect(memory.deps.store.bytes.has(memory.listHash)).toBe(false);
+  });
+
+  it("refuses a list that doesn't hash to its name", async () => {
+    const { deps, listBytes } = await setup();
+    expect(await keepFileList(listBytes, "not-its-hash", deps)).toBe(false);
+    expect(deps.lists.size).toBe(0);
+  });
+});
+
+describe("sharedRequests", () => {
+  it("shares one request among concurrent calls for a key, and forgets it once settled", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => (release = resolve));
-    const fetcher = vi.fn(async () => (await gate, manifest));
-    const shared = sharedManifests(fetcher, (key) => normalizePinned(key)!.prefix);
-    const all = ["a.js", "b.js", "c.js", "d.js", "index.js"].map((file) =>
-      shared(`acct@h/pkg@h/${file}`)
-    );
+    const fn = vi.fn(async (key: string) => (await gate, key));
+    const shared = sharedRequests(fn);
+    const all = [shared("a"), shared("a"), shared("a"), shared("b")];
     release();
-    await Promise.all(all);
-    expect(fetcher).toHaveBeenCalledTimes(1);
-    // settled requests aren't remembered: the next asks again
-    await shared(KEY);
-    expect(fetcher).toHaveBeenCalledTimes(2);
-    void deps;
+    expect(await Promise.all(all)).toEqual(["a", "a", "a", "b"]);
+    expect(fn).toHaveBeenCalledTimes(2);
+    await shared("a");
+    expect(fn).toHaveBeenCalledTimes(3);
   });
 });
 
 describe("handoffRequest", () => {
   it("builds a path handoff that old resolvers decline", () => {
-    const m = handoffRequest(new Request("https://p.test/@/acct/Projects"), "patchwork", "acct/Projects");
+    const m = handoffRequest(new Request("https://p.test/@/acct/Projects"), "patchwork", {
+      path: "acct/Projects",
+    });
     expect(m.request.path).toBe("acct/Projects");
     expect(new URL(m.request.handoffURL).protocol).not.toBe("automerge:");
-    expect(m.request.url).toBe("https://p.test/@/acct/Projects");
+  });
+
+  it("carries the heads to read at, or a request for the list", () => {
+    const req = new Request("https://p.test/@/x");
+    expect(handoffRequest(req, "patchwork", { path: "a@h/x", heads: "fh" }).request.heads).toBe("fh");
+    expect(handoffRequest(req, "patchwork", { path: "a@h", list: true }).request.list).toBe(true);
   });
 
   it("builds a legacy handoff with no path", () => {
@@ -256,50 +259,5 @@ describe("handoffRequest", () => {
     const m = handoffRequest(new Request("https://p.test/automerge%3Aabc/x.js"), "patchwork", special);
     expect(m.request.handoffURL).toBe(special.href);
     expect(m.request.path).toBeUndefined();
-  });
-});
-
-describe("manifestRequests", () => {
-  const manifest: Manifest = { prefix: "acct@h/p@h", entries: {} };
-  const make = (timeouts = { timeoutMs: 1000, quickTimeoutMs: 20 }) => {
-    const sent: ManifestRequestMessage[] = [];
-    const requests = manifestRequests({
-      send: (message) => sent.push(message),
-      ...timeouts,
-      quietMs: 60_000,
-      onTimeout: () => {},
-    });
-    return { sent, requests };
-  };
-
-  it("ignores an answer for a different path and keeps waiting", async () => {
-    const { sent, requests } = make();
-    const pending = requests.request("acct@h/p@h/a.js");
-    requests.settle({ id: sent[0].id, path: "garbage", error: "unparseable" });
-    expect(requests.has(sent[0].id)).toBe(true);
-    requests.settle({ id: sent[0].id, path: sent[0].path, manifest });
-    expect(await pending).toEqual(manifest);
-  });
-
-  it("gives up quickly after a timeout, until the worker answers again", async () => {
-    const { sent, requests } = make({ timeoutMs: 150, quickTimeoutMs: 10 });
-    const elapsed = async (path: string) => {
-      const start = performance.now();
-      await requests.request(path);
-      return performance.now() - start;
-    };
-    expect(await elapsed("acct@h/p@h/a.js")).toBeGreaterThanOrEqual(140);
-    expect(await elapsed("acct@h/p@h/b.js")).toBeLessThan(100);
-    const answered = requests.request("acct@h/p@h/c.js");
-    const last = sent.at(-1)!;
-    requests.settle({ id: last.id, path: last.path, manifest });
-    await answered;
-    expect(await elapsed("acct@h/p@h/d.js")).toBeGreaterThanOrEqual(140);
-  });
-
-  it("lists what's pending, for re-sending to a restarted worker", () => {
-    const { sent, requests } = make();
-    void requests.request("acct@h/p@h/a.js");
-    expect(requests.pending()).toEqual(sent);
   });
 });

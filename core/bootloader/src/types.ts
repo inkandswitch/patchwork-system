@@ -48,9 +48,14 @@ export interface HandoffRequest {
   handoffURL: string;
   /**
    * For a `/@/` URL, the path after `/@/`: live (answered with a redirect to
-   * its pinned form) or pinned (answered with its bytes, inline).
+   * its pinned form, whose body is the file list it names) or pinned (answered
+   * with its bytes, inline).
    */
   path?: string;
+  /** Read the file `path` names at these heads, as its file list recorded. */
+  heads?: string;
+  /** Answer the file list of the container `path` names, not a file. */
+  list?: boolean;
   /**
    * @deprecated A briefly-deployed shape put the special URL in `url` and
    * the cache key here. Only read, never sent.
@@ -204,50 +209,10 @@ export type SetupServiceWorkerResult = {
 };
 
 /**
- * What the service worker knows about one pinned URL: the hash its bytes must have, the type to
- * serve them as, and whether they may be kept in the content store.
- */
-export type IndexEntry = { sha256: string; contentType: string; store: boolean };
-
-/**
- * Automerge worker → service worker: every file under the last document a pinned URL enters, at
- * its heads. `prefix` is the canonical pinned path of that document; each entry's key is the tail
- * below it ("" for the document itself).
- */
-export type Manifest = { prefix: string; entries: Record<string, IndexEntry> };
-
-/**
- * Where the automerge worker's script is served. The vite plugin keeps this name from one build
- * to the next (it's started by URL), and the service worker trusts index answers only from a
- * SharedWorker running it.
+ * Where the automerge worker's script is served, by default. The vite plugin keeps this name
+ * from one build to the next, since it's started by URL.
  */
 export const AUTOMERGE_WORKER_PATH = "/automerge-protocol-handler-worker.js";
-
-/**
- * Where the automerge worker POSTs its answers to the service worker. Under the reserved `/@/`
- * prefix, and `.` isn't base58, so no account path can collide with it.
- */
-export const INDEX_ANSWER_PATH = "/@/.index";
-
-/** Service worker → automerge worker, on HANDOFF_CHANNEL: build the manifest covering `path`. */
-export interface ManifestRequestMessage {
-  type: "manifest";
-  id: string;
-  path: string;
-}
-
-/** Automerge worker → service worker, as the body of a POST to INDEX_ANSWER_PATH. */
-export type IndexAnswer = {
-  id: string;
-  /**
-   * The path the request named. Requests are broadcast, so a page can send
-   * the worker a copy with the same id and another path; the service worker
-   * takes an answer only for the path it asked about.
-   */
-  path?: string;
-  manifest?: Manifest;
-  error?: string;
-};
 
 /** Tab → automerge worker: resolve paths under this account. */
 export interface RegisterAccountMessage {
