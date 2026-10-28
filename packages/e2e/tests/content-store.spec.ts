@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { waitForRepoReady, waitForServiceWorkerActive } from "./helpers.js";
+import { waitForRepoReady } from "./helpers.js";
 
 /**
  * The service worker's content store for pinned `/@/` URLs. Anything on the
  * origin can write CacheStorage, so the store is untrusted: every read is
- * hashed and checked against an index only the automerge worker can fill.
- * These tests play the page that tries to get around that.
+ * hashed and checked against the file list the pinned URL names by hash.
+ * This plays the page that tries to get around that.
  */
 
 declare global {
@@ -97,21 +97,4 @@ test("a forged store entry is never served", async ({ page, browserName }) => {
     pinned
   );
   expect(value).toBe(42);
-});
-
-test("an index answer from a page is refused", async ({ page }) => {
-  await page.goto("/");
-  await waitForServiceWorkerActive(page);
-  const status = await page.evaluate(async () => {
-    const response = await fetch("/@/.index", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        id: "forged",
-        manifest: { prefix: "x@y", entries: {} },
-      }),
-    });
-    return response.status;
-  });
-  expect(status).toBe(403);
 });
