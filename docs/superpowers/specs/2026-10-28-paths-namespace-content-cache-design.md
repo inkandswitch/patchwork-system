@@ -238,16 +238,34 @@ Builds on the `open-document-path` branch (48f4ab98):
     packages with the same name both load; the name only decides which one a
     path lookup finds.
   - Packages are tracked by document id, so a rename doesn't reload anything.
-  - When a package's own heads move, the watcher builds its pinned chain with
-    `pinPath`, with a list on every container from the package's own step
-    down, and imports it. A push that changes only files behind links
-    without heads must still touch the package doc; pushwork already bumps
-    `lastSyncAt` for that. Other packages keep their existing URLs: a
+  - When a package's own heads move, the watcher looks it up again, gets a
+    new pinned URL, and imports that. A push that changes only files behind
+    links without heads must still touch the package doc; pushwork already
+    bumps `lastSyncAt` for that.
+  - The lookup is a live URL through the union member that holds the
+    package: `/@/<acctHash>/packages/<memberIdhash>@<heads>/<name>`. That
+    finds a shadowed package too. A resolver answers with a 307 to the
+    package's pinned URL. The watcher imports the package as an http
+    package from that URL: `package.json`, then its entry, both checked
+    against the list.
+  - A package's list is **deep**: a container with a `package.json` file
+    lists every file under it, through nested folders. A folder package's
+    `./sub/x.js` is reached by name, not by a doc step, so it has to be in
+    the package's own list. Other containers list only their own files.
+  - A live → pinned redirect to a **container** carries that container's
+    whole list (deep, for a package). A redirect to a file carries only that
+    file's. A file in a nested folder is read through a link without heads,
+    so a resolver reads at a list's `heads` whether or not the path is
+    canonical. Other packages keep their existing URLs: a
     pinned URL stays valid forever, so a change elsewhere in the chain
     doesn't reload them.
   - `PackageTracker.findLatest` keeps asking the service worker, in the new
     grammar.
 - The site's `system` HTTP manifest stays a separate source.
+- So does the module-settings doc, for now. The Packages UI (an installed
+  tool, not in this repo) still installs into it, so the watcher loads both
+  it and `/packages`, deduplicated by document id. A package in both is
+  imported through `/packages`.
 - A link under `/packages` that isn't a package (no `package.json`) is
   warned about and skipped.
 
@@ -259,8 +277,9 @@ Builds on the `open-document-path` branch (48f4ab98):
   `/packages` binding, create a folder, add a link for each automerge entry
   (named by `package.json` `name`, falling back to the doc title), and bind
   it at `/packages`. The module-settings doc is left untouched.
-- Builds older than this one keep reading the frozen module-settings list, so
-  packages installed afterwards won't show up there.
+- Packages installed through the old Packages UI after the migration still
+  land in the module-settings doc, which this build keeps reading, but not
+  in `/packages`. Builds older than this one never see `/packages`.
 - `AccountDoc.moduleSettingsUrl` is deprecated in favour of the `/packages`
   binding.
 
