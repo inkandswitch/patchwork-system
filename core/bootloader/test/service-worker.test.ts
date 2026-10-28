@@ -108,6 +108,43 @@ describe("service worker: /@/ paths", () => {
     expect(await stored.match(`${ORIGIN}/.content/${await contentHash(toBytes("hi"))}`)).toBeDefined();
   });
 
+  it("serves a folder package's nested files through its pinned URL", async () => {
+    sw = await startServiceWorker();
+    const repo = new Repo();
+    addTab(sw, repo);
+    const file = (content: string) =>
+      repo.create({ "@patchwork": { type: "file" }, content, mimeType: "text/javascript" }).url;
+    const folder = (entries: Record<string, AutomergeUrl>) =>
+      repo.create({
+        title: "folder",
+        docs: Object.entries(entries).map(([name, url]) => ({ name, type: "x", url })),
+      }).url;
+    const pkg = folder({
+      "package.json": file('{"main":"index.js"}'),
+      "index.js": file("export * from './sub/x.js'"),
+      sub: folder({ "x.js": file("export const x = 1") }),
+    });
+    const acct = repo.create({
+      "@patchwork": { type: "account" },
+      namespace: { "/packages": [{ url: folder({ fpkg: pkg }) }] },
+    });
+    const a = await registerAccount(acct.url);
+
+    const pinned = await pin(sw, livePath(a, ["packages", "fpkg"]));
+    for (const [tail, content] of [
+      ["package.json", '{"main":"index.js"}'],
+      ["sub/x.js", "export const x = 1"],
+    ]) {
+      const event = sw.fetch(new Request(`${pinned}/${tail}`), "tab");
+      const response = await event.response()!;
+      expect(await response.text()).toBe(content);
+      expect(response.headers.get("cache-control")).toContain("immutable");
+      await event.settled();
+    }
+    // the list, and the two files read
+    expect(sw.caches.named.get(`patchwork-content-${a}`)!.entries.size).toBe(3);
+  });
+
   it("serves the old bytes for a pinned URL after the file changed", async () => {
     sw = await startServiceWorker();
     const repo = new Repo();
