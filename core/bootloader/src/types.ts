@@ -193,3 +193,16 @@ export type SetupServiceWorkerResult = {
   shared?: SharedWorker;
   kill?: () => void;
 };
+
+/**
+ * What the service worker knows about one pinned URL: the hash its bytes must have, the type to
+ * serve them as, and whether they may be kept in the content store.
+ */
+export type IndexEntry = { sha256: string; contentType: string; store: boolean };
+
+/**
+ * Automerge worker → service worker: every file under the last document a pinned URL enters, at
+ * its heads. `prefix` is the canonical pinned path of that document; each entry's key is the tail
+ * below it ("" for the document itself).
+ */
+export type Manifest = { prefix: string; entries: Record<string, IndexEntry> };
