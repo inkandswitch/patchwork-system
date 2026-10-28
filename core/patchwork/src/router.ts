@@ -9,6 +9,7 @@ import {
   type Repo,
 } from "@automerge/vanillajs/slim";
 import { openDocument } from "@inkandswitch/patchwork-elements";
+import { idhash, resolveLivePath } from "@inkandswitch/patchwork-filesystem";
 import {
   docParamToUrl,
   parseHashParams,
@@ -57,6 +58,34 @@ export function createRouter({
   siteTitle,
   frameToolId,
 }: RouterParams): Router {
+  // A path in the hash resolves only under this site's own account.
+  const accounts = idhash(accountDocHandle.documentId).then(
+    (acctHash) => new Map([[acctHash, accountDocHandle.url]])
+  );
+  const resolvePathParam = async (path: string) => {
+    try {
+      return await resolveLivePath(repo, path, { accounts: await accounts });
+    } catch {
+      return undefined; // a path that doesn't parse names nothing
+    }
+  };
+  /** Take `path=` out of the hash, if it's still the one that was checked. */
+  const dropPath = (path: string, reason: string) => {
+    const params = parseHashParams(window.location.hash.slice(1));
+    if (params.get("path") !== path) return;
+    console.warn(`patchwork: dropping path=${path} from the URL: ${reason}`);
+    params.delete("path");
+    window.location.hash = serializeHashParams(params);
+  };
+  /** `doc=` says what is open; when `path=` names something else, `doc=` wins. */
+  const checkPath = async (docUrl: AutomergeUrl, path: string) => {
+    const handle = await resolvePathParam(path);
+    if (!handle) return dropPath(path, "it names nothing");
+    if (handle.documentId !== parseAutomergeUrl(docUrl).documentId) {
+      dropPath(path, `it names ${handle.url}, not ${docUrl}`);
+    }
+  };
+
   const route = async () => {
     // The first call seeds the root view's tool/doc so it can mount; later
     // calls reconcile the mounted view with the hash.
@@ -103,6 +132,7 @@ export function createRouter({
 
     const params = parseHashParams(hash);
     const docUrl = docParamToUrl(params.get("doc"));
+    const path = params.get("path") ?? undefined;
     const frame = params.get("frame");
 
     if (frame) {
@@ -116,26 +146,37 @@ export function createRouter({
       }
     }
 
-    if (docUrl) {
+    const open = (url: AutomergeUrl) =>
       rootElement.dispatchEvent(
         new CustomEvent("patchwork:open-document", {
           detail: {
-            url: docUrl,
+            url,
             toolId: params.get("tool"),
             title: params.get("title"),
             type: params.get("type"),
+            path,
           },
         })
       );
+
+    if (docUrl) {
+      open(docUrl);
+      if (path) void checkPath(docUrl, path);
+    } else if (path) {
+      // Just a path: open what it names.
+      const handle = await resolvePathParam(path);
+      if (handle) open(handle.url);
+      else dropPath(path, "it names nothing");
     }
   };
 
   rootElement.addEventListener("patchwork:open-document", async (event) => {
-    const { url, toolId, type, title } = event.detail as {
+    const { url, toolId, type, title, path } = event.detail as {
       url: AutomergeUrl;
       toolId?: string;
       type?: string;
       title?: string;
+      path?: string;
     };
 
     const params = parseHashParams(window.location.hash.slice(1));
@@ -154,6 +195,7 @@ export function createRouter({
     }
     params.set("doc", url);
     for (const [key, value] of [
+      ["path", path],
       ["tool", toolId],
       ["title", title],
       ["type", type],
