@@ -1,4 +1,4 @@
-import type { Repo } from "@automerge/automerge-repo/slim";
+import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
 import type {
   AccountCreator,
   AccountDoc,
@@ -16,6 +16,26 @@ export async function createSubdoc<D>(
     init(doc);
   });
   return handle;
+}
+
+/**
+ * Show `/packages` in the account's tree: a link named `packages` in its root
+ * folder, to the packages folder, unless the root folder already has an entry
+ * by that name. The `/packages` mount shadows a same-named entry in `/`, so the
+ * link means the same thing; renaming or removing it changes only the view.
+ */
+export async function linkPackagesIntoRoot(
+  repo: Repo,
+  rootFolderUrl: AutomergeUrl | undefined,
+  packagesFolderUrl: AutomergeUrl
+): Promise<void> {
+  if (!rootFolderUrl) return;
+  const root = await repo.find<{ docs?: Array<{ name: string }> }>(rootFolderUrl);
+  if (!Array.isArray(root.doc()?.docs)) return;
+  if (root.doc()!.docs!.some((entry) => String(entry?.name) === "packages")) return;
+  root.change((doc) => {
+    doc.docs!.push({ name: "packages", type: "folder", url: packagesFolderUrl } as never);
+  });
 }
 
 export const createDefaultAccount: AccountCreator<AccountDoc> = async (
@@ -54,4 +74,5 @@ export const createDefaultAccount: AccountCreator<AccountDoc> = async (
     doc.moduleSettingsUrl = moduleSettings.url;
     doc.contactUrl = contact.url;
   });
+  await linkPackagesIntoRoot(repo, rootFolder.url, packagesFolder.url);
 };

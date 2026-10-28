@@ -122,6 +122,32 @@ describe("migratePackages: what it can't simply link", () => {
   });
 });
 
+describe("migratePackages: the packages folder in the tree", () => {
+  it("links the new folder into the root folder as packages", async () => {
+    const repo = new Repo();
+    const { alpha } = packages(repo);
+    const acct = await account(repo, [alpha.url]);
+    const root = repo.create<any>({ title: "root", docs: [] });
+    acct.change((d: any) => (d.rootFolderUrl = root.url));
+    await migratePackages(repo, acct);
+    expect(root.doc().docs).toEqual([
+      { name: "packages", type: "folder", url: acct.doc().namespace["/packages"][0].url },
+    ]);
+  });
+
+  it("leaves a root folder that already has something named packages alone", async () => {
+    const repo = new Repo();
+    const { alpha } = packages(repo);
+    const acct = await account(repo, [alpha.url]);
+    const mine = repo.create({ title: "mine", docs: [] }).url;
+    const root = repo.create<any>({ title: "root", docs: [{ name: "packages", type: "folder", url: mine }] });
+    acct.change((d: any) => (d.rootFolderUrl = root.url));
+    await migratePackages(repo, acct);
+    expect(root.doc().docs).toHaveLength(1);
+    expect(root.doc().docs[0].url).toBe(mine);
+  });
+});
+
 describe("createDefaultAccount", () => {
   it("binds / to the root folder and /packages to a new one", async () => {
     const repo = new Repo();
@@ -131,6 +157,10 @@ describe("createDefaultAccount", () => {
     expect(doc.namespace["/"]).toEqual([{ url: doc.rootFolderUrl }]);
     const packagesFolder = await repo.find<any>(doc.namespace["/packages"][0].url);
     expect(packagesFolder.doc()).toMatchObject({ title: "Packages", docs: [] });
+    const root = await repo.find<any>(doc.rootFolderUrl);
+    expect(root.doc().docs).toEqual([
+      { name: "packages", type: "folder", url: packagesFolder.url },
+    ]);
     expect(doc.moduleSettingsUrl).toBeDefined();
   });
 });

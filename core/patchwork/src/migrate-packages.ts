@@ -17,7 +17,7 @@ import {
   type HasPatchworkMetadata,
 } from "@inkandswitch/patchwork-filesystem";
 import type { AccountDoc } from "@inkandswitch/patchwork-plugins";
-import { createSubdoc } from "./createAccount.js";
+import { createSubdoc, linkPackagesIntoRoot } from "./createAccount.js";
 
 const decode = (content: string | Uint8Array) =>
   typeof content === "string" ? content : new TextDecoder().decode(content);
@@ -143,5 +143,8 @@ export async function migratePackages(
     doc.namespace ??= {};
     doc.namespace["/packages"] = [{ url: folder.url }];
   });
+  await linkPackagesIntoRoot(repo, account.doc()?.rootFolderUrl, folder.url).catch(
+    (error) => console.warn("couldn't show /packages in the root folder", error)
+  );
   return true;
 }
