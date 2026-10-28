@@ -11,6 +11,7 @@ import {
   importPackageFromHttpUrl,
 } from "./packages.js";
 import { type HasPatchworkMetadata } from "./metadata.js";
+import type { PackageEntry } from "./packages-folder.js";
 import {
   DEFAULT_BRANCH,
   trackPackagesInRepo,
@@ -132,6 +133,11 @@ export class ModuleWatcher {
   #retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #lastAnnounced = new Map<string, string>();
   #activeModules = new Set<string>();
+  /** Package folders (`/packages`), by source name: what they list, and how to stop hearing them. */
+  #folders = new Map<
+    string,
+    { entries: () => PackageEntry[]; unsubscribe: () => void }
+  >();
   #disposed = false;
 
   onLoad: (name: string, mod: any) => void;
@@ -410,6 +416,8 @@ export class ModuleWatcher {
     );
     if (this.#watchedModules.get(importName) !== entry) return undefined;
     if (lookup !== entry.lookups) return undefined;
+    // A /packages package comes back as its pinned /@/ URL, imported over http.
+    if (!isValidAutomergeUrl(latest)) return latest;
     const packageUrl = stripHeads(latest);
     if (packageUrl !== entry.packageUrl) {
       warnBranchesUnsupported(importName as AutomergeUrl);
@@ -495,6 +503,8 @@ export class ModuleWatcher {
 
   dispose() {
     this.#disposed = true;
+    for (const { unsubscribe } of this.#folders.values()) unsubscribe();
+    this.#folders.clear();
     for (const handle of Object.values(this.handles ?? {})) {
       handle.removeListener("change", this.onChange);
     }
@@ -509,11 +519,42 @@ export class ModuleWatcher {
     this.#activeModules.clear();
   }
 
+  /**
+   * Load every package in a `/packages` folder, and keep loading what it lists:
+   * `subscribe` calls back whenever `entries` may have changed. A package is
+   * keyed by its document, so a rename reloads nothing, and one that module
+   * settings also lists loads once, through here. Looking packages up is the
+   * tracker's job (see trackPackagesFolder).
+   */
+  async addPackagesFolder(
+    name: string,
+    entries: () => PackageEntry[],
+    subscribe: (onChange: () => void) => () => void
+  ): Promise<void> {
+    await this.doneLoading;
+    if (this.#disposed) return;
+    this.#folders.get(name)?.unsubscribe();
+    this.#folders.set(name, { entries, unsubscribe: subscribe(this.onChange) });
+    await this.load();
+  }
+
   private async load() {
     if (!this.handles) throw new Error("No handles");
     const urls = new Set<string>();
+    const inFolders = new Set<string>();
+    for (const { entries } of this.#folders.values()) {
+      for (const entry of entries()) {
+        urls.add(entry.url);
+        inFolders.add(parseAutomergeUrl(entry.url).documentId);
+      }
+    }
     for (const { doc } of this.settingsDocs()) {
-      for (const m of doc?.modules ?? []) urls.add(m);
+      for (const m of doc?.modules ?? []) {
+        if (isValidAutomergeUrl(m) && inFolders.has(parseAutomergeUrl(m).documentId)) {
+          continue;
+        }
+        urls.add(m);
+      }
     }
     const previousActive = this.#activeModules;
     this.#activeModules = urls;
