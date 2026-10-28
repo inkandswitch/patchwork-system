@@ -40,8 +40,17 @@ export interface HandoffRequest {
    * `https://…/automerge%3Aabc/…` form) — the cache key.
    */
   url: string;
-  /** the decoded special URL, e.g. `automerge:abc/some/path` */
+  /**
+   * the decoded special URL, e.g. `automerge:abc/some/path`. For a `/@/` path
+   * it's `patchwork-path:` and the path, which older resolvers parse and then
+   * decline, since it isn't `automerge:`.
+   */
   handoffURL: string;
+  /**
+   * For a `/@/` URL, the path after `/@/`: live (answered with a redirect to
+   * its pinned form) or pinned (answered with its bytes, inline).
+   */
+  path?: string;
   /**
    * @deprecated A briefly-deployed shape put the special URL in `url` and
    * the cache key here. Only read, never sent.
