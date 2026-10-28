@@ -285,9 +285,18 @@ change between two reads. `sites/bench` gets a case measuring it.
 - **The index channel is authenticated.** Today's `HANDOFF_CHANNEL` is a
   BroadcastChannel: any context on the origin can listen, see request ids,
   and reply first with a forged response. That is a hole in the current code
-  as well. Index answers must arrive from a `Client` whose `url` is the
-  automerge worker's hashed script URL, which the service worker knows at
-  build time.
+  as well. Index answers must arrive from a `Client` whose `type` is
+  `sharedworker` and whose `url` is the automerge worker's script URL, which
+  the service worker knows at build time.
+  - The worker sends answers as `fetch()` requests to a reserved path. The
+    service worker looks up `event.clientId` with `clients.get` and checks
+    the client. This is the only reply path that works in all three engines
+    (see [Spikes](#spikes-before-planning)).
+  - Requests can stay on a BroadcastChannel. A listener learns which pinned
+    URLs are being loaded, which it could see anyway, but it can't answer.
+  - Checking `type` is not optional. Any page can start a dedicated `Worker`
+    from the same script URL, and it shows up with the same `url` and
+    `type: "worker"`.
 
 ## Remaining gaps
 
@@ -316,7 +325,28 @@ These replace the deleted `package-load-gate.md` note.
   Chromium, Firefox and WebKit? Fallback: the worker posts answers to the
   service worker as `fetch()` requests, whose `clientId` the service worker
   can look up. Spike: `packages/e2e/spikes/sw-sharedworker`, run in CI by
-  `.github/workflows/spike-sw-sharedworker.yml`.
+  `.github/workflows/spike-sw-sharedworker.yml` (run 40640485949: Chrome 147,
+  Firefox 148, Safari 26.4).
+
+  **Answered: only the fetch path works everywhere.**
+
+  | | Chromium | Firefox | WebKit |
+  |---|---|---|---|
+  | Worker is a controlled `sharedworker` client, `url` includes the query | yes | yes | yes |
+  | `navigator.serviceWorker` in the worker | no | yes | yes |
+  | `navigator.serviceWorker.controller` in the worker | no | null | yes |
+  | Service worker `client.postMessage` reaches the worker | no | yes | yes |
+  | Worker replies with `controller.postMessage`, `event.source` checkable | no | no | yes |
+  | Worker replies on a port sent with the ping (`source` is null) | no | yes | yes |
+  | Worker `fetch()`, `clients.get(clientId)` gives `sharedworker` and its url | yes | yes | yes |
+  | Dedicated `Worker` from the same URL: same `url`, `type: "worker"` | yes | yes | yes |
+
+  Chromium doesn't expose `ServiceWorkerContainer` in workers, so the service
+  worker can't message the automerge worker at all there. In Firefox the
+  worker's first `fetch()`, made while its module was still evaluating, went
+  to the network instead of the service worker. Its later fetches were
+  intercepted. So answers should be retried, or the worker should hold them
+  until it has seen one of its own fetches answered by the service worker.
 - Does automerge verify change hashes when loading a document from storage?
   **Answered: yes**, though it's planned to become optional (see
   [Remaining gaps](#remaining-gaps)).
