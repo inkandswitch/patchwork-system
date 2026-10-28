@@ -1,4 +1,6 @@
-import { afterEach, describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, onTestFinished } from "vitest";
+import { createResolver } from "../src/resolver.js";
+import { HANDOFF_CHANNEL } from "../src/types.js";
 import { Repo, stringifyAutomergeUrl, type AutomergeUrl } from "@automerge/automerge-repo";
 import { contentHash, livePath, toBytes } from "@inkandswitch/patchwork-filesystem";
 import {
@@ -129,6 +131,15 @@ describe("service worker: /@/ paths", () => {
       namespace: { "/packages": [{ url: folder({ fpkg: pkg }) }] },
     });
     const a = await registerAccount(acct.url);
+    // Tabs leave /packages to the automerge worker, which answers broadcasts.
+    const worker = createResolver(() => Promise.resolve(repo), undefined, () => new Map([[a, acct.url]]));
+    const channel = new BroadcastChannel(HANDOFF_CHANNEL);
+    channel.onmessage = async (event) => {
+      if (event.data?.type !== "request") return;
+      const reply = await worker.answer(event.data);
+      if (reply) channel.postMessage(reply);
+    };
+    onTestFinished(() => channel.close());
 
     const pinned = await pin(sw, livePath(a, ["packages", "fpkg"]));
     for (const [tail, content] of [

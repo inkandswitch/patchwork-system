@@ -67,7 +67,7 @@ import type {
 } from "./types.js";
 import { createRepo, initWasm } from "./repo.js";
 import { watchDocument } from "./watch-document.js";
-import { migratePackages } from "./migrate-packages.js";
+import { caughtUpWithServer, migratePackages } from "./migrate-packages.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 
@@ -200,9 +200,9 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     options.importModulesInWorker === false
       ? undefined
       : importAutomergePackageViaWorker,
-    // Look packages up through the automerge worker and watch them through
-    // this tab's Subduction subscriptions, so their docs never load into this
-    // tab's Repo.
+    // Look packages up through the automerge worker (tabs leave /packages
+    // lookups to it) and watch them through this tab's Subduction
+    // subscriptions, so their docs never load into this tab's Repo.
     trackPackagesFolder(
       account.promise,
       () => packageEntries,
@@ -219,7 +219,10 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   })) as DocHandle<AccountDoc>;
   // So /@/<acctHash>/… paths under it resolve, here and in the automerge worker.
   account.resolve(await registerAccount(accountDocHandle.url));
-  await migratePackages(repo, accountDocHandle).catch((error) =>
+  await migratePackages(repo, accountDocHandle, {
+    // Another device may already have migrated this account.
+    caughtUp: () => caughtUpWithServer(repo, accountDocHandle),
+  }).catch((error) =>
     console.warn("couldn't move module settings into /packages", error)
   );
   await wirePackagesFolder(repo, accountDocHandle, moduleWatcher, (entries) => {

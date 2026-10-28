@@ -201,6 +201,16 @@ describe("resolver: accounts it doesn't know", () => {
     expect(await tab.answer(pathRequest(livePath(a, ["Projects"])))).toBeUndefined();
   });
 
+  it("a tab leaves /packages to the automerge worker", async () => {
+    const { repo, a, accounts } = await fixture();
+    const tab = createResolver(() => Promise.resolve(repo), undefined, () => accounts, {
+      declineUnknownAccounts: true,
+      declinePackages: true,
+    });
+    expect(await tab.answer(pathRequest(livePath(a, ["packages", "x"])))).toBeUndefined();
+    expect(await tab.answer(pathRequest(livePath(a, ["Projects"])))).toBeDefined();
+  });
+
   it("the worker, asked last, answers 404", async () => {
     const { repo, a } = await fixture();
     const worker = createResolver(() => Promise.resolve(repo), undefined, () => new Map());

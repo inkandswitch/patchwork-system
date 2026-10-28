@@ -30,6 +30,7 @@ const accounts = new Map<string, AutomergeUrl>();
 export function resolveHandoffsWith(repo: Repo): void {
   resolver = createResolver(() => Promise.resolve(repo), undefined, () => accounts, {
     declineUnknownAccounts: true,
+    declinePackages: true,
   });
 }
 

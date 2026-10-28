@@ -35,7 +35,7 @@ describe("migratePackages", () => {
     const repo = new Repo();
     const { alpha, bee } = packages(repo);
     const acct = await account(repo, [
-      alpha.view(alpha.heads()).url,
+      alpha.url,
       bee.url,
       "https://cdn.example.test/tool/index.js",
     ]);
@@ -70,6 +70,55 @@ describe("migratePackages", () => {
     const repo = new Repo();
     const acct = repo.create<any>({ "@patchwork": { type: "account" } });
     expect(await migratePackages(repo, acct as DocHandle<any>)).toBe(false);
+  });
+});
+
+describe("migratePackages: what it can't simply link", () => {
+  it("names two packages with one package.json name apart", async () => {
+    const repo = new Repo();
+    const twin = () => {
+      const json = repo.create({ "@patchwork": { type: "file" }, content: '{"name":"alpha"}', mimeType: "application/json" });
+      return repo.create({ "@patchwork": { type: "directory" }, "package.json": json.url });
+    };
+    const [a, b] = [twin(), twin()];
+    const acct = await account(repo, [a.url, b.url]);
+    await migratePackages(repo, acct);
+    expect(await linked(repo, acct)).toEqual([
+      ["alpha", a.url],
+      ["alpha (2)", b.url],
+    ]);
+  });
+
+  it("links a package it can't read under its document id", async () => {
+    const repo = new Repo();
+    const missing = "automerge:4NMNnkMhL8jXrdJ9jamS58PAVdXu" as AutomergeUrl;
+    const acct = await account(repo, [missing]);
+    await migratePackages(repo, acct, { readTimeoutMs: 200 });
+    expect(await linked(repo, acct)).toEqual([["4NMNnkMhL8jXrdJ9jamS58PAVdXu", missing]]);
+  });
+
+  it("leaves an entry pinned to heads in module settings", async () => {
+    const repo = new Repo();
+    const { alpha } = packages(repo);
+    const acct = await account(repo, [alpha.view(alpha.heads()).url]);
+    await migratePackages(repo, acct);
+    expect(await linked(repo, acct)).toEqual([]);
+  });
+
+  it("waits for the account to catch up, and leaves it for next boot if it can't", async () => {
+    const repo = new Repo();
+    const { alpha } = packages(repo);
+    const acct = await account(repo, [alpha.url]);
+    expect(await migratePackages(repo, acct, { caughtUp: async () => false })).toBe(false);
+    expect(acct.doc().namespace).toBeUndefined();
+  });
+
+  it("doesn't migrate again after /packages was emptied on purpose", async () => {
+    const repo = new Repo();
+    const { alpha } = packages(repo);
+    const acct = await account(repo, [alpha.url]);
+    acct.change((d: any) => (d.namespace = { "/packages": [] }));
+    expect(await migratePackages(repo, acct)).toBe(false);
   });
 });
 

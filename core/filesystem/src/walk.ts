@@ -479,8 +479,9 @@ const LIST_CONCURRENCY = 8;
 /**
  * Every file under the last container a canonical pinned path enters (see
  * {@link WalkEnd.container}), keyed by tail: "" for the container itself, encoded names joined
- * with "/" below it. Containers below it aren't listed; they have their own doc steps. `path`
- * may name the container or anything in it. Undefined unless `path` is canonical.
+ * with "/" below it. Folders below it are listed into only when it's a package (see `deep`);
+ * otherwise they have their own doc steps. `path` may name the container or anything in it.
+ * Undefined unless `path` is canonical.
  *
  * File docs are read with `findFile` (default: `find`), several at once. One that can't be read
  * is left out and its tail named in `missing`, so a caller can tell a partial list from a whole

@@ -285,7 +285,12 @@ async function resolveWalkPath(
   if (!end.canonical) {
     let pinned: Awaited<ReturnType<typeof pinnedPath>>;
     try {
-      pinned = await pinnedPath(repo, path, { ...options, only: "end" });
+      pinned = await pinnedPath(repo, path, {
+        ...options,
+        only: "end",
+        // Each file as this node has it, without waiting on peers for every one.
+        findFile: waitingFind(repo, signal, missing, { catchUp: false }),
+      });
     } catch (error) {
       // The file isn't readable here yet: not a 404, which would be memoized.
       if (error instanceof IncompleteFileListError) throw new AbortHandoff(error.message);
@@ -334,8 +339,22 @@ export function createResolver(
      * answers 404 instead.
      */
     declineUnknownAccounts?: boolean;
+    /**
+     * Decline paths through `/packages`, leaving them to the automerge
+     * worker. A package lookup reads every file in the package, and a tab
+     * shouldn't hold them all.
+     */
+    declinePackages?: boolean;
   } = {}
 ): Resolver {
+  const throughPackages = (path: string) => {
+    try {
+      const [first] = parsePath(path).segments;
+      return first?.kind === "name" && first.name === "packages";
+    } catch {
+      return false;
+    }
+  };
   const knowsAccountOf = (path: string) => {
     try {
       const { root } = parsePath(path);
@@ -413,6 +432,7 @@ export function createResolver(
           if (options.declineUnknownAccounts && !knowsAccountOf(request.path)) {
             return undefined;
           }
+          if (options.declinePackages && throughPackages(request.path)) return undefined;
           const repo = await getRepo();
           const limit = within(signal);
           log(`resolving handoff ${id} for /@/${request.path}`);
