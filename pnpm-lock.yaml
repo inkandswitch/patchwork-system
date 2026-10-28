@@ -217,6 +217,9 @@ importers:
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.48
         version: 2.6.0-subduction.48(patch_hash=3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e)
+      bs58:
+        specifier: ^6.0.0
+        version: 6.0.0
       debug:
         specifier: ^4.4.3
         version: 4.4.3

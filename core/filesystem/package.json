@@ -23,6 +23,7 @@
     "@automerge/automerge-repo": "*"
   },
   "dependencies": {
+    "bs58": "^6.0.0",
     "debug": "^4.4.3",
     "resolve.exports": "^2.0.3"
   },
