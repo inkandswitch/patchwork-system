@@ -6,6 +6,7 @@ export default defineConfig({
       "core/bootloader",
       "core/filesystem",
       "core/patchwork",
+      "core/plugins",
       "packages/edge-handles",
     ],
   },
