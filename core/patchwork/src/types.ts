@@ -39,7 +39,7 @@ export interface OpenOptions {
   tool?: string;
   type?: string;
   title?: string;
-  /** Where the document was opened from; see `OpenDocumentEventDetail.path`. */
+  /** The live path the document was opened at; see `OpenDocumentEventDetail.path`. */
   path?: string;
 }
 

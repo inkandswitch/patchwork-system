@@ -88,7 +88,7 @@ export type PatchworkViewElementBase = HTMLElement & {
   repo: Repo;
   docUrl?: AutomergeUrl | null;
   toolId?: string | null;
-  /** Where the doc was opened from; see `OpenDocumentEventDetail.path`. */
+  /** The live path the doc was opened at; see `OpenDocumentEventDetail.path`. */
   path?: string | null;
 };
 

@@ -6,9 +6,10 @@ export interface OpenDocumentEventDetail {
   title?: string;
   type?: string;
   /**
-   * Where the document was opened from, like a cwd. Same shape as a
-   * service-worker path: `/<encoded automerge URL>/<subpath>`, e.g.
-   * `/automerge%3A<folderId>/src/components`.
+   * The live path the document was opened at, like a cwd:
+   * `<acctHash>/Projects/foo`, each segment `encodeURIComponent`-encoded
+   * (see `livePath` in `@inkandswitch/patchwork-filesystem`). The router
+   * writes it to `&path=`.
    */
   path?: string;
 }
