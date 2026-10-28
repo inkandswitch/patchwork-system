@@ -389,6 +389,75 @@ store, and both are checked against the URL the watcher pinned.
 - **Legacy `/automerge%3A…` URLs** stay keyed by URL and unchecked. Their
   replies still ride `HANDOFF_CHANNEL`, which any context can answer first.
 
+## 6. Package-supplied path providers (proposed, not approved)
+
+The sidebar can open up a doc that isn't a folder when a built-in provider
+walks it: a directory doc, a branches doc, the account. This section proposes
+letting a datatype say what its children are too: a tldraw doc's embedded
+docs, say, or the docs a markdown doc links to. It lifts the non-goal
+"Path providers supplied by packages".
+
+### The plugin
+
+A `patchwork:path-provider` plugin is a `PathProvider`: `matches`, `lookup`
+and `list`, exported from `patchwork-filesystem` already. A datatype package
+registers one beside its datatype.
+
+- **Built-ins come first and can't be overridden.** Account, directory, folder
+  and branches are checked first; package providers after, in registration
+  order. A package can't take over how folders resolve.
+- **It's a pure function of the document.** `list` and `lookup` read only the
+  node they're given, at the heads they're given. That's what lets a file
+  list built through a provider be rebuilt to the same bytes.
+
+### Where it runs: tabs only
+
+The automerge worker never loads package code, so it never runs package
+providers. A tab does: its sidebar, its walks, and its resolver.
+
+- **The service worker asks tabs first.** Live → pinned redirects and reads at
+  heads through a package provider are answered by a tab. A page made the
+  request, so there is one.
+- **`/packages` is the worker's.** Tabs decline it (section 4), so package
+  providers don't apply under `/packages`. Packages are folders and
+  directories anyway.
+- **A pinned URL needs a tab to rebuild its list.** If a pinned URL goes
+  through a package provider and its list is lost, only a tab with that
+  provider loaded can rebuild it. Without one, it fails as a network error.
+
+### Trust
+
+Nothing between a URL and its bytes trusts a provider (section 5). A file list
+built through one is checked against the URL; bytes are checked against the
+list.
+
+What a provider *can* do is the same as any package code in a tab:
+- name the wrong children in the sidebar;
+- resolve a live path to a document it shouldn't;
+- by being pinned, choose the version a URL names.
+
+That's the "whoever builds a URL chooses its version" gap, applied to
+providers. It adds no access a package doesn't already have.
+
+### Versions
+
+A new version of the providing package can change what a live path resolves
+to. Pinned paths don't change. A list rebuilt through a changed provider won't
+match its hash, so the URL fails rather than serving something else.
+
+### Open questions
+
+1. **Editing.** Should a provider be able to say how to add, rename or remove
+   a child, so those rows aren't read-only? Or is that the datatype's own
+   tool's job?
+2. **Values.** Should children that are values inside the doc (not links) be
+   openable, as a sub-document view with its own path? Today only link
+   children show.
+3. **Rows without a type.** The sidebar can only tell a row expands from its
+   link `type`. A provider for a type that isn't `directory` or `branches`
+   needs its type registered as expandable. Should the plugin declare
+   `supportedDatatypes` for that, like tools do?
+
 ## Remaining gaps
 
 These replace the deleted `package-load-gate.md` note.
