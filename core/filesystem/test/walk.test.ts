@@ -232,6 +232,25 @@ describe("pinnedPath", () => {
   });
 });
 
+describe("file list hashes in a walk", () => {
+  it("keeps a container's list hash and says which tail follows it", async () => {
+    const { repo, a, accounts } = await fixture();
+    const pinned = await pinnedPath(repo, livePath(a, ["packages", "foo"]), { accounts });
+    const end = await walkPath(repo, `${pinned}~L/dist/index.js`, { accounts });
+    expect(end?.container?.listHash).toBe("L");
+    expect(end?.container?.pinned).toBe(pinned);
+    expect(end?.tail).toBe("dist/index.js");
+    expect(end?.pinned).toBe(`${pinned}~L/dist/index.js`);
+    expect(end?.canonical).toBe(true);
+  });
+
+  it("says the tail is empty at the container itself", async () => {
+    const { repo, a, accounts } = await fixture();
+    const end = await walkPath(repo, livePath(a, ["packages", "foo"]), { accounts });
+    expect(end?.tail).toBe("");
+  });
+});
+
 describe("pinPath", () => {
   it("prefixes the origin and /@/", async () => {
     vi.stubGlobal("location", { origin: "https://patchwork.test" });

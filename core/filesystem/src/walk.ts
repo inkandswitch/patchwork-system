@@ -67,10 +67,13 @@ export type WalkEnd = {
    */
   canonical: boolean;
   /**
-   * The last document the walk entered that has a provider (a folder, a directory, …), and its
-   * pinned path: what a manifest of the files around the end of the path covers.
+   * The last document the walk entered that has a provider (a folder, a directory, …): its
+   * pinned path, without its own `~listHash`, and that list hash if the input gave one. Its file
+   * list covers the files around the end of the path.
    */
-  container?: { handle: DocHandle<unknown>; pinned: string };
+  container?: { handle: DocHandle<unknown>; pinned: string; listHash?: string };
+  /** The encoded names after the container, joined with "/": "" at the container itself. */
+  tail: string;
 };
 
 /** Where a walk is: inside a document, or at a mount whose binding the next step picks. */
@@ -157,6 +160,13 @@ export async function walkPath(
       );
 
   const out: string[] = [];
+  // Index in `out` → the file list hash the input gave that doc step.
+  const lists = new Map<number, string>();
+  const render = (from: number, to: number) =>
+    out
+      .slice(from, to)
+      .map((step, j) => (lists.has(from + j) ? `${step}~${lists.get(from + j)}` : step))
+      .join("/");
   // Set once a document the pinned path names was entered at its current heads.
   let live = !root.heads;
   let at: At | undefined;
@@ -165,16 +175,18 @@ export async function walkPath(
     at = url && (await enter(url, root.heads));
     if (!at) return undefined;
     out.push(docStep(root.acctHash, at.handle.heads()));
+    if (root.listHash) lists.set(0, root.listHash);
   } else {
     at = await enter(stringifyAutomergeUrl({ documentId: root.documentId }), root.heads);
     if (!at) return undefined;
     out.push(`automerge:${root.documentId}@${formatHeads(root.heads)}`);
+    if (root.listHash) lists.set(0, root.listHash);
   }
 
-  let container: WalkEnd["container"];
+  let container: { handle: DocHandle<unknown>; index: number } | undefined;
   const noteContainer = () => {
     if (at?.kind === "doc" && at.provider && !at.inside) {
-      container = { handle: at.handle, pinned: out.join("/") };
+      container = { handle: at.handle, index: out.length - 1 };
     }
   };
 
@@ -186,9 +198,11 @@ export async function walkPath(
     if (at.kind === "union") {
       let member: AutomergeUrl | undefined;
       let next: AtDoc | undefined;
+      let listHash: string | undefined;
       if (segment?.kind === "doc") {
         member = await matchLink(at.members, segment);
         if (member) {
+          listHash = segment.listHash;
           i++;
           if (!guard(member, segments.length - i)) return undefined;
           next = await enter(member, segment.heads);
@@ -209,6 +223,7 @@ export async function walkPath(
       }
       if (!next) return undefined;
       out.push(await stepOf(next.handle));
+      if (listHash) lists.set(out.length - 1, listHash);
       at = next;
       continue;
     }
@@ -235,6 +250,7 @@ export async function walkPath(
         const next = await enter(link, segment.heads);
         if (!next) return undefined;
         out.push(await stepOf(next.handle));
+        if (segment.listHash) lists.set(out.length - 1, segment.listHash);
         at = next;
         i++;
         continue;
@@ -273,9 +289,16 @@ export async function walkPath(
     handle: at.handle,
     node: at.node,
     atDocument: !at.inside,
-    pinned: out.join("/"),
+    pinned: render(0, out.length),
     canonical: !live,
-    container,
+    container: container && {
+      handle: container.handle,
+      pinned: [render(0, container.index), out[container.index]]
+        .filter(Boolean)
+        .join("/"),
+      listHash: lists.get(container.index),
+    },
+    tail: container ? out.slice(container.index + 1).join("/") : "",
   };
 }
 

@@ -6,13 +6,16 @@ import {
 import bs58 from "bs58";
 
 /**
- * A step that enters a document at given heads: `<idhash>@<heads>`. `raw` is the segment as
- * written, so a walk that finds no link with this idhash can read it as a name instead.
+ * A step that enters a document at given heads: `<idhash>@<heads>`, or
+ * `<idhash>@<heads>~<listHash>` for a container whose files the URL names by their list (see
+ * file-list.ts). `raw` is the segment as written, so a walk that finds no link with this idhash
+ * can read it as a name instead.
  */
 export type DocStep = {
   kind: "doc";
   idhash: string;
   heads: UrlHeads;
+  listHash?: string;
   raw: string;
 };
 export type NameStep = { kind: "name"; name: string };
@@ -23,8 +26,8 @@ export type Segment = DocStep | NameStep;
  * link) a document named by its id. A share root is always pinned.
  */
 export type PathRoot =
-  | { kind: "account"; acctHash: string; heads?: UrlHeads }
-  | { kind: "share"; documentId: DocumentId; heads: UrlHeads };
+  | { kind: "account"; acctHash: string; heads?: UrlHeads; listHash?: string }
+  | { kind: "share"; documentId: DocumentId; heads: UrlHeads; listHash?: string };
 
 export type ParsedPath = { root: PathRoot; segments: Segment[] };
 
@@ -33,6 +36,7 @@ export class PathSyntaxError extends Error {
 }
 
 const BASE58 = /^[1-9A-HJ-NP-Za-km-z]+$/;
+const BASE64URL = /^[A-Za-z0-9_-]+$/;
 const SHARE_PREFIX = "automerge:";
 
 /**
@@ -58,8 +62,12 @@ export function parseHeads(segment: string): UrlHeads | undefined {
   return parts.sort() as UrlHeads;
 }
 
-export function docStep(idhash: string, heads: readonly string[]): string {
-  return `${idhash}@${formatHeads(heads)}`;
+export function docStep(
+  idhash: string,
+  heads: readonly string[],
+  listHash?: string
+): string {
+  return `${idhash}@${formatHeads(heads)}${listHash ? `~${listHash}` : ""}`;
 }
 
 export function livePath(acctHash: string, names: string[]): string {
@@ -74,16 +82,28 @@ function decode(raw: string): string {
   }
 }
 
-/** `<base58>@<heads>`, split, or undefined if it isn't that shape. */
+/** `<heads>` or `<heads>~<listHash>`, split, or undefined if it isn't that shape. */
+function splitHeads(
+  text: string
+): { heads: UrlHeads; listHash?: string } | undefined {
+  const tilde = text.indexOf("~");
+  const heads = parseHeads(tilde < 0 ? text : text.slice(0, tilde));
+  if (!heads) return undefined;
+  if (tilde < 0) return { heads };
+  const listHash = text.slice(tilde + 1);
+  return BASE64URL.test(listHash) ? { heads, listHash } : undefined;
+}
+
+/** `<base58>@<heads>[~<listHash>]`, split, or undefined if it isn't that shape. */
 function splitDocStep(
   raw: string
-): { id: string; heads: UrlHeads } | undefined {
+): { id: string; heads: UrlHeads; listHash?: string } | undefined {
   const at = raw.indexOf("@");
   if (at < 0) return undefined;
   const id = raw.slice(0, at);
-  const heads = parseHeads(raw.slice(at + 1));
-  if (!BASE58.test(id) || !heads) return undefined;
-  return { id, heads };
+  const rest = splitHeads(raw.slice(at + 1));
+  if (!BASE58.test(id) || !rest) return undefined;
+  return { id, ...rest };
 }
 
 function parseRoot(raw: string): PathRoot {
@@ -92,13 +112,13 @@ function parseRoot(raw: string): PathRoot {
     const rest = decoded.slice(SHARE_PREFIX.length);
     const at = rest.lastIndexOf("@");
     const documentId = rest.slice(0, at);
-    const heads = at < 0 ? undefined : parseHeads(rest.slice(at + 1));
-    if (!heads || !isValidDocumentId(documentId)) {
+    const pinned = at < 0 ? undefined : splitHeads(rest.slice(at + 1));
+    if (!pinned || !isValidDocumentId(documentId)) {
       throw new PathSyntaxError(
         `a share link must be automerge:<documentId>@<heads>, got ${decoded}`
       );
     }
-    return { kind: "share", documentId, heads };
+    return { kind: "share", documentId, ...pinned };
   }
   if (BASE58.test(raw)) return { kind: "account", acctHash: raw };
   const step = splitDocStep(raw);
@@ -107,7 +127,12 @@ function parseRoot(raw: string): PathRoot {
       `a path must start with an account hash or a share link, got ${raw}`
     );
   }
-  return { kind: "account", acctHash: step.id, heads: step.heads };
+  return {
+    kind: "account",
+    acctHash: step.id,
+    heads: step.heads,
+    ...(step.listHash ? { listHash: step.listHash } : {}),
+  };
 }
 
 /**
@@ -121,7 +146,13 @@ export function parsePath(path: string): ParsedPath {
   const segments = rest.map((raw): Segment => {
     const step = splitDocStep(raw);
     return step
-      ? { kind: "doc", idhash: step.id, heads: step.heads, raw }
+      ? {
+          kind: "doc",
+          idhash: step.id,
+          heads: step.heads,
+          ...(step.listHash ? { listHash: step.listHash } : {}),
+          raw,
+        }
       : { kind: "name", name: decode(raw) };
   });
   return { root: parseRoot(first), segments };

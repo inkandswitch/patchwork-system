@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  docStep,
   formatHeads,
   idhash,
   livePath,
@@ -97,5 +98,34 @@ describe("parsePath", () => {
     expect(() => parsePath("")).toThrow(PathSyntaxError);
     expect(() => parsePath("acct@0")).toThrow(PathSyntaxError);
     expect(() => parsePath("automerge:not-an-id@h1")).toThrow(PathSyntaxError);
+  });
+});
+
+describe("file list hashes", () => {
+  it("reads a doc step's file list hash", () => {
+    expect(parsePath("acct@h/foo@h~AbC-_9/dist/x.js").segments[0]).toEqual({
+      kind: "doc",
+      idhash: "foo",
+      heads: ["h"],
+      listHash: "AbC-_9",
+      raw: "foo@h~AbC-_9",
+    });
+    expect(docStep("foo", ["b", "a"], "L")).toBe("foo@a.b~L");
+    expect(docStep("foo", ["a"])).toBe("foo@a");
+  });
+
+  it("reads a root's file list hash", () => {
+    expect(parsePath("acct@h~L").root).toEqual({
+      kind: "account",
+      acctHash: "acct",
+      heads: ["h"],
+      listHash: "L",
+    });
+  });
+
+  it("takes a malformed list hash as a name, and refuses it at the root", () => {
+    expect(parsePath("acct@h/foo@h~/x").segments[0]).toEqual({ kind: "name", name: "foo@h~" });
+    expect(parsePath("acct@h/foo@h~a.b/x").segments[0].kind).toBe("name");
+    expect(() => parsePath("acct@h~")).toThrow(PathSyntaxError);
   });
 });
