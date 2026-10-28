@@ -3,11 +3,10 @@ import {
   type DocHandle,
   type Repo,
   isImmutableString,
-  isValidAutomergeUrl,
-  parseAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
 import type { FolderDoc } from "./types.js";
 import { getType } from "./metadata.js";
+import { asLink } from "./providers.js";
 
 export type Resolved = {
   content: string | Uint8Array;
@@ -36,16 +35,6 @@ type Walk = {
 
 /** A URL carries heads when it has a fragment: `automerge:abc#heads`. */
 const hasHeads = (url: unknown): boolean => String(url).includes("#");
-
-/**
- * `value` as a link, if it is one. A link written as an `ImmutableString`
- * (one op, where a plain string is an op per character) reads back as an
- * object, not a string; it's the same url.
- */
-function asLink(value: unknown): AutomergeUrl | undefined {
-  const url = isImmutableString(value) ? String(value) : value;
-  return typeof url === "string" && isValidAutomergeUrl(url) ? url : undefined;
-}
 
 export interface FolderStrategy {
   matches(doc: unknown): boolean;

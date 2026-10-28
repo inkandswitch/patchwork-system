@@ -4,7 +4,10 @@ import {
   type DocHandle,
   type Repo,
 } from "@automerge/automerge-repo/slim";
-import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
+import type {
+  HasPatchworkMetadata,
+  Namespace,
+} from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import { isKeyhiveDoc } from "./keyhive.js";
 
@@ -20,6 +23,10 @@ export type AccountDoc = {
   contextToolIds: string[];
   documentToolbarToolIds: string[];
 
+  /**
+   * Mount point → ordered bindings. Without one, `/` is {@link AccountDoc.rootFolderUrl}.
+   */
+  namespace?: Namespace;
   rootFolderUrl?: AutomergeUrl;
   moduleSettingsUrl?: AutomergeUrl;
   contactUrl?: AutomergeUrl;
