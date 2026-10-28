@@ -579,7 +579,7 @@ async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response
     lists: fileLists,
     store,
     hash: contentHash,
-    buildList: (prefix) => buildList(prefix, ask),
+    buildList: (prefix, only) => buildList(prefix, only, ask),
     resolve: (target, heads) => ask({ path: target, heads }),
     warn: (message) => lifecycle("warn", message),
     keep: (work) =>
@@ -615,15 +615,23 @@ type Ask = (to: {
   path: string;
   heads?: string;
   list?: boolean;
+  only?: string;
 }) => Promise<{ body: Uint8Array; contentType: string } | Response>;
 
 // Concurrent requests for files of one package share a rebuild of its list.
-const buildList = sharedRequests(
-  async (prefix: string, ask: Ask): Promise<Uint8Array | undefined> => {
-    const answer = await ask({ path: prefix, list: true });
+const sharedListBuilds = sharedRequests(
+  async (
+    _key: string,
+    ask: Ask,
+    prefix: string,
+    only: string | undefined
+  ): Promise<Uint8Array | undefined> => {
+    const answer = await ask({ path: prefix, list: true, only });
     return answer instanceof Response ? undefined : answer.body;
   }
 );
+const buildList = (prefix: string, only: string | undefined, ask: Ask) =>
+  sharedListBuilds(`${prefix}\n${only ?? ""}`, ask, prefix, only);
 
 /**
  * A resolver's redirect from a live path carries, as its body, the file list

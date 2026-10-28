@@ -388,9 +388,9 @@ These replace the deleted `package-load-gate.md` note.
 - A pinned URL can't be served if its file list is gone (evicted, cleared,
   or held only in a service worker that stopped) and no resolver can
   rebuild it. A rebuild reads each file at its current heads, so it matches
-  only if nothing changed since, and only for a list that covers the whole
-  container (not a redirect's one-file list, which a fresh request to the
-  live URL replaces). The ModuleWatcher pins again on boot, so
+  only if nothing changed since. It tries the one-file list a redirect hands
+  out first, then the whole container's, so a reloaded page rebuilds as
+  cheaply as it was pinned. The ModuleWatcher pins again on boot, so
   imports recover; a hand-made share link doesn't.
 - Legacy `/automerge%3A…` URLs stay keyed by URL and unchecked.
 - Protected package code is stored in plaintext. Today keyhive's secrets sit

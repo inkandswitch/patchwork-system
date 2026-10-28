@@ -1,6 +1,6 @@
 // Bytes by their hash, in CacheStorage. Nothing here is trusted: any code on the origin can
-// write these caches, so every read is checked against the service worker's index before it's
-// served (see pinned.ts). Reads and writes go through this one interface so the bytes can be
+// write these caches, so every read is hashed and checked against the hash a pinned URL vouches
+// for, through its file list, before it's served (see pinned.ts). Reads and writes go through this one interface so the bytes can be
 // encrypted at rest later.
 
 export interface ContentStore {
@@ -34,7 +34,8 @@ export function cacheStore(cache: Cache, origin: string): ContentStore {
 
 /**
  * Forget everything stored for an account. There's no sign-out flow; a site calls this from its
- * own. The service worker's index may still name these hashes, which then read as misses.
+ * own. File lists the service worker holds in memory may still name these hashes, which then
+ * read as misses.
  */
 export function clearAccountStore(acctHash: string): Promise<boolean> {
   return caches.delete(contentCacheName(acctHash));

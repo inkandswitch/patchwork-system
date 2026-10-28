@@ -322,10 +322,22 @@ export async function resolveLivePath(
 }
 
 /**
+ * A file list couldn't read every file it covers. A pinned URL never changes meaning, so a
+ * list missing a file would make it answer 404 for good; pin again once they can be read.
+ */
+export class IncompleteFileListError extends Error {
+  name = "IncompleteFileListError";
+  constructor(readonly missing: string[]) {
+    super(`couldn't read ${missing.join(", ")} to pin them`);
+  }
+}
+
+/**
  * The pinned form of a path, with a file list on the last container it enters: every file
  * under that container, or with `only: "end"`, only the one the path ends at (what a live →
  * pinned redirect hands out). Returns the path and the list's bytes, which whoever pins hands to
- * the service worker. No list if the path enters no container.
+ * the service worker. No list if the path enters no container. Throws
+ * {@link IncompleteFileListError} rather than pin a list missing a file it should cover.
  */
 export async function pinnedPath(
   repo: Repo,
@@ -344,6 +356,7 @@ export async function pinnedPath(
     only: options.only === "end" ? [end.tail] : undefined,
   });
   if (!built) return { path: end.pinned };
+  if (built.missing.length) throw new IncompleteFileListError(built.missing);
   const listed = `${end.container.pinned}~${built.listHash}`;
   return { path: end.tail ? `${listed}/${end.tail}` : listed, list: built.bytes };
 }

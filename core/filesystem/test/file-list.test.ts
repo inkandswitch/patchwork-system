@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseAutomergeUrl } from "@automerge/automerge-repo";
 import { formatHeads, livePath, parseHeads } from "../src/paths.js";
-import { readPath } from "../src/walk.js";
+import { IncompleteFileListError, pinnedPath, readPath } from "../src/walk.js";
 import { contentHash, toBytes } from "../src/content-hash.js";
 import { buildFileList, canonicalJson, parseFileList } from "../src/file-list.js";
 import { chain, fixture } from "./namespace-fixture.js";
@@ -80,5 +80,17 @@ describe("buildFileList", () => {
       heads: parseHeads(entry.heads!),
     });
     expect(decode(then!.content)).toBe("mine");
+  });
+});
+
+describe("pinnedPath", () => {
+  it("refuses to pin a list that's missing files", async () => {
+    const { repo, a, accounts, minePkg } = await fixture();
+    const bad = (minePkg.doc() as any)["package.json"] as string;
+    const find = (url: any) =>
+      url === bad ? Promise.reject(new Error("unavailable")) : repo.find(url);
+    const pinning = pinnedPath(repo, livePath(a, ["packages", "foo"]), { accounts, find });
+    await expect(pinning).rejects.toBeInstanceOf(IncompleteFileListError);
+    await expect(pinning).rejects.toMatchObject({ missing: ["package.json"] });
   });
 });

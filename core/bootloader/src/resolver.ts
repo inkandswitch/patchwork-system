@@ -19,6 +19,7 @@ import {
 import {
   buildFileList,
   getDefaultBranch,
+  IncompleteFileListError,
   parseHeads,
   parsePath,
   pinnedPath,
@@ -231,7 +232,7 @@ async function resolveWalkPath(
   path: string,
   accounts: ReadonlyMap<string, AutomergeUrl>,
   signal: AbortSignal,
-  { heads, list }: { heads?: string; list?: boolean } = {}
+  { heads, list, only }: { heads?: string; list?: boolean; only?: string } = {}
 ): Promise<Response> {
   try {
     parsePath(path);
@@ -253,6 +254,7 @@ async function resolveWalkPath(
   if (list) {
     const built = await buildFileList(repo, path, {
       ...options,
+      only: only === undefined ? undefined : [only],
       // Each file as this node has it, without waiting on peers for every one.
       findFile: waitingFind(repo, signal, missing, { catchUp: false }),
     });
@@ -266,7 +268,14 @@ async function resolveWalkPath(
   const end = await walkPath(repo, path, options);
   if (!end) return notFound();
   if (!end.canonical) {
-    const pinned = await pinnedPath(repo, path, { ...options, only: "end" });
+    let pinned: Awaited<ReturnType<typeof pinnedPath>>;
+    try {
+      pinned = await pinnedPath(repo, path, { ...options, only: "end" });
+    } catch (error) {
+      // The file isn't readable here yet: not a 404, which would be memoized.
+      if (error instanceof IncompleteFileListError) throw new AbortHandoff(error.message);
+      throw error;
+    }
     if (!pinned) return notFound();
     return new Response((pinned.list ?? null) as BlobPart | null, {
       status: 307,
@@ -430,7 +439,7 @@ export function createResolver(
 
       try {
         // Everything goes back inline. The service worker keeps what's
-        // immutable (see its serveHandoff), or checks it against the index.
+        // immutable (see its serveHandoff), or checks it against a file list.
         log(`responding inline to ${request.url} with ${response.status}`);
         return await reply(id, response);
       } catch (error) {

@@ -56,6 +56,8 @@ export interface HandoffRequest {
   heads?: string;
   /** Answer the file list of the container `path` names, not a file. */
   list?: boolean;
+  /** With `list`: list only this tail, as the one-file list a redirect hands out. */
+  only?: string;
   /**
    * @deprecated A briefly-deployed shape put the special URL in `url` and
    * the cache key here. Only read, never sent.

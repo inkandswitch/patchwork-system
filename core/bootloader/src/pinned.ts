@@ -97,8 +97,11 @@ export type PinnedDeps = {
   /** Undefined: nothing is read or written (a share link). */
   store: ContentStore | undefined;
   hash(bytes: Uint8Array): Promise<string>;
-  /** Ask a resolver for the full list of the container at `prefix`: its bytes, or undefined. */
-  buildList(prefix: string): Promise<Uint8Array | undefined>;
+  /**
+   * Ask a resolver for the list of the container at `prefix`, covering only the tail `only` if
+   * given, else every file: its bytes, or undefined.
+   */
+  buildList(prefix: string, only?: string): Promise<Uint8Array | undefined>;
   /**
    * Ask a tab or the automerge worker for the file at `path`, read at `heads` if given: its
    * bytes, a Response for any other answer (a redirect, a 404), or undefined.
@@ -131,9 +134,13 @@ export async function keepFileList(
   return true;
 }
 
-/** The list a URL names: from memory, from the store (checked), or rebuilt (checked). */
+/**
+ * The list a URL names: from memory, from the store (checked), or rebuilt (checked). A rebuild
+ * tries the one-file list a redirect hands out first, which costs one file read, then the whole
+ * container's.
+ */
 async function loadList(
-  { prefix, listHash }: { prefix: string; listHash: string },
+  { prefix, tail, listHash }: { prefix: string; tail: string; listHash: string },
   deps: PinnedDeps
 ): Promise<FileList | undefined> {
   const known = deps.lists.get(listHash);
@@ -147,8 +154,10 @@ async function loadList(
     deps.warn(`content store entry ${listHash} isn't the file list it's named for; deleting it`);
     await deps.store!.delete(listHash);
   }
-  const built = await deps.buildList(prefix);
-  if (built && (await keepFileList(built, listHash, deps))) return deps.lists.get(listHash);
+  for (const only of [tail, undefined]) {
+    const built = await deps.buildList(prefix, only);
+    if (built && (await keepFileList(built, listHash, deps))) return deps.lists.get(listHash);
+  }
   return undefined;
 }
 
@@ -255,7 +264,7 @@ export function sharedRequests<A extends unknown[], T>(
 export function handoffRequest(
   request: Request,
   cachename: string,
-  to: URL | { path: string; heads?: string; list?: boolean }
+  to: URL | { path: string; heads?: string; list?: boolean; only?: string }
 ): HandoffRequestMessage {
   const target =
     to instanceof URL
@@ -265,6 +274,7 @@ export function handoffRequest(
           path: to.path,
           ...(to.heads ? { heads: to.heads } : {}),
           ...(to.list ? { list: true } : {}),
+          ...(to.only !== undefined ? { only: to.only } : {}),
         };
   return {
     id: crypto.randomUUID(),

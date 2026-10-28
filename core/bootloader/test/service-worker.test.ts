@@ -121,6 +121,20 @@ describe("service worker: /@/ paths", () => {
     expect(await (await sw.fetch(new Request(pinned), "tab").response()!).text()).toBe("hi");
   });
 
+  it("serves a redirect's pinned URL again after the service worker restarts", async () => {
+    sw = await startServiceWorker();
+    const repo = new Repo();
+    addTab(sw, repo);
+    const { a } = await account(repo);
+    const pinned = await pin(sw, livePath(a, ["Projects", "foo", "notes"]));
+
+    // a fresh service worker: no lists in memory, and nothing stored
+    sw.close();
+    sw = await startServiceWorker();
+    addTab(sw, repo);
+    expect(await (await sw.fetch(new Request(pinned), "tab").response()!).text()).toBe("hi");
+  });
+
   it("never serves a forged store entry", async () => {
     sw = await startServiceWorker();
     const repo = new Repo();

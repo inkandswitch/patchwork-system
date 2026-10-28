@@ -49,7 +49,7 @@ const chain = async (repo: Repo, path: string, accounts: ReadonlyMap<string, Aut
 
 const withRequest = (
   path: string,
-  extra: { heads?: string; list?: boolean }
+  extra: { heads?: string; list?: boolean; only?: string }
 ): HandoffRequestMessage => {
   const message = pathRequest(path);
   return { ...message, request: { ...message.request, ...extra } };
@@ -97,6 +97,15 @@ describe("resolver: /@/ paths", () => {
     const reply = await resolver.answer(withRequest(foo, { list: true }));
     expect(inline(reply).status).toBe(200);
     const pinned = await pinnedPath(repo, foo, { accounts });
+    expect(inline(reply).body).toEqual(pinned!.list);
+  });
+
+  it("answers a one-file list, the same a redirect hands out", async () => {
+    const { repo, a, accounts, resolver } = await fixture();
+    const live = livePath(a, ["Projects", "foo", "notes"]);
+    const foo = await chain(repo, livePath(a, ["Projects", "foo"]), accounts);
+    const reply = await resolver.answer(withRequest(foo, { list: true, only: "notes" }));
+    const pinned = await pinnedPath(repo, live, { accounts, only: "end" });
     expect(inline(reply).body).toEqual(pinned!.list);
   });
 

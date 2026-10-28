@@ -90,7 +90,9 @@ async function setup(options: { store?: boolean } = {}) {
     lists: new Map<string, FileList>(),
     store: new MemoryStore(),
     hash: contentHash,
-    buildList: vi.fn(async (_prefix: string) => listBytes as Uint8Array | undefined),
+    buildList: vi.fn(
+      async (_prefix: string, _only?: string) => listBytes as Uint8Array | undefined
+    ),
     resolve: vi.fn(async (_path: string, _heads?: string) => ({
       body: REAL,
       contentType: "text/javascript",
@@ -130,8 +132,27 @@ describe("servePinned", () => {
     expect(await text(await servePinned(normalized, deps))).toBe("export default 42");
     await settle();
     expect(deps.warn).toHaveBeenCalled();
-    expect(deps.buildList).toHaveBeenCalledWith("acct@h/pkg@h");
+    expect(deps.buildList).toHaveBeenCalledWith("acct@h/pkg@h", "index.js");
     expect(deps.store.bytes.get(listHash)).toEqual(listBytes);
+  });
+
+  it("rebuilds a one-file list, as a redirect hands out, before a whole one", async () => {
+    const { deps, listBytes, normalized } = await setup();
+    deps.buildList.mockImplementation(async (_prefix: string, only?: string) =>
+      only === "index.js" ? listBytes : toBytes('{"files":{},"v":1}')
+    );
+    expect(await text(await servePinned(normalized, deps))).toBe("export default 42");
+    expect(deps.buildList).toHaveBeenCalledTimes(1);
+    expect(deps.buildList).toHaveBeenCalledWith("acct@h/pkg@h", "index.js");
+  });
+
+  it("falls back to the whole list when the one-file rebuild doesn't match", async () => {
+    const { deps, listBytes, normalized } = await setup();
+    deps.buildList.mockImplementation(async (_prefix: string, only?: string) =>
+      only === undefined ? listBytes : toBytes('{"files":{},"v":1}')
+    );
+    expect(await text(await servePinned(normalized, deps))).toBe("export default 42");
+    expect(deps.buildList).toHaveBeenLastCalledWith("acct@h/pkg@h", undefined);
   });
 
   it("fails when the rebuilt list doesn't match the URL", async () => {
