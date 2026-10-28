@@ -129,6 +129,9 @@ server holds our heads" means that peer and not a sibling.
   from a fresh tab, three tabs flushing concurrently, sync latency with the
   server; with the longest main-thread stall (a 5ms timer's lateness) and long
   task time recorded around the heavy parts.
+- `content-hash.spec` — what the service worker pays on every hit of the `/@/`
+  content store, which it hashes before serving since anything on the origin
+  can write CacheStorage: SHA-256 of 10KB, 100KB and 1MB, median of 200.
 
 Cross-tab timings use epoch milliseconds, since `performance.now()` counts from
 each page's own navigation start. `find()` in the helpers retries on
