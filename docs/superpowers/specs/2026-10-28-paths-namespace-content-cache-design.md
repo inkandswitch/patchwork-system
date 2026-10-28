@@ -294,6 +294,12 @@ change between two reads. `sites/bench` gets a case measuring it.
     (see [Spikes](#spikes-before-planning)).
   - Requests can stay on a BroadcastChannel. A listener learns which pinned
     URLs are being loaded, which it could see anyway, but it can't answer.
+  - A `MessagePort` relayed through a tab doesn't authenticate anything.
+    Messages on a port have `source: null`, and the tab runs package code,
+    which can keep the port and answer itself, or sit in the middle and edit
+    answers. A relayed port is only safe if every answer on it is signed
+    with a key the worker got from the response to a checked `fetch()`. Not
+    worth that machinery unless one fetch per manifest proves too slow.
   - Checking `type` is not optional. Any page can start a dedicated `Worker`
     from the same script URL, and it shows up with the same `url` and
     `type: "worker"`.
