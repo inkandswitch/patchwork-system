@@ -197,6 +197,27 @@ describe("resolveLivePath", () => {
     expect(canonical?.canonical).toBe(true);
   });
 
+  it("walks through the find it's given", async () => {
+    const { repo, a, accounts } = await fixture();
+    const seen: string[] = [];
+    const find = (url: AutomergeUrl) => (seen.push(url), repo.find(url));
+    const handle = await resolveLivePath(repo, livePath(a, ["Projects", "foo"]), {
+      accounts,
+      find,
+    });
+    expect(handle).toBeDefined();
+    // the account, /, Projects, foo
+    expect(seen.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("fails, not throws, when find rejects", async () => {
+    const { repo, a, accounts } = await fixture();
+    const find = () => Promise.reject(new Error("offline"));
+    expect(
+      await resolveLivePath(repo, livePath(a, ["Projects"]), { accounts, find })
+    ).toBeUndefined();
+  });
+
   it("returns undefined for a path that ends inside a document", async () => {
     const { repo, a, accounts, minePkg } = await fixture();
     minePkg.change((d: any) => (d.nested = { x: "y" }));

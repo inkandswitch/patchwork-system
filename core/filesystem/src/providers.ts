@@ -62,6 +62,17 @@ function childOf(name: string, value: unknown): Child {
 
 const MOUNT_POINT = /^\/[^/@]*$/;
 
+// The same malformed mount is read on every lookup, so say so once.
+const warned = new Set<string>();
+const warnOnce = (key: string, message: string) => {
+  if (warned.has(key)) return;
+  warned.add(key);
+  console.warn(message);
+};
+
+// Bindings are read on every lookup and list, from a doc that doesn't change under them.
+const bindingsByDoc = new WeakMap<object, Map<string, AutomergeUrl[]>>();
+
 /**
  * Mount point → its bindings, in order. `/` falls back to `rootFolderUrl` when the namespace
  * binds nothing valid there, so older accounts keep working. Malformed mount points and bindings are
@@ -70,22 +81,29 @@ const MOUNT_POINT = /^\/[^/@]*$/;
 export function accountBindings(
   doc: AccountNamespaceDoc
 ): Map<string, AutomergeUrl[]> {
+  const memo = bindingsByDoc.get(doc);
+  if (memo) return memo;
   const bindings = new Map<string, AutomergeUrl[]>();
   for (const [mount, list] of Object.entries(doc.namespace ?? {})) {
     if (!MOUNT_POINT.test(mount) || !Array.isArray(list)) {
-      console.warn(`namespace: skipping malformed mount ${JSON.stringify(mount)}`);
+      warnOnce(mount, `namespace: skipping malformed mount ${JSON.stringify(mount)}`);
       continue;
     }
     const urls: AutomergeUrl[] = [];
     for (const binding of list) {
       const url = asLink(binding?.url);
       if (url) urls.push(url);
-      else console.warn(`namespace: skipping a binding at ${mount} without a valid url`);
+      else
+        warnOnce(
+          `binding ${mount}`,
+          `namespace: skipping a binding at ${mount} without a valid url`
+        );
     }
     bindings.set(mount, urls);
   }
   const root = asLink(doc.rootFolderUrl);
   if (!bindings.get("/")?.length && root) bindings.set("/", [root]);
+  bindingsByDoc.set(doc, bindings);
   return bindings;
 }
 

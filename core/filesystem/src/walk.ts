@@ -27,7 +27,25 @@ import { documentBaseOrigin } from "./urls.js";
 export type WalkOptions = {
   /** acctHash → account doc url. The roots a live or pinned account path may start at. */
   accounts: ReadonlyMap<string, AutomergeUrl>;
+  /**
+   * Find a document, given its bare url and the heads the walk will read it at (none: current).
+   * The walk views what it returns at those heads. A resolver passes one that waits for the
+   * heads to arrive, or for peers to catch up; the default is `repo.find`. A rejection fails
+   * the walk.
+   */
+  find?: (url: AutomergeUrl, heads?: UrlHeads) => Promise<DocHandle<unknown>>;
 };
+
+// idhashes never change, and every walk hashes the same few documents again.
+const idhashes = new Map<string, Promise<string>>();
+function memoIdhash(documentId: string): Promise<string> {
+  let hash = idhashes.get(documentId);
+  if (!hash) {
+    if (idhashes.size >= 10_000) idhashes.clear();
+    idhashes.set(documentId, (hash = idhash(documentId)));
+  }
+  return hash;
+}
 
 export type WalkEnd = {
   /** The last document the walk entered, as a view at the heads it was read at. */
@@ -76,13 +94,9 @@ export async function walkPath(
   options: WalkOptions
 ): Promise<WalkEnd | undefined> {
   const { root, segments } = parsePath(path);
-  const hashes = new Map<string, Promise<string>>();
-  const hashOf = (url: AutomergeUrl) => {
-    const { documentId } = parseAutomergeUrl(url);
-    let hash = hashes.get(documentId);
-    if (!hash) hashes.set(documentId, (hash = idhash(documentId)));
-    return hash;
-  };
+  const hashOf = (url: AutomergeUrl) =>
+    memoIdhash(parseAutomergeUrl(url).documentId);
+  const find = options.find ?? ((url: AutomergeUrl) => repo.find(url));
   const stepOf = async (handle: DocHandle<unknown>) =>
     docStep(await hashOf(handle.url), handle.heads());
 
@@ -92,10 +106,12 @@ export async function walkPath(
   ): Promise<AtDoc | undefined> {
     try {
       const parsed = parseAutomergeUrl(url);
-      const live = await repo.find(
-        stringifyAutomergeUrl({ documentId: parsed.documentId })
+      const at = heads ?? parsed.heads;
+      const live = await find(
+        stringifyAutomergeUrl({ documentId: parsed.documentId }),
+        at
       );
-      const handle = live.view(heads ?? parsed.heads ?? live.heads());
+      const handle = live.view(at ?? live.heads());
       const node = handle.doc();
       if (node === undefined) return undefined;
       return { kind: "doc", handle, node, provider: providerFor(node), inside: false };

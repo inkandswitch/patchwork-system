@@ -82,6 +82,15 @@ describe("accountProvider", () => {
     expect(bindings.get("/")).toEqual([R]);
   });
 
+  it("warns about a malformed mount once, however often it's read", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const doc = account({
+      namespace: { "/once@only": [{ url: R }], "/": [{ url: R }] },
+    });
+    for (let i = 0; i < 5; i++) accountProvider.lookup(doc, ["a"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
   it("lists every mount as a union child", () => {
     expect(accountProvider.list(doc)).toEqual([
       { name: "", union: [R] },
