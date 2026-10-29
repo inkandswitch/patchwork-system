@@ -164,3 +164,54 @@ describe("createDefaultAccount", () => {
     expect(doc.moduleSettingsUrl).toBeDefined();
   });
 });
+
+describe("migratePackages: copilot review", () => {
+  const named = (repo: Repo, name: string) => {
+    const manifest = repo.create({
+      "@patchwork": { type: "file" },
+      content: JSON.stringify({ name }),
+      mimeType: "application/json",
+    }).url;
+    return repo.create({ "@patchwork": { type: "directory" }, "package.json": manifest });
+  };
+
+  it("never gives two packages one name, whatever they're called", async () => {
+    const repo = new Repo();
+    const one = named(repo, "alpha");
+    const two = named(repo, "alpha (2)");
+    const three = named(repo, "alpha");
+    const acct = await account(repo, [one.url, two.url, three.url]);
+    await migratePackages(repo, acct);
+    const names = (await linked(repo, acct))!.map(([name]: string[]) => name);
+    expect(new Set(names).size).toBe(3);
+    expect(names.slice(0, 2)).toEqual(["alpha", "alpha (2)"]);
+  });
+
+  it("leaves a /packages binding that arrives while its folder is made", async () => {
+    const repo = new Repo();
+    const { alpha } = packages(repo);
+    const acct = await account(repo, [alpha.url]);
+    const theirs = repo.create({ title: "theirs", docs: [] });
+    // Another device's migration syncs in just as this one creates its folder.
+    const create = repo.create.bind(repo);
+    (repo as any).create = (...args: any[]) => {
+      if (!acct.doc().namespace) {
+        acct.change((d: any) => (d.namespace = { "/packages": [{ url: theirs.url }] }));
+      }
+      return create(...args);
+    };
+    for (const name of ["create2"] as const) {
+      const original = (repo as any)[name]?.bind(repo);
+      if (original) {
+        (repo as any)[name] = (...args: any[]) => {
+          if (!acct.doc().namespace) {
+            acct.change((d: any) => (d.namespace = { "/packages": [{ url: theirs.url }] }));
+          }
+          return original(...args);
+        };
+      }
+    }
+    expect(await migratePackages(repo, acct)).toBe(false);
+    expect(acct.doc().namespace["/packages"]).toEqual([{ url: theirs.url }]);
+  });
+});

@@ -122,11 +122,13 @@ export async function migratePackages(
       }
     })
   );
-  const taken = new Map<string, number>();
+  // "alpha", "alpha (2)", "alpha": the third is "alpha (3)", not a second "alpha (2)".
+  const used = new Set<string>();
   const links = described.map(({ url, name, type }) => {
-    const count = (taken.get(name) ?? 0) + 1;
-    taken.set(name, count);
-    return { name: count === 1 ? name : `${name} (${count})`, type, url };
+    let unique = name;
+    for (let n = 2; used.has(unique); n++) unique = `${name} (${n})`;
+    used.add(unique);
+    return { name: unique, type, url };
   });
 
   // Another tab may have migrated while this one read the packages.
@@ -139,10 +141,19 @@ export async function migratePackages(
       folder.docs = links;
     }
   );
+  // A binding that arrived while the folder was made (another device's
+  // migration, synced in) wins: this folder is new and holds only links, so
+  // dropping it loses nothing. Two migrations that never see each other's
+  // binding before they merge still conflict, and Automerge keeps one; both
+  // folders hold the same links, read from the same module settings.
+  let bound = false;
   account.change((doc) => {
+    if (doc.namespace && "/packages" in doc.namespace) return;
     doc.namespace ??= {};
     doc.namespace["/packages"] = [{ url: folder.url }];
+    bound = true;
   });
+  if (!bound) return false;
   await linkPackagesIntoRoot(repo, account.doc()?.rootFolderUrl, folder.url).catch(
     (error) => console.warn("couldn't show /packages in the root folder", error)
   );
