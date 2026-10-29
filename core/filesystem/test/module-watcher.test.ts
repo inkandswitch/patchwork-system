@@ -847,6 +847,28 @@ describe("ModuleWatcher /packages folder", () => {
     await repo.shutdown().catch(() => {});
   });
 
+  it("doesn't load a module-settings entry migration moved to /packages, once it's removed there", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const source = folderSource(repo);
+    const [moved, kept] = source.docs;
+    const settings = repo.create<any>({
+      "@patchwork": { type: "patchwork:module-settings" },
+      modules: [moved.url, kept.url],
+      movedToPackages: [moved.documentId],
+    });
+    const loaded: string[] = [];
+    const watcher = new ModuleWatcher(repo, {}, (name) => loaded.push(name), undefined, undefined, source.tracker);
+    // The moved package was removed from /packages; the other was never in it.
+    source.set([]);
+    await watcher.addPackagesFolder("packages", source.entries, source.subscribe);
+    await watcher.addUrl("user", settings.url);
+    await pause(50);
+    expect(source.lookups).not.toContain(moved.url);
+    expect(source.lookups).toContain(kept.url);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
   it("doesn't reload a renamed package, and unloads a removed one", async () => {
     const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
     const source = folderSource(repo);

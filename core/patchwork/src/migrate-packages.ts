@@ -1,7 +1,9 @@
 // Once per account: an account from before `/packages` gets a packages folder
 // holding a link to each automerge package its module-settings doc lists,
-// bound at `/packages`. The module-settings doc is left as it is: the Packages
-// UI still installs into it, and builds before this one still read it.
+// bound at `/packages`. The module-settings doc keeps its entries: the
+// Packages UI still installs into it, and builds before this one still read
+// it. It records which it moved (`movedToPackages`), which this build then
+// loads only through `/packages`.
 import {
   isValidAutomergeUrl,
   parseAutomergeUrl,
@@ -154,6 +156,14 @@ export async function migratePackages(
     bound = true;
   });
   if (!bound) return false;
+  // What /packages now holds: the watcher leaves those entries to it, so
+  // removing a package there removes it. The entries themselves stay, for
+  // builds that predate /packages.
+  settings.change((doc) => {
+    const moved = new Set([...((doc as { movedToPackages?: string[] }).movedToPackages ?? [])]);
+    for (const url of urls) moved.add(parseAutomergeUrl(url).documentId);
+    (doc as { movedToPackages?: string[] }).movedToPackages = [...moved];
+  });
   await linkPackagesIntoRoot(repo, account.doc()?.rootFolderUrl, folder.url).catch(
     (error) => console.warn("couldn't show /packages in the root folder", error)
   );

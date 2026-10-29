@@ -46,6 +46,19 @@ describe("migratePackages", () => {
     ]);
   });
 
+  it("records in module settings which entries it moved", async () => {
+    const repo = new Repo();
+    const { alpha, bee } = packages(repo);
+    const pinned = alpha.view(alpha.heads()).url;
+    const acct = await account(repo, [alpha.url, bee.url, pinned, "https://cdn.example.test/x.js"]);
+    await migratePackages(repo, acct);
+    const settings = await repo.find<any>(acct.doc().moduleSettingsUrl);
+    expect([...settings.doc().movedToPackages].sort()).toEqual(
+      [alpha.documentId, bee.documentId].sort()
+    );
+    expect(settings.doc().modules).toHaveLength(4);
+  });
+
   it("does nothing the second time", async () => {
     const repo = new Repo();
     const { alpha } = packages(repo);

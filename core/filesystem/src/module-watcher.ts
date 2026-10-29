@@ -23,6 +23,13 @@ const log = debug("patchwork:modules");
 
 export type ModuleSettingsDoc = {
   modules: AutomergeUrl[];
+  /**
+   * Documents whose unpinned entries `/packages` took over (see
+   * migratePackages): those entries load through `/packages` or not at all,
+   * so removing a package there removes it. Builds that predate `/packages`
+   * ignore this and keep loading them.
+   */
+  movedToPackages?: string[];
 } & HasPatchworkMetadata & {
     "@patchwork": { type: "patchwork:module-settings" };
   };
@@ -635,9 +642,12 @@ export class ModuleWatcher extends EventTarget {
       }
     }
     for (const { doc } of this.settingsDocs()) {
+      const moved = new Set(Array.isArray(doc?.movedToPackages) ? doc.movedToPackages : []);
       for (const m of doc?.modules ?? []) {
-        if (isValidAutomergeUrl(m) && inFolders.has(parseAutomergeUrl(m).documentId)) {
-          continue;
+        if (isValidAutomergeUrl(m)) {
+          const { documentId, heads } = parseAutomergeUrl(m);
+          if (inFolders.has(documentId)) continue;
+          if (!heads && moved.has(documentId)) continue;
         }
         urls.add(m);
       }
