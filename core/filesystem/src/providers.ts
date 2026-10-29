@@ -262,3 +262,15 @@ export const PROVIDERS: readonly PathProvider[] = [
 export function providerFor(doc: unknown): PathProvider | undefined {
   return PROVIDERS.find((provider) => provider.matches(doc));
 }
+
+/**
+ * Whether a package's provider for `doc`'s type may walk it in place of `builtIn`. Built-ins
+ * can't be overridden, with one exception: the folder provider matches anything with a `docs`
+ * array, and a typed document (a tldraw canvas keeps its scripts that way) is its own type
+ * first. A folder-typed or untyped folder is always the built-in's.
+ */
+export function yieldsToPackage(builtIn: PathProvider | undefined, doc: unknown): boolean {
+  if (builtIn !== folderProvider) return false;
+  const type = getType(doc as AccountNamespaceDoc);
+  return !!type && type !== "folder";
+}

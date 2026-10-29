@@ -248,3 +248,47 @@ describe("pinning through a package's container", () => {
     }
   });
 });
+
+describe("a typed doc that's also folder-shaped", () => {
+  it("is walked by its type's provider when given one, and as a folder otherwise", async () => {
+    const { repo, a, accounts, root, child } = await boardFixture();
+    // A canvas keeps a folder-compatible `docs` (its scripts) beside its own content.
+    const canvas = repo.create<any>({
+      "@patchwork": { type: "canvas" },
+      docs: [{ name: "script", type: "file", url: child.url }],
+      shapes: { s1: { content: "shape", mimeType: "text/plain" } },
+    });
+    root.change((d: any) => d.docs.push({ name: "c", type: "canvas", url: canvas.url }));
+    const canvasProvider: PathProvider = {
+      kind: "canvas",
+      matches: (doc: any) => doc?.["@patchwork"]?.type === "canvas",
+      list: (doc: any) => [
+        ...doc.docs.map((e: any) => ({ name: e.name, link: e.url })),
+        ...Object.keys(doc.shapes).map((id) => ({ name: id, sub: ["shapes", id] })),
+      ],
+      lookup(doc, names) {
+        const found = canvasProvider.list(doc).find((c) => c.name === names[0]);
+        return found && { child: found, consumed: 1 };
+      },
+    };
+    const providers = async (doc: unknown) => (canvasProvider.matches(doc) ? canvasProvider : undefined);
+    const shape = await walkPath(repo, livePath(a, ["c", "s1"]), { accounts, providers });
+    expect(shape?.sub).toEqual(["shapes", "s1"]);
+    // Its folder entries resolve the same either way, so pinned paths agree.
+    const viaPlugin = await walkPath(repo, livePath(a, ["c", "script"]), { accounts, providers });
+    const viaFolder = await walkPath(repo, livePath(a, ["c", "script"]), { accounts });
+    expect(viaPlugin?.pinned).toBe(viaFolder?.pinned);
+    // Without the plugin, it's a folder: no shapes.
+    expect(await walkPath(repo, livePath(a, ["c", "s1"]), { accounts })).toBeUndefined();
+  });
+
+  it("never hands a folder-typed or untyped folder to a package", async () => {
+    const { repo, a, accounts, notes } = await fixture();
+    const greedy: PathProvider = { kind: "greedy", matches: () => true, list: () => [], lookup: () => undefined };
+    const handle = await resolveLivePath(repo, livePath(a, ["Projects", "foo", "notes"]), {
+      accounts,
+      providers: async () => greedy,
+    });
+    expect(handle?.url).toBe(notes.url);
+  });
+});

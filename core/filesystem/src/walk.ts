@@ -28,6 +28,7 @@ import {
   defaultBranch,
   providerFor,
   valueAt,
+  yieldsToPackage,
 } from "./providers.js";
 import { buildFileList } from "./file-list.js";
 import { readNode } from "./resolve.js";
@@ -53,11 +54,11 @@ async function providerOf(
   extra?: ExtraProviders
 ): Promise<PathProvider | undefined> {
   const builtIn = providerFor(doc);
-  if (builtIn || !extra) return builtIn;
+  if (!extra || (builtIn && !yieldsToPackage(builtIn, doc))) return builtIn;
   try {
-    return await extra(doc);
+    return (await extra(doc)) ?? builtIn;
   } catch {
-    return undefined;
+    return builtIn;
   }
 }
 

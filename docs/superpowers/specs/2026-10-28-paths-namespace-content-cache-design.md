@@ -414,6 +414,13 @@ registers one beside its datatype.
 - **Built-ins come first and can't be overridden.** Account, directory, folder
   and branches are checked first; package providers after, in registration
   order. A package can't take over how folders resolve.
+  - One exception: the folder built-in matches anything with a `docs` array,
+    so a typed document that keeps one (a tldraw canvas holds its scripts
+    there) would never reach its own type's provider. Such a document is
+    walked by a provider declared for its type, if there is one, and as a
+    folder otherwise. An untyped or `folder`-typed folder is always the
+    built-in's. A provider for such a type should list the `docs` entries as
+    the folder provider does, so paths into them pin the same either way.
 - **It's a pure function of the document.** `list` and `lookup` read only the
   node they're given, at the heads they're given. That's what lets a file
   list built through a provider be rebuilt to the same bytes.

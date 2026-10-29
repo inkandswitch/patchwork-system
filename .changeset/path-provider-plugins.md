@@ -5,7 +5,7 @@
 "@inkandswitch/patchwork": patch
 ---
 
-Packages can now say what a document of their type contains. A `patchwork:path-provider` plugin is a `PathProvider` with `supportedDatatypes`. The built-in providers (account, directory, folder, branches) are always asked first and can't be overridden. After them come plugins, in registration order.
+Packages can now say what a document of their type contains. A `patchwork:path-provider` plugin is a `PathProvider` with `supportedDatatypes`. The built-in providers (account, directory, folder, branches) are always asked first and can't be overridden. After them come plugins, in registration order. The one exception is a typed document that also has a folder's `docs` array (a tldraw canvas): a plugin declared for its type walks it, and the folder provider walks it otherwise (`yieldsToPackage`).
 
 - `patchwork-filesystem`:
   - a `Child` can be `{ name, sub: [...segments] }`, a value inside the document offered as a sub-document. A walk that ends at one reports it as `WalkEnd.sub`, and `resolveLivePath` returns `handle.sub(...segments)`;

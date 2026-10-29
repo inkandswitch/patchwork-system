@@ -4,6 +4,7 @@
 import {
   getType,
   providerFor,
+  yieldsToPackage,
   type ExtraProviders,
   type HasPatchworkMetadata,
   type PathProvider,
@@ -73,9 +74,14 @@ export const packagePathProviders: ExtraProviders = async (doc) => {
   return undefined;
 };
 
-/** Built-ins first, which a plugin can't override, then {@link packagePathProviders}. */
+/**
+ * Built-ins first, which a plugin can't override, then {@link packagePathProviders}. The one
+ * exception is a typed document that's also folder-shaped (see `yieldsToPackage`).
+ */
 export async function pathProviderFor(doc: unknown): Promise<PathProvider | undefined> {
-  return providerFor(doc) ?? (await packagePathProviders(doc));
+  const builtIn = providerFor(doc);
+  if (builtIn && !yieldsToPackage(builtIn, doc)) return builtIn;
+  return (await packagePathProviders(doc)) ?? builtIn;
 }
 
 /** Every type some path-provider plugin supports, without loading any. */

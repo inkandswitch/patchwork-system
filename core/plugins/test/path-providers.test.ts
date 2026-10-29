@@ -98,3 +98,13 @@ describe("pathProviderTypes", () => {
     expect(getRegistry<PathProviderDescription>("patchwork:path-provider").all()).toHaveLength(2);
   });
 });
+
+describe("pathProviderFor: a typed doc that's also folder-shaped", () => {
+  it("prefers the plugin for its declared type over the folder built-in", async () => {
+    const canvas = provider("canvas");
+    registerPlugins([plugin("canvas", ["canvas"], async () => canvas)], URL_);
+    expect(await pathProviderFor({ "@patchwork": { type: "canvas" }, docs: [] })).toBe(canvas);
+    expect(await pathProviderFor({ "@patchwork": { type: "folder" }, docs: [] })).toBe(folderProvider);
+    expect(await pathProviderFor({ "@patchwork": { type: "other" }, docs: [] })).toBe(folderProvider);
+  });
+});
