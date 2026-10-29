@@ -154,12 +154,19 @@ export async function walkPath(
   const stepOf = async (handle: DocHandle<unknown>) =>
     docStep(await hashOf(handle.url), handle.heads());
 
+  // Package providers apply only to a document the walk goes on through. Whether a document the
+  // path ends at is a container (a doc step) or a file (a name) is the built-ins' call, so a
+  // path pins the same with or without a package's provider, and a plugin installed later
+  // doesn't change what an existing pinned URL means.
   async function enter(
     url: AutomergeUrl,
-    heads?: UrlHeads
+    heads: UrlHeads | undefined,
+    through: boolean
   ): Promise<AtDoc | undefined> {
     try {
       const parsed = parseAutomergeUrl(url);
+      // A link to a sub-document: walking it as the whole document would name the wrong thing.
+      if (parsed.segments?.length) return undefined;
       const at = heads ?? parsed.heads;
       const live = await find(
         stringifyAutomergeUrl({ documentId: parsed.documentId }),
@@ -168,7 +175,7 @@ export async function walkPath(
       const handle = live.view(at ?? live.heads());
       const node = handle.doc();
       if (node === undefined) return undefined;
-      const provider = await providerOf(node, options.providers);
+      const provider = through ? await providerOf(node, options.providers) : providerFor(node);
       return { kind: "doc", handle, node, provider, inside: false };
     } catch {
       return undefined;
@@ -215,12 +222,16 @@ export async function walkPath(
   let at: At | undefined;
   if (root.kind === "account") {
     const url = options.accounts.get(root.acctHash);
-    at = url && (await enter(url, root.heads));
+    at = url && (await enter(url, root.heads, segments.length > 0));
     if (!at) return undefined;
     out.push(docStep(root.acctHash, at.handle.heads()));
     if (root.listHash) lists.set(0, root.listHash);
   } else {
-    at = await enter(stringifyAutomergeUrl({ documentId: root.documentId }), root.heads);
+    at = await enter(
+      stringifyAutomergeUrl({ documentId: root.documentId }),
+      root.heads,
+      segments.length > 0
+    );
     if (!at) return undefined;
     out.push(`automerge:${root.documentId}@${formatHeads(root.heads)}`);
     if (root.listHash) lists.set(0, root.listHash);
@@ -248,13 +259,13 @@ export async function walkPath(
           listHash = segment.listHash;
           i++;
           if (!guard(member, segments.length - i)) return undefined;
-          next = await enter(member, segment.heads);
+          next = await enter(member, segment.heads, i < segments.length);
         }
       }
       if (!member) {
         const names = namesFrom(i);
         for (const url of at.members) {
-          const candidate = await enter(url);
+          const candidate = await enter(url, undefined, names.length > 0);
           if (
             !names.length ||
             (candidate?.provider && lookUp(candidate.provider, candidate.node, names))
@@ -279,7 +290,7 @@ export async function walkPath(
       if (at.provider !== branchesProvider || at.inside) break;
       const link = defaultBranch(at.node);
       if (!link || !guard(link, 0)) return undefined;
-      const next = await enter(link);
+      const next = await enter(link, undefined, false);
       if (!next) return undefined;
       out.push(await stepOf(next.handle));
       live = true;
@@ -293,7 +304,7 @@ export async function walkPath(
       );
       const link = await matchLink(links, segment);
       if (link) {
-        const next = await enter(link, segment.heads);
+        const next = await enter(link, segment.heads, i + 1 < segments.length);
         if (!next) return undefined;
         out.push(await stepOf(next.handle));
         if (segment.listHash) lists.set(out.length - 1, segment.listHash);
@@ -309,6 +320,11 @@ export async function walkPath(
     const found: Lookup | undefined = lookUp(at.provider, at.node, names);
     if (!found) return undefined;
     const { child, consumed }: Lookup = found;
+    // A step inside the document must use a name, or the walk would never move on; and none
+    // can use more names than there are.
+    if (consumed > names.length || (consumed < 1 && ("value" in child || "sub" in child))) {
+      return undefined;
+    }
     const written = names.slice(0, consumed).map(encodeURIComponent);
     i += consumed;
 
@@ -326,7 +342,7 @@ export async function walkPath(
       at = { kind: "union", members: child.union };
     } else {
       if (!consumed && !guard(child.link, segments.length - i)) return undefined;
-      const next = await enter(child.link);
+      const next = await enter(child.link, undefined, i < segments.length);
       if (!next) return undefined;
       if (next.provider || !consumed) {
         out.push(await stepOf(next.handle));
@@ -610,11 +626,18 @@ export async function listFiles(
         provider === directoryProvider ? child.name.split("/") : [child.name];
       const childParts = [...parts, ...names];
       const childKeys = [...keys, names.length];
-      if ("sub" in child) {
-        const value = valueAt(node, child.sub);
-        if (value !== undefined) await add(childParts, childKeys, value, holder);
-      } else if ("value" in child) {
-        await add(childParts, childKeys, child.value, holder);
+      const builtIn = provider === directoryProvider || provider === folderProvider;
+      if ("sub" in child || "value" in child) {
+        const value = "sub" in child ? valueAt(node, child.sub) : child.value;
+        if (value === undefined) continue;
+        await add(childParts, childKeys, value, holder);
+        // A package's provider walks on into the values it hands out, so list what's in them.
+        if (!builtIn && value && typeof value === "object" && !(value instanceof Uint8Array)) {
+          links.push(...(await visit(value, provider, holder, childParts, childKeys)));
+          continue;
+        }
+      }
+      if ("value" in child) {
         // Nested values are addressable by path only inside a directory doc.
         if (provider === directoryProvider && isNested(child.value)) {
           links.push(...(await visit(child.value, provider, holder, childParts, childKeys)));
@@ -646,6 +669,8 @@ export async function listFiles(
     await acquire();
     try {
       const parsed = parseAutomergeUrl(link);
+      // A link to a sub-document isn't a file a walk can reach (see walkPath).
+      if (parsed.segments?.length) return;
       const live = await find(
         stringifyAutomergeUrl({ documentId: parsed.documentId }),
         parsed.heads
@@ -653,7 +678,8 @@ export async function listFiles(
       const heads = parsed.heads ?? live.heads();
       const doc = live.view(heads).doc();
       if (doc === undefined) return;
-      const provider = await providerOf(doc, options.providers);
+      // Built-ins decide what's a file, as the walk does for a path that ends here.
+      const provider = providerFor(doc);
       if (!provider) {
         await add(parts, keys, doc, parsed.documentId, heads);
       } else if (

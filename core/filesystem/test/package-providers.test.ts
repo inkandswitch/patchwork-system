@@ -123,8 +123,79 @@ describe("sub-documents", () => {
 
   it("lists a sub-document in the container's file list", async () => {
     const { repo, a, accounts } = await boardFixture();
-    const end = await walkPath(repo, livePath(a, ["b"]), { accounts, providers });
+    // A path through the board: one that ends at it treats it as a file (see below).
+    const end = await walkPath(repo, livePath(a, ["b", "notes"]), { accounts, providers });
     const listed = await listFiles(repo, end!.pinned, { accounts, providers });
     expect(listed?.files.map((f) => f.tail).sort()).toEqual(["", "child", "notes"]);
+  });
+});
+
+describe("review fixes", () => {
+  it("treats a value or sub child that consumes no name as no child, rather than spinning", async () => {
+    const { repo, a, accounts } = await boardFixture();
+    for (const child of [{ name: "x", sub: ["notes"] }, { name: "x", value: 1 }]) {
+      const spin: PathProvider = { ...board, lookup: () => ({ child, consumed: 0 }) };
+      expect(
+        await walkPath(repo, livePath(a, ["b", "x"]), { accounts, providers: async () => spin })
+      ).toBeUndefined();
+    }
+    const greedy: PathProvider = {
+      ...board,
+      lookup: (node, names) => ({ child: board.lookup(node, names)!.child, consumed: names.length + 1 }),
+    };
+    expect(
+      await walkPath(repo, livePath(a, ["b", "child"]), { accounts, providers: async () => greedy })
+    ).toBeUndefined();
+  }, 5000);
+
+  it("lists nested sub-documents a walk can reach", async () => {
+    const { repo, a, accounts, b } = await boardFixture();
+    const nested: PathProvider = {
+      ...board,
+      list: (node: any) =>
+        node?.links ? board.list(node) : node?.inner ? [{ name: "inner", sub: ["inner"] }] : [],
+      lookup(node, names) {
+        const child = nested.list(node).find((c) => c.name === names[0]);
+        return child && { child, consumed: 1 };
+      },
+    };
+    b.change((d: any) => (d.notes.inner = { content: "i", mimeType: "text/plain" }));
+    const options = { accounts, providers: async (doc: unknown) => (board.matches(doc) ? nested : undefined) };
+    const end = await walkPath(repo, livePath(a, ["b", "notes", "inner"]), options);
+    expect(end?.sub).toEqual(["notes", "inner"]);
+    const listed = await listFiles(repo, end!.pinned, options);
+    expect(listed?.files.map((f) => f.tail)).toContain("notes/inner");
+  });
+
+  it("pins and lists a doc the path ends at the same way, plugin or not", async () => {
+    const { repo, a, accounts, b } = await boardFixture();
+    // A board that reads as a file too, so a listing has something to show for it.
+    b.change((d: any) => {
+      d.content = "board";
+      d.mimeType = "text/plain";
+    });
+    const path = livePath(a, ["b"]);
+    const without = await walkPath(repo, path, { accounts });
+    const withIt = await walkPath(repo, path, { accounts, providers });
+    expect(withIt?.pinned).toBe(without?.pinned);
+    expect(withIt?.canonical).toBe(without?.canonical);
+
+    // The root folder's list, from a path that ends at the board.
+    const tails = async (options: object) =>
+      (await listFiles(repo, without!.pinned, { accounts, ...options }))?.files.map((f) => f.tail).sort();
+    expect(await tails({ providers })).toEqual(await tails({}));
+    expect(await tails({ providers })).toContain("b");
+  });
+
+  it("doesn't walk a link to a sub-document as if it were the whole document", async () => {
+    const { repo, a, accounts, root, b } = await boardFixture();
+    const subUrl = b.sub("notes").url;
+    root.change((d: any) => d.docs.push({ name: "subby", type: "x", url: subUrl }));
+    expect(await walkPath(repo, livePath(a, ["subby"]), { accounts })).toBeUndefined();
+    const listed = await listFiles(repo, (await walkPath(repo, livePath(a, ["b"]), { accounts }))!.pinned, {
+      accounts,
+    });
+    expect(listed?.files.map((f) => f.tail)).not.toContain("subby");
+    expect(listed?.missing).not.toContain("subby");
   });
 });
