@@ -165,3 +165,25 @@ describe("trackPackagesFolder: a branches package", () => {
     expect(watchers.get(BRANCHES)?.size).toBe(0);
   });
 });
+
+describe("watchPackagesFolder: a member that can't be found yet", () => {
+  it("lists the members it has, and the slow one once it arrives", async () => {
+    const { repo, p1, p2, p3, mine, team, account } = await fixture();
+    let release: (() => void) | undefined;
+    const find = repo.find.bind(repo);
+    (repo as any).find = (url: AutomergeUrl, ...rest: any[]) =>
+      url === mine.url
+        ? new Promise((resolve) => (release = () => resolve(find(url, ...rest))))
+        : find(url, ...rest);
+    const seen: PackageEntry[][] = [];
+    const stop = watchPackagesFolder(repo, account, (entries) => seen.push(entries), {
+      patienceMs: 100,
+    });
+    await vi.waitFor(() => expect(seen.length).toBeGreaterThan(0));
+    expect(seen.at(-1)!.map((e) => e.url).sort()).toEqual([p3, p2].sort());
+    release!();
+    await vi.waitFor(() => expect(seen.at(-1)!.map((e) => e.url)).toEqual([p1, p2, p3]));
+    stop();
+    expect(team).toBeDefined();
+  });
+});

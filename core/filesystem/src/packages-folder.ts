@@ -35,18 +35,59 @@ const bare = (url: AutomergeUrl) =>
 export function watchPackagesFolder(
   repo: Repo,
   account: DocHandle<AccountNamespaceDoc>,
-  onChange: (entries: PackageEntry[]) => void
+  onChange: (entries: PackageEntry[]) => void,
+  /** How long the first listing waits for every member before going without the slow ones. */
+  { patienceMs = FIRST_LISTING_PATIENCE_MS }: { patienceMs?: number } = {}
 ): () => void {
   let stopped = false;
+  let patient = true;
+  const patience = setTimeout(() => {
+    patient = false;
+    if (!stopped) changed();
+  }, patienceMs);
   let members: DocHandle<unknown>[] = [];
   let last: string | undefined;
   let pending: Promise<void> | undefined;
 
+  // Each member is found on its own: one that isn't available yet (or ever)
+  // mustn't hold up the others. It's listed once it arrives, and one that
+  // couldn't be found is asked for again a while later.
+  const found = new Map<AutomergeUrl, DocHandle<unknown>>();
+  const finding = new Set<AutomergeUrl>();
+  const retries = new Set<ReturnType<typeof setTimeout>>();
+  const find = (url: AutomergeUrl) => {
+    if (found.has(url) || finding.has(url)) return;
+    finding.add(url);
+    repo
+      .find<unknown>(url)
+      .then(
+        (handle) => {
+          found.set(url, handle);
+        },
+        () => {
+          const retry = setTimeout(() => {
+            retries.delete(retry);
+            if (!stopped) changed();
+          }, MEMBER_RETRY_MS);
+          retries.add(retry);
+        }
+      )
+      .finally(() => {
+        finding.delete(url);
+        if (!stopped) changed();
+      });
+  };
+
   const list = async () => {
     const urls = accountBindings(account.doc()).get("/packages") ?? [];
-    const handles = (
-      await Promise.all(urls.map((url) => repo.find<unknown>(url).catch(() => undefined)))
-    ).filter((handle): handle is DocHandle<unknown> => !!handle);
+    for (const url of urls) find(url);
+    // The first listing waits a while for every member, so packages don't
+    // load in dribs; after that, a member is listed whenever it arrives.
+    if (last === undefined && patient && urls.some((url) => finding.has(url))) return;
+    const handles = urls.flatMap((url) => {
+      const handle = found.get(url);
+      return handle ? [handle] : [];
+    });
     if (stopped) return;
     for (const member of members) member.off("change", changed);
     members = handles;
@@ -109,8 +150,16 @@ export function watchPackagesFolder(
     stopped = true;
     account.off("change", changed);
     for (const member of members) member.off("change", changed);
+    for (const retry of retries) clearTimeout(retry);
+    clearTimeout(patience);
   };
 }
+
+/** How long the first listing of `/packages` waits for every member folder. */
+const FIRST_LISTING_PATIENCE_MS = 3_000;
+
+/** How long before a `/packages` member that couldn't be found is asked for again. */
+const MEMBER_RETRY_MS = 10_000;
 
 /** The live lookup path for a package: through the member that holds it. */
 export function packageLookupPath(acctHash: string, entry: PackageEntry): string {
