@@ -13,6 +13,7 @@ import {
   type HasPatchworkMetadata,
 } from "@inkandswitch/patchwork-filesystem";
 import { getRegistry } from "./registry/index.js";
+import { getSupertypes } from "./datatypes.js";
 
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
@@ -53,14 +54,34 @@ export type Tool<T = unknown> = LoadablePlugin<
 
 export type LegacyEditorProps = { docUrl: AutomergeUrl };
 
+function datatypesOf(tool: ToolDescription): string[] {
+  const datatypes = tool.supportedDatatypes;
+  if (!datatypes) return [];
+  return datatypes === "*" ? ["*"] : datatypes;
+}
+
+/**
+ * How well `tool` fits a doc whose type and supertypes are `types` (as
+ * `[type, ...getSupertypes(type)]`): the index of the nearest one it names,
+ * `types.length` if it only matches through a `*` wildcard, or `undefined` if
+ * it doesn't support the doc at all. Lower is a closer fit.
+ */
+function matchRank(tool: ToolDescription, types: string[]): number | undefined {
+  const datatypes = datatypesOf(tool);
+  const index = types.findIndex((type) => datatypes.includes(type));
+  if (index >= 0) return index;
+  if (datatypes.includes("*")) return types.length;
+  return undefined;
+}
+
+/**
+ * Tools that support `type`: those naming it or one of its supertypes (see
+ * {@link getSupertypes}), and wildcard tools.
+ */
 export function getSupportedToolsForType(type: string): LoadedTool[] {
+  const types = [type, ...getSupertypes(type)];
   const plugins = getRegistry<ToolDescription>("patchwork:tool").filter(
-    (desc) => {
-      return (
-        desc.supportedDatatypes?.includes(type) ||
-        desc.supportedDatatypes?.includes("*")
-      );
-    }
+    (desc) => matchRank(desc, types) !== undefined
   );
 
   return plugins as LoadedTool[];
@@ -72,61 +93,18 @@ export function getSupportedTools(doc: HasPatchworkMetadata): LoadedTool[] {
   return getSupportedToolsForType(type);
 }
 
+/**
+ * The listed tool that fits `doc` most closely: one naming its type, then one
+ * naming its nearest supertype, then a wildcard. Ties go by id.
+ */
 export function getFallbackTool(doc: HasPatchworkMetadata) {
-  const type = getType(doc)!;
-  const plugins = getSupportedTools(doc);
-  return sortPlugins<LoadedTool, ToolDescription, ToolImplementation>(
-    plugins,
-    "supportedDatatypes",
-    type,
-    "id"
-  )?.filter((tool) => !tool.unlisted)?.[0];
+  const type = getType(doc);
+  if (!type) return undefined;
+  const types = [type, ...getSupertypes(type)];
+  return getSupportedToolsForType(type)
+    .filter((tool) => !tool.unlisted)
+    .sort(
+      (a, b) =>
+        matchRank(a, types)! - matchRank(b, types)! || a.id.localeCompare(b.id)
+    )[0];
 }
-
-const sortPlugins = <
-  T extends LoadedPlugin<D, I>,
-  D extends PluginDescription,
-  I,
->(
-  plugins: T[],
-  matchField: keyof D,
-  matchValue: string,
-  sortField?: keyof D
-): T[] => {
-  return [...plugins].sort((a, b) => {
-    const aValue = a[matchField];
-    const bValue = b[matchField];
-
-    // Convert string values to arrays for consistent comparison
-    const aArray = Array.isArray(aValue)
-      ? (aValue as string[])
-      : [aValue as string];
-    const bArray = Array.isArray(bValue)
-      ? (bValue as string[])
-      : [bValue as string];
-
-    const aHasWildcard = aArray.includes("*");
-    const bHasWildcard = bArray.includes("*");
-    const aHasMatch = aArray.includes(matchValue);
-    const bHasMatch = bArray.includes(matchValue);
-
-    // Specific matches come first
-    if (aHasMatch && !bHasMatch) return -1;
-    if (!aHasMatch && bHasMatch) return 1;
-
-    // Then wildcard matches come last
-    if (aHasWildcard && !bHasWildcard) return 1;
-    if (!aHasWildcard && bHasWildcard) return -1;
-
-    // If both are wildcards or both are specific matches, sort by the optional sort field
-    if (sortField) {
-      const aSort = a[sortField];
-      const bSort = b[sortField];
-      if (typeof aSort === "string" && typeof bSort === "string") {
-        return aSort.localeCompare(bSort);
-      }
-    }
-
-    return 0;
-  });
-};
