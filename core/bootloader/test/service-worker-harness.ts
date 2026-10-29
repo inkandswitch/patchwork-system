@@ -30,6 +30,9 @@ export class FakeCaches {
     if (!cache) this.named.set(name, (cache = new FakeCache()));
     return cache as unknown as Cache;
   }
+  async has(name: string) {
+    return this.named.has(name);
+  }
   async delete(name: string) {
     return this.named.delete(name);
   }

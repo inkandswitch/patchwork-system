@@ -17,7 +17,7 @@ import {
 } from "@inkandswitch/patchwork-filesystem";
 import {
   CONTENT_CACHE_PREFIX,
-  cacheStore,
+  lazyCacheStore,
   contentCacheName,
 } from "./content-store.js";
 import {
@@ -570,10 +570,7 @@ async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response
 
   const store =
     normalized.acctHash && !normalized.share
-      ? cacheStore(
-          await caches.open(contentCacheName(normalized.acctHash)),
-          self.location.origin
-        )
+      ? lazyCacheStore(caches, contentCacheName(normalized.acctHash), self.location.origin)
       : undefined;
   const deps: PinnedDeps = {
     lists: fileLists,

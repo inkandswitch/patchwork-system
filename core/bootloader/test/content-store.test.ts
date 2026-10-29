@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { cacheStore } from "../src/content-store.js";
+import { cacheStore, lazyCacheStore } from "../src/content-store.js";
 import { contentHash, toBytes } from "@inkandswitch/patchwork-filesystem";
 
 /** Enough of Cache for the store: put, match and delete by url. */
@@ -42,5 +42,31 @@ describe("cacheStore", () => {
     expect(await store.get(hash)).toEqual(bytes);
     await store.delete(hash);
     expect(await store.get(hash)).toBeUndefined();
+  });
+});
+
+describe("lazyCacheStore", () => {
+  /** Enough of CacheStorage: has, and open (which creates). */
+  class FakeStorage {
+    caches = new Map<string, FakeCache>();
+    async has(name: string) {
+      return this.caches.has(name);
+    }
+    async open(name: string) {
+      if (!this.caches.has(name)) this.caches.set(name, new FakeCache());
+      return this.caches.get(name)! as unknown as Cache;
+    }
+  }
+
+  it("creates no cache until something is stored", async () => {
+    const storage = new FakeStorage();
+    const store = lazyCacheStore(storage as unknown as CacheStorage, "patchwork-content-x", "https://p.test");
+    expect(await store.get("h")).toBeUndefined();
+    await store.delete("h");
+    expect(storage.caches.size).toBe(0);
+    const bytes = toBytes("x");
+    await store.put("h", bytes);
+    expect([...storage.caches.keys()]).toEqual(["patchwork-content-x"]);
+    expect(await store.get("h")).toEqual(bytes);
   });
 });

@@ -33,6 +33,28 @@ export function cacheStore(cache: Cache, origin: string): ContentStore {
 }
 
 /**
+ * {@link cacheStore} in the cache `name`, opened only when something is stored: a read or a
+ * delete of a cache that doesn't exist finds nothing, and creates nothing. Any `/@/` URL names an
+ * account, so opening on every request would leave a cache behind for each made-up one.
+ */
+export function lazyCacheStore(storage: CacheStorage, name: string, origin: string): ContentStore {
+  let opened: Promise<ContentStore> | undefined;
+  const open = () => (opened ??= storage.open(name).then((cache) => cacheStore(cache, origin)));
+  const existing = async () => (opened || (await storage.has(name)) ? open() : undefined);
+  return {
+    async get(hash) {
+      return (await existing())?.get(hash);
+    },
+    async put(hash, bytes) {
+      await (await open()).put(hash, bytes);
+    },
+    async delete(hash) {
+      await (await existing())?.delete(hash);
+    },
+  };
+}
+
+/**
  * Forget everything stored for an account. There's no sign-out flow; a site calls this from its
  * own. File lists the service worker holds in memory may still name these hashes, which then
  * read as misses.
