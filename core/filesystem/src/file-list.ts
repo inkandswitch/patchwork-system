@@ -85,7 +85,8 @@ export async function buildFileList(
   const throughPackages = first?.kind === "name" && first.name === "packages";
   const isProtected = options.isProtected ?? isKeyhiveDocumentId;
 
-  const files: Record<string, FileEntry> = {};
+  // Tails are names people chose: "__proto__" must be a key like any other.
+  const files: Record<string, FileEntry> = Object.create(null);
   for (const file of listed.files) {
     files[file.tail] = {
       sha256: await contentHash(toBytes(file.content)),

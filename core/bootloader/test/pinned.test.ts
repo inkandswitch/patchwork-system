@@ -192,6 +192,15 @@ describe("servePinned", () => {
     expect(deps.resolve).not.toHaveBeenCalled();
   });
 
+  it("answers 404 for a tail named like an Object.prototype member", async () => {
+    const { deps, listHash } = await setup();
+    for (const tail of ["constructor", "toString", "__proto__"]) {
+      const response = await servePinned(normalizePinned(`acct@h/pkg@h~${listHash}/${tail}`)!, deps);
+      expect(response.status, tail).toBe(404);
+    }
+    expect(deps.resolve).not.toHaveBeenCalled();
+  });
+
   it("never stores bytes the list says not to", async () => {
     const { deps, sha256, normalized, settle } = await setup({ store: false });
     expect(await text(await servePinned(normalized, deps))).toBe("export default 42");

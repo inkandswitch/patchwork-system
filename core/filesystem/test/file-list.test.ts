@@ -47,6 +47,16 @@ describe("buildFileList", () => {
     expect(text).not.toContain(parseAutomergeUrl(fileUrl as any).documentId);
   });
 
+  it("lists a file named __proto__ like any other", async () => {
+    const { repo, a, accounts, foo } = await fixture();
+    foo.change((d: any) => d.docs.push({ name: "__proto__", type: "x", url: file(repo, "p").url }));
+    const prefix = await chain(repo, livePath(a, ["Projects", "foo"]), accounts);
+    const built = await buildFileList(repo, prefix!, { accounts });
+    expect(Object.hasOwn(built!.list.files, "__proto__")).toBe(true);
+    expect(new TextDecoder().decode(built!.bytes)).toContain('"__proto__":');
+    expect(Object.hasOwn(parseFileList(built!.bytes)!.files, "__proto__")).toBe(true);
+  });
+
   it("lists only what it's asked to", async () => {
     const { repo, a, accounts } = await fixture();
     const prefix = await chain(repo, livePath(a, ["packages", "foo"]), accounts);

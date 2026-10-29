@@ -203,7 +203,8 @@ export async function servePinned(
   if (!list) {
     throw new PinnedAbort(`no file list ${listed.listHash} to check /@/${path} against`);
   }
-  const entry = list.files[listed.tail];
+  // Own entries only: a tail like "constructor" isn't in a list that doesn't name it.
+  const entry = Object.hasOwn(list.files, listed.tail) ? list.files[listed.tail] : undefined;
   if (!entry) {
     return new Response(`/@/${path} isn't in its file list`, {
       status: 404,
