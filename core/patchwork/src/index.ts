@@ -219,12 +219,19 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   })) as DocHandle<AccountDoc>;
   // So /@/<acctHash>/… paths under it resolve, here and in the automerge worker.
   account.resolve(await registerAccount(accountDocHandle.url));
-  await migratePackages(repo, accountDocHandle, {
+  const migration = migratePackages(repo, accountDocHandle, {
     // Another device may already have migrated this account.
     caughtUp: () => caughtUpWithServer(repo, accountDocHandle),
   }).catch((error) =>
     console.warn("couldn't move module settings into /packages", error)
   );
+  // Waiting to hear from the server can take up to 10s, and offline it never
+  // says yes, so boot doesn't wait long for it. A migration that finishes
+  // later binds /packages, and the watcher moves each package over once.
+  await Promise.race([
+    migration,
+    new Promise((resolve) => setTimeout(resolve, MIGRATION_WAIT_MS)),
+  ]);
   await wirePackagesFolder(repo, accountDocHandle, moduleWatcher, (entries) => {
     packageEntries = entries;
   });
@@ -380,6 +387,8 @@ function onModuleLoaded(name: string, mod: any): void {
 
 // How long boot waits for /packages' first listing before going on without it.
 const FIRST_LISTING_MS = 5_000;
+// How long boot waits for the move from module settings into /packages.
+const MIGRATION_WAIT_MS = 1_000;
 
 /**
  * Feed the account's /packages folder to the ModuleWatcher. Waits for its
