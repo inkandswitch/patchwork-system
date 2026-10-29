@@ -2,6 +2,7 @@
 // of package folders. This lists it for the ModuleWatcher, and looks each
 // package up as a pinned `/@/` URL whose file list covers the whole package.
 import {
+  isValidAutomergeUrl,
   parseAutomergeUrl,
   stringifyAutomergeUrl,
   type AutomergeUrl,
@@ -163,6 +164,42 @@ export function trackPackagesFolder(
       // Not an automerge URL: the watcher imports it with importPackageFromHttpUrl.
       return latest as AutomergeUrl;
     },
-    watch: (url, onChange) => fallback.watch(url, onChange),
+    watch(url, onChange) {
+      const documentId = parseAutomergeUrl(url).documentId;
+      const isEntry = () =>
+        entries().some((entry) => parseAutomergeUrl(entry.url).documentId === documentId);
+      // A package that's a branches doc stands for its default branch, whose
+      // code changes without the branches doc changing: watch that too, and
+      // follow it when the branch is pointed somewhere else.
+      let stopped = false;
+      let branch: AutomergeUrl | undefined;
+      let unwatchBranch = () => {};
+      const follow = async () => {
+        if (!isEntry()) return;
+        let target: AutomergeUrl | undefined;
+        try {
+          const latest = await fallback.findLatest(url);
+          if (isValidAutomergeUrl(latest)) target = bare(latest);
+        } catch {
+          return; // keep the branch already watched; the next change asks again
+        }
+        if (stopped) return;
+        if (target && parseAutomergeUrl(target).documentId === documentId) target = undefined;
+        if (target === branch) return;
+        unwatchBranch();
+        branch = target;
+        unwatchBranch = target ? fallback.watch(target, onChange) : () => {};
+      };
+      const unwatch = fallback.watch(url, (seen) => {
+        void follow();
+        onChange(seen);
+      });
+      void follow();
+      return () => {
+        stopped = true;
+        unwatch();
+        unwatchBranch();
+      };
+    },
   };
 }

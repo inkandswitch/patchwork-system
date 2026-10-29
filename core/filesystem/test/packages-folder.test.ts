@@ -127,3 +127,41 @@ describe("trackPackagesFolder: stable URLs", () => {
     expect(await tracker.findLatest(entry.url)).toBe("https://p.test/@/acct@r2/packages/m@h1/pkg@p2~L2");
   });
 });
+
+describe("trackPackagesFolder: a branches package", () => {
+  it("watches the branch it stands for, and follows the branch when it moves", async () => {
+    const BRANCHES = "automerge:2j9knpCseyhnK8izDmLpGP5WMdZQ" as AutomergeUrl;
+    const MAIN = "automerge:4NMNnkMhL8jXrdJ9jamS58PAVdXu" as AutomergeUrl;
+    const NEXT = "automerge:3tmVsDzywTYecevUsD21YABfXKon" as AutomergeUrl;
+    const entry = { url: BRANCHES, name: "foo", memberStep: "m@h" };
+    let current = MAIN;
+    const watchers = new Map<string, Set<(seen?: string) => void>>();
+    const fire = (url: string) => watchers.get(url)?.forEach((cb) => cb());
+    const fallback: PackageTracker = {
+      findLatest: vi.fn(async (url) => (url === BRANCHES ? current : url)),
+      watch: vi.fn((url, onChange) => {
+        if (!watchers.has(url)) watchers.set(url, new Set());
+        watchers.get(url)!.add(onChange);
+        return () => watchers.get(url)!.delete(onChange);
+      }),
+    };
+    const tracker = trackPackagesFolder(Promise.resolve("acct"), () => [entry], fallback, vi.fn());
+    const changes = vi.fn();
+    const stop = tracker.watch(BRANCHES, changes);
+
+    // New code on the default branch, with the branch pointer unchanged.
+    await vi.waitFor(() => expect(watchers.get(MAIN)?.size).toBe(1));
+    fire(MAIN);
+    expect(changes).toHaveBeenCalledTimes(1);
+
+    // The branch moves: the watch follows it.
+    current = NEXT;
+    fire(BRANCHES);
+    await vi.waitFor(() => expect(watchers.get(NEXT)?.size).toBe(1));
+    expect(watchers.get(MAIN)?.size).toBe(0);
+
+    stop();
+    expect(watchers.get(NEXT)?.size).toBe(0);
+    expect(watchers.get(BRANCHES)?.size).toBe(0);
+  });
+});
