@@ -452,7 +452,11 @@ providers. It adds no access a package doesn't already have.
 ### Versions
 
 A new version of the providing package can change what a live path resolves
-to. Pinned paths don't change. A list rebuilt through a changed provider won't
+to. Pinned paths don't change. A package's provider applies only to a document a walk
+goes on *through*. Whether a document a path ends at is a container or a
+file, and what a file list counts as a file, are the built-ins' call. So a
+path pins to the same URL with or without the provider, and a provider
+installed later doesn't change a URL pinned before it. A list rebuilt through a changed provider won't
 match its hash, so the URL fails rather than serving something else.
 
 ### What a provider offers
