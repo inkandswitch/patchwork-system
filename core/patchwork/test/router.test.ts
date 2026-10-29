@@ -302,3 +302,70 @@ describe("router: paths to part of a document", () => {
     warn.mockRestore();
   });
 });
+
+describe("router: copilot review", () => {
+  const PLUGIN_URL = "https://example.test/late-board.js";
+  afterEach(() => unregisterPlugins(PLUGIN_URL));
+
+  it("doesn't let a check for an earlier doc= drop the path from a newer one", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { live, notes, location } = await setup((a) =>
+      `doc=${OTHER}&path=${livePath(a, ["Projects", "foo", "notes"])}`
+    );
+    // Before the first check resolves, navigate to the doc the path names.
+    location.hash = `doc=${notes.url}&path=${live}`;
+    await settle();
+    expect(hashParam(location, "doc")).toBe(notes.url);
+    expect(hashParam(location, "path")).toBe(live);
+    warn.mockRestore();
+  });
+
+  it("drops the path when another part of the same document is opened without one", async () => {
+    const { live, notes, location, rootElement } = await setup(() => "");
+    rootElement.dispatchEvent(
+      new CustomEvent("patchwork:open-document", { detail: { url: notes.url, path: live } })
+    );
+    rootElement.dispatchEvent(
+      new CustomEvent("patchwork:open-document", { detail: { url: `${notes.url}/content` } })
+    );
+    expect(hashParam(location, "path")).toBeUndefined();
+    // A tool switch on the same part keeps it.
+    rootElement.dispatchEvent(
+      new CustomEvent("patchwork:open-document", { detail: { url: notes.url, path: live } })
+    );
+    rootElement.dispatchEvent(
+      new CustomEvent("patchwork:open-document", { detail: { url: notes.url, toolId: "other" } })
+    );
+    expect(hashParam(location, "path")).toBe(live);
+  });
+
+  it("opens a path-only hash once the provider it needs registers", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let childUrl = "";
+    const { opened } = await setup(
+      (a) => `path=${livePath(a, ["b", "child"])}`,
+      (repo) => {
+        const child = repo.create({ "@patchwork": { type: "file" }, content: "c" });
+        childUrl = child.url;
+        const b = repo.create({ "@patchwork": { type: "board" }, child: child.url });
+        return { b: b.url };
+      }
+    );
+    await settle();
+    expect(opened).toHaveLength(0);
+    const board = {
+      kind: "board",
+      matches: (doc: any) => doc?.["@patchwork"]?.type === "board",
+      list: (doc: any) => [{ name: "child", link: doc.child }],
+      lookup: (doc: any, names: string[]) =>
+        names[0] === "child" ? { child: { name: "child", link: doc.child }, consumed: 1 } : undefined,
+    };
+    registerPlugins(
+      [{ id: "late-board", name: "late-board", type: "patchwork:path-provider", supportedDatatypes: ["board"], load: async () => board }],
+      PLUGIN_URL
+    );
+    await vi.waitFor(() => expect(opened.length).toBeGreaterThanOrEqual(1));
+    expect(opened[0].url).toBe(childUrl);
+    warn.mockRestore();
+  });
+});

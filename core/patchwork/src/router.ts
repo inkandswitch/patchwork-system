@@ -74,10 +74,17 @@ export function createRouter({
       return undefined; // a path that doesn't parse names nothing
     }
   };
-  /** Take `path=` out of the hash, if it's still the one that was checked. */
-  const dropPath = (path: string, reason: string) => {
+  // The document, and the part of it (`automerge:<id>/<path>`), without heads.
+  const named = (url: string) => url.split("#")[0];
+  /**
+   * Take `path=` out of the hash, if it and `doc=` are still the ones that were
+   * checked: a check that resolves after a navigation is about the old one.
+   */
+  const dropPath = (path: string, docUrl: AutomergeUrl, reason: string) => {
     const params = parseHashParams(window.location.hash.slice(1));
     if (params.get("path") !== path) return;
+    const doc = docParamToUrl(params.get("doc"));
+    if (!doc || named(doc) !== named(docUrl)) return;
     console.warn(`patchwork: dropping path=${path} from the URL: ${reason}`);
     params.delete("path");
     window.location.hash = serializeHashParams(params);
@@ -92,10 +99,8 @@ export function createRouter({
       console.warn(`patchwork: path=${path} doesn't resolve here (yet)`);
       return;
     }
-    // The document, and the part of it (`automerge:<id>/<path>`), without heads.
-    const named = (url: string) => url.split("#")[0];
     if (named(handle.url) !== named(docUrl)) {
-      dropPath(path, `it names ${handle.url}, not ${docUrl}`);
+      dropPath(path, docUrl, `it names ${handle.url}, not ${docUrl}`);
     }
   };
 
@@ -179,13 +184,50 @@ export function createRouter({
       // Just a path: open what it names, unless the hash has moved on while
       // it was walked. One that doesn't resolve is left in the address bar,
       // to be fixed or retried.
-      const handle = await resolvePathParam(path);
-      const now = parseHashParams(window.location.hash.slice(1));
-      if (now.get("path") !== path || now.get("doc")) return;
-      if (handle) open(handle.url);
-      else console.warn(`patchwork: path=${path} doesn't resolve here (yet); opening nothing`);
+      await openPath(path, open, true);
     }
   };
+
+  // A path-only hash that didn't resolve may go through a datatype whose
+  // package hasn't registered its path provider yet (on a cold boot, say).
+  // It's walked again whenever path providers change, until it resolves or
+  // the hash moves on.
+  let stopRetrying: (() => void) | undefined;
+  const pathOnly = (path: string) => {
+    const now = parseHashParams(window.location.hash.slice(1));
+    return now.get("path") === path && !now.get("doc");
+  };
+  async function openPath(
+    path: string,
+    open: (url: AutomergeUrl) => void,
+    first: boolean
+  ) {
+    const handle = await resolvePathParam(path);
+    if (!pathOnly(path)) return;
+    if (handle) {
+      stopRetrying?.();
+      open(handle.url);
+      return;
+    }
+    if (!first) return;
+    console.warn(`patchwork: path=${path} doesn't resolve here (yet); opening nothing`);
+    stopRetrying?.();
+    const stop = () => {
+      off();
+      if (stopRetrying === stop) stopRetrying = undefined;
+    };
+    // Runs inside whoever registered a plugin, so it mustn't throw at them.
+    const off = getRegistry("patchwork:path-provider").on("changed", () => {
+      try {
+        if (pathOnly(path)) void openPath(path, open, false).catch(stop);
+        else stop();
+      } catch {
+        stop();
+      }
+    });
+    stopRetrying = stop;
+    stopRetrying = off;
+  }
 
   rootElement.addEventListener("patchwork:open-document", async (event) => {
     const { url, toolId, type, title, path } = event.detail as {
@@ -210,7 +252,9 @@ export function createRouter({
     if (prevDoc && !sameDoc) params.delete("draft");
     // Where the doc was opened from survives a tool switch or heads change on
     // the same doc, as `draft` does.
-    const keptPath = !path && sameDoc ? params.get("path") ?? undefined : path;
+    // Only on the same part of it, though: another sub-document is elsewhere.
+    const samePart = !!prevDoc && named(prevDoc) === named(url);
+    const keptPath = !path && samePart ? params.get("path") ?? undefined : path;
     params.set("doc", url);
     for (const [key, value] of [
       ["path", keptPath],
