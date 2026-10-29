@@ -26,7 +26,6 @@ authenticated channel) and gets reworked to this one.
 - Running package code on a separate origin. This design is meant not to
   preclude it (the store and file lists work the same there), but doesn't do it.
 - Mount points below the top level of the namespace.
-- Path providers supplied by packages, until section 6 is built.
 - Garbage collection of the content store.
 
 ## Threat model
@@ -391,7 +390,13 @@ store, and both are checked against the URL the watcher pinned.
 
 ## 6. Package-supplied path providers
 
-Approved in conversation 2026-10-28. Not implemented.
+Approved in conversation 2026-10-28. Implemented in `patchwork-filesystem`
+(`sub` children, the editing methods, `WalkOptions.providers`),
+`patchwork-plugins` (`pathProviderFor`, `packagePathProviders`,
+`pathProviderTypes`), the tab resolver and the router, and the base
+sidebar. The built-in folder provider doesn't offer editing yet. In the
+sidebar, a document dropped on a provider's row is added (linked) and left
+where it was; files and new documents can't be dropped there.
 
 The sidebar can open up a doc that isn't a folder when a built-in provider
 walks it: a directory doc, a branches doc, the account. This section proposes

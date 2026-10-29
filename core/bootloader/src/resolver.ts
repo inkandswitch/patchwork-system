@@ -28,6 +28,7 @@ import {
   resolvePath,
   toBytes,
   walkPath,
+  type ExtraProviders,
   type WalkOptions,
 } from "@inkandswitch/patchwork-filesystem";
 
@@ -234,7 +235,8 @@ async function resolveWalkPath(
   path: string,
   accounts: ReadonlyMap<string, AutomergeUrl>,
   signal: AbortSignal,
-  { heads, list, only }: { heads?: string; list?: boolean; only?: string } = {}
+  { heads, list, only }: { heads?: string; list?: boolean; only?: string } = {},
+  providers?: ExtraProviders
 ): Promise<Response> {
   try {
     parsePath(path);
@@ -242,7 +244,7 @@ async function resolveWalkPath(
     return new Response(String(error), { status: 400 });
   }
   const missing = new Set<string>();
-  const options = { accounts, find: waitingFind(repo, signal, missing) };
+  const options = { accounts, providers, find: waitingFind(repo, signal, missing) };
   const notFound = () => {
     if (missing.size) {
       throw new AbortHandoff(`heads not found for ${[...missing].join(", ")}`);
@@ -345,6 +347,11 @@ export function createResolver(
      * shouldn't hold them all.
      */
     declinePackages?: boolean;
+    /**
+     * Providers for documents no built-in walks: a tab passes the ones packages register. The
+     * automerge worker never loads package code, so it passes none.
+     */
+    providers?: ExtraProviders;
   } = {}
 ): Resolver {
   const throughPackages = (path: string) => {
@@ -437,7 +444,7 @@ export function createResolver(
           const limit = within(signal);
           log(`resolving handoff ${id} for /@/${request.path}`);
           response = await Promise.race([
-            resolveWalkPath(repo, request.path, accounts(), limit, request),
+            resolveWalkPath(repo, request.path, accounts(), limit, request, options.providers),
             new Promise<never>((_, reject) =>
               limit.addEventListener("abort", () =>
                 reject(new AbortHandoff(`resolving /@/${request.path} timed out`))

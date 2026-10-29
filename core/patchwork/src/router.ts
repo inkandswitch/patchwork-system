@@ -21,6 +21,7 @@ import {
   type DatatypeImplementation,
   type ToolDescription,
   getRegistry,
+  packagePathProviders,
 } from "@inkandswitch/patchwork-plugins";
 
 // Legacy big-patchwork hash shape: `<slug>--<documentId>[?…]`. The slug can
@@ -64,7 +65,11 @@ export function createRouter({
   );
   const resolvePathParam = async (path: string) => {
     try {
-      return await resolveLivePath(repo, path, { accounts: await accounts });
+      // Package code runs here, so paths go through the providers packages register.
+      return await resolveLivePath(repo, path, {
+        accounts: await accounts,
+        providers: packagePathProviders,
+      });
     } catch {
       return undefined; // a path that doesn't parse names nothing
     }

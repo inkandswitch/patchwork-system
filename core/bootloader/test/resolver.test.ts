@@ -14,6 +14,7 @@ import {
   pinnedPath,
   walkPath,
 } from "@inkandswitch/patchwork-filesystem";
+import { registerPlugins, unregisterPlugins } from "@inkandswitch/patchwork-plugins";
 import { createResolver } from "../src/resolver.js";
 import { registerAccount, resolveHandoffsWith, handleResolveRequest } from "../src/tab-resolver.js";
 import type { HandoffRequestMessage, HandoffResponseMessage } from "../src/types.js";
@@ -264,5 +265,61 @@ describe("registerAccount", () => {
     await expect.poll(() => replies.length, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
     port1.close();
     expect(inline(replies.at(-1)).status).toBe(307);
+  });
+});
+
+describe("package path providers", () => {
+  const PLUGIN_URL = "https://example.test/board.js";
+  const board = {
+    kind: "board",
+    matches: (doc: any) => doc?.["@patchwork"]?.type === "board",
+    list: (doc: any) => [{ name: "child", link: doc.child }],
+    lookup: (doc: any, names: string[]) =>
+      names[0] === "child" ? { child: { name: "child", link: doc.child }, consumed: 1 } : undefined,
+  };
+
+  async function boardFixture() {
+    const base = await fixture();
+    const b = base.repo.create({ "@patchwork": { type: "board" }, child: file(base.repo, "c") });
+    const root = await base.repo.find<any>(base.account.doc()!.namespace["/"][0].url);
+    root.change((d: any) => d.docs.push({ name: "b", type: "board", url: b.url }));
+    return base;
+  }
+
+  it("walk through the providers a resolver is given; the worker's has none", async () => {
+    const { repo, a, accounts } = await boardFixture();
+    const path = livePath(a, ["b", "child"]);
+    const tab = createResolver(() => Promise.resolve(repo), undefined, () => accounts, {
+      providers: async (doc) => (board.matches(doc) ? board : undefined),
+    });
+    expect(inline(await tab.answer(pathRequest(path))).status).toBe(307);
+    const worker = createResolver(() => Promise.resolve(repo), undefined, () => accounts);
+    expect(inline(await worker.answer(pathRequest(path))).status).toBe(404);
+  });
+
+  it("a tab's resolver walks through registered path-provider plugins", async () => {
+    const { repo, a, account } = await boardFixture();
+    registerPlugins(
+      [{ id: "board", name: "board", type: "patchwork:path-provider", supportedDatatypes: ["board"], load: async () => board }],
+      PLUGIN_URL
+    );
+    try {
+      resolveHandoffsWith(repo);
+      await registerAccount(account.url);
+      const { port1, port2 } = new MessageChannel();
+      const replies: unknown[] = [];
+      port1.onmessage = (event) => replies.push(event.data);
+      handleResolveRequest(
+        new MessageEvent("message", {
+          data: { ...pathRequest(livePath(a, ["b", "child"])), type: "resolve" },
+          ports: [port2],
+        })
+      );
+      await expect.poll(() => replies.length, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
+      port1.close();
+      expect(inline(replies.at(-1)).status).toBe(307);
+    } finally {
+      unregisterPlugins(PLUGIN_URL);
+    }
   });
 });

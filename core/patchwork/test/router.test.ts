@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Repo, type AutomergeUrl, type DocHandle } from "@automerge/automerge-repo";
 import { livePath } from "@inkandswitch/patchwork-filesystem";
+import { registerPlugins, unregisterPlugins } from "@inkandswitch/patchwork-plugins";
 
 vi.mock("@inkandswitch/patchwork-elements", () => ({
   openDocument: (element: EventTarget, url: string) =>
@@ -52,7 +53,10 @@ function fakeWindow(initial: string) {
   return { window, location };
 }
 
-async function setup(hash: (a: string, notes: AutomergeUrl) => string) {
+async function setup(
+  hash: (a: string, notes: AutomergeUrl) => string,
+  extra: (repo: Repo) => Record<string, AutomergeUrl> = () => ({})
+) {
   const repo = new Repo();
   const file = (content: string) =>
     repo.create({ "@patchwork": { type: "file" }, content, mimeType: "text/plain" });
@@ -63,7 +67,10 @@ async function setup(hash: (a: string, notes: AutomergeUrl) => string) {
     });
   const notes = file("hi");
   const other = file("other");
-  const root = folder({ Projects: folder({ foo: folder({ notes: notes.url }).url }).url });
+  const root = folder({
+    Projects: folder({ foo: folder({ notes: notes.url }).url }).url,
+    ...extra(repo),
+  });
   const account = repo.create({
     "@patchwork": { type: "account" },
     namespace: { "/": [{ url: root.url }] },
@@ -88,7 +95,7 @@ async function setup(hash: (a: string, notes: AutomergeUrl) => string) {
     siteTitle: "test",
   });
   const live = livePath(a, ["Projects", "foo", "notes"]);
-  return { a, live, notes, other, location, rootElement, opened, router };
+  return { a, repo, live, notes, other, location, rootElement, opened, router };
 }
 
 const hashParam = (location: { hash: string }, key: string) =>
@@ -209,5 +216,52 @@ describe("router: path=", () => {
     await vi.waitFor(() => expect(hashParam(location, "path")).toBeUndefined());
     expect(hashParam(location, "doc")).toBe(OTHER);
     expect(warn).toHaveBeenCalled();
+  });
+});
+
+describe("router: paths through package providers", () => {
+  const PLUGIN_URL = "https://example.test/board.js";
+  const board = {
+    kind: "board",
+    matches: (doc: any) => doc?.["@patchwork"]?.type === "board",
+    list: (doc: any) => [
+      { name: "child", link: doc.child },
+      { name: "notes", sub: ["notes"] },
+    ],
+    lookup(doc: any, names: string[]) {
+      const child = board.list(doc).find((c) => c.name === names[0]);
+      return child && { child, consumed: 1 };
+    },
+  };
+  let b: DocHandle<any> | undefined;
+  const withBoard = (repo: Repo) => {
+    const child = repo.create({ "@patchwork": { type: "file" }, content: "c", mimeType: "text/plain" });
+    b = repo.create({
+      "@patchwork": { type: "board" },
+      child: child.url,
+      notes: { content: "n", mimeType: "text/plain" },
+    });
+    return { b: b.url };
+  };
+
+  afterEach(() => unregisterPlugins(PLUGIN_URL));
+  const register = () =>
+    registerPlugins(
+      [{ id: "board", name: "board", type: "patchwork:path-provider", supportedDatatypes: ["board"], load: async () => board }],
+      PLUGIN_URL
+    );
+
+  it("opens a document a package's provider names", async () => {
+    register();
+    const { opened } = await setup((a) => `path=${livePath(a, ["b", "child"])}`, withBoard);
+    await vi.waitFor(() => expect(opened.length).toBeGreaterThanOrEqual(1));
+    expect(opened[0].url).toBe(b!.doc().child);
+  });
+
+  it("opens a sub-document at its sub-handle's url", async () => {
+    register();
+    const { opened } = await setup((a) => `path=${livePath(a, ["b", "notes"])}`, withBoard);
+    await vi.waitFor(() => expect(opened.length).toBeGreaterThanOrEqual(1));
+    expect(opened[0].url).toBe(b!.sub("notes").url);
   });
 });

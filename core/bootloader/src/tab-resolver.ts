@@ -8,6 +8,7 @@ import {
   type Repo,
 } from "@automerge/automerge-repo/slim";
 import { idhash } from "@inkandswitch/patchwork-filesystem";
+import { packagePathProviders } from "@inkandswitch/patchwork-plugins";
 
 import { createResolver, type Resolver } from "./resolver.js";
 import type {
@@ -31,6 +32,8 @@ export function resolveHandoffsWith(repo: Repo): void {
   resolver = createResolver(() => Promise.resolve(repo), undefined, () => accounts, {
     declineUnknownAccounts: true,
     declinePackages: true,
+    // Package code runs in tabs, so tabs walk through the providers packages register.
+    providers: packagePathProviders,
   });
 }
 
