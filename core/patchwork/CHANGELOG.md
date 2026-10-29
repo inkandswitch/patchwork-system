@@ -1,5 +1,13 @@
 # @inkandswitch/patchwork
 
+## 0.8.9
+
+### Patch Changes
+
+- 7d4520f: A package that fails to import in the module-loader worker now reports why. Vite's preload helper, which wraps every dynamic `import()`, announced the failure with `window.dispatchEvent`, and in a worker that threw a ReferenceError in place of the import's own error. The `patchwork()` vite plugin now includes `preloadErrorInWorkers()`, which has the helper dispatch on `globalThis` instead, and fails the build if a vite version stops writing that line. The worker also sends the error's name and message along with its stack, since Safari's and Firefox's stacks leave them out; before, Safari logged only `handlePreloadError@…`.
+- Updated dependencies [7d4520f]
+  - @inkandswitch/patchwork-bootloader@0.8.8
+
 ## 0.8.8
 
 ### Patch Changes

@@ -30,6 +30,15 @@ function toDescriptor(plugin: any): Record<string, unknown> {
   return description;
 }
 
+// Only V8 starts a stack with the error's name and message; Safari's and
+// Firefox's are frames alone, which on their own say nothing of what failed.
+function describe(error: Error): string {
+  const heading = String(error);
+  if (!error.stack) return heading;
+  if (error.stack.startsWith(heading)) return error.stack;
+  return `${heading}\n${error.stack}`;
+}
+
 function isDiscoverRequest(data: unknown): data is DiscoverRequest {
   return (
     typeof data === "object" &&
@@ -59,10 +68,7 @@ self.addEventListener("message", (event: MessageEvent) => {
       (self as unknown as Worker).postMessage({
         type: "error",
         id,
-        error:
-          error instanceof Error
-            ? (error.stack ?? error.message)
-            : String(error),
+        error: error instanceof Error ? describe(error) : String(error),
       });
     });
 });
