@@ -163,10 +163,11 @@ export async function walkPath(
   const stepOf = async (handle: DocHandle<unknown>) =>
     docStep(await hashOf(handle.url), handle.heads());
 
-  // Package providers apply only to a document the walk goes on through. Whether a document the
-  // path ends at is a container (a doc step) or a file (a name) is the built-ins' call, so a
-  // path pins the same with or without a package's provider, and a plugin installed later
-  // doesn't change what an existing pinned URL means.
+  // Package providers apply to a document the walk goes on through, and to one named by a doc
+  // step (only a container is ever written as one, so a pinned prefix stays its container). A
+  // document a path ends at *by name* is a container or a file by the built-ins' call, so a path
+  // pins the same with or without a package's provider, and a plugin installed later doesn't
+  // change what an existing pinned URL means.
   async function enter(
     url: AutomergeUrl,
     heads: UrlHeads | undefined,
@@ -231,7 +232,7 @@ export async function walkPath(
   let at: At | undefined;
   if (root.kind === "account") {
     const url = options.accounts.get(root.acctHash);
-    at = url && (await enter(url, root.heads, segments.length > 0));
+    at = url && (await enter(url, root.heads, true));
     if (!at) return undefined;
     out.push(docStep(root.acctHash, at.handle.heads()));
     if (root.listHash) lists.set(0, root.listHash);
@@ -239,7 +240,7 @@ export async function walkPath(
     at = await enter(
       stringifyAutomergeUrl({ documentId: root.documentId }),
       root.heads,
-      segments.length > 0
+      true
     );
     if (!at) return undefined;
     out.push(`automerge:${root.documentId}@${formatHeads(root.heads)}`);
@@ -268,7 +269,7 @@ export async function walkPath(
           listHash = segment.listHash;
           i++;
           if (!guard(member, segments.length - i)) return undefined;
-          next = await enter(member, segment.heads, i < segments.length);
+          next = await enter(member, segment.heads, true);
         }
       }
       if (!member) {
@@ -313,7 +314,7 @@ export async function walkPath(
       );
       const link = await matchLink(links, segment);
       if (link) {
-        const next = await enter(link, segment.heads, i + 1 < segments.length);
+        const next = await enter(link, segment.heads, true);
         if (!next) return undefined;
         out.push(await stepOf(next.handle));
         if (segment.listHash) lists.set(out.length - 1, segment.listHash);
@@ -519,11 +520,26 @@ export async function readPath(
   const end = await walkPath(repo, path, options);
   if (!end) return undefined;
   let node = end.node;
-  if (options.heads && end.atDocument) {
+  if (options.heads) {
+    const heads = options.heads;
+    const find = options.find ?? ((url: AutomergeUrl) => repo.find(url));
+    const holder = end.handle.documentId;
     try {
-      const find = options.find ?? ((url: AutomergeUrl) => repo.find(url));
-      const bare = stringifyAutomergeUrl({ documentId: end.handle.documentId });
-      node = (await find(bare, options.heads)).view(options.heads).doc();
+      if (end.atDocument) {
+        const bare = stringifyAutomergeUrl({ documentId: holder });
+        node = (await find(bare, heads)).view(heads).doc();
+      } else {
+        // A value inside a document: walk again with that document read at the heads.
+        const atHeads = await walkPath(repo, path, {
+          ...options,
+          find: async (url, at) =>
+            parseAutomergeUrl(url).documentId === holder
+              ? (await find(url, heads)).view(heads)
+              : find(url, at),
+        });
+        if (!atHeads) return undefined;
+        node = atHeads.node;
+      }
     } catch {
       return undefined;
     }
@@ -626,12 +642,15 @@ export async function listFiles(
   // Values are read in place; links are gathered and read below.
   type Link = { parts: string[]; keys: number[]; link: AutomergeUrl };
   const entered = new Set<string>([rootId]);
+  // `heads`: what the holder was read at, when it's a doc below the container (reached by a
+  // link, so not pinned by the container's step): its values are read back at those heads.
   const visit = async (
     node: unknown,
     provider: PathProvider | undefined,
     holder: DocumentId,
     parts: string[],
-    keys: number[]
+    keys: number[],
+    heads?: UrlHeads
   ): Promise<Link[]> => {
     const links: Link[] = [];
     for (const child of listOf(provider, node)) {
@@ -642,17 +661,17 @@ export async function listFiles(
       if ("sub" in child || "value" in child) {
         const value = "sub" in child ? valueAt(node, child.sub) : child.value;
         if (value === undefined) continue;
-        await add(childParts, childKeys, value, holder);
+        await add(childParts, childKeys, value, holder, heads);
         // A package's provider walks on into the values it hands out, so list what's in them.
         if (!builtIn && value && typeof value === "object" && !(value instanceof Uint8Array)) {
-          links.push(...(await visit(value, provider, holder, childParts, childKeys)));
+          links.push(...(await visit(value, provider, holder, childParts, childKeys, heads)));
           continue;
         }
       }
       if ("value" in child) {
         // Nested values are addressable by path only inside a directory doc.
         if (provider === directoryProvider && isNested(child.value)) {
-          links.push(...(await visit(child.value, provider, holder, childParts, childKeys)));
+          links.push(...(await visit(child.value, provider, holder, childParts, childKeys, heads)));
         }
       } else if (
         "link" in child &&
@@ -702,7 +721,7 @@ export async function listFiles(
         // Into a nested folder, by name: its files are under its name here.
         entered.add(parsed.documentId);
         await add(parts, keys, doc, parsed.documentId, heads);
-        below = await visit(doc, provider, parsed.documentId, parts, keys);
+        below = await visit(doc, provider, parsed.documentId, parts, keys, heads);
       }
     } catch {
       missing.push(tailOf(parts));

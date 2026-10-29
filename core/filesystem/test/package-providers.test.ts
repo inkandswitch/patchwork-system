@@ -5,7 +5,8 @@ import type { AutomergeUrl, DocHandle } from "@automerge/automerge-repo";
 import { livePath } from "../src/paths.js";
 import { getType } from "../src/metadata.js";
 import type { Child, PathProvider } from "../src/providers.js";
-import { listChildren, listFiles, resolveLivePath, walkPath } from "../src/walk.js";
+import { listChildren, listFiles, pinnedPath, resolveLivePath, walkPath } from "../src/walk.js";
+import { buildFileList, parseFileList } from "../src/file-list.js";
 import { file, fixture } from "./namespace-fixture.js";
 
 type BoardDoc = {
@@ -230,5 +231,20 @@ describe("deferred review fixes", () => {
     expect(await listChildren(repo, b as DocHandle<unknown>, providers)).toEqual([]);
     const end = await walkPath(repo, livePath(a, ["b", "child"]), { accounts, providers });
     await expect(listFiles(repo, end!.pinned, { accounts, providers })).resolves.toBeDefined();
+  });
+});
+
+describe("pinning through a package's container", () => {
+  it("pins a path through it to a URL whose list covers the file", async () => {
+    const { repo, a, accounts } = await boardFixture();
+    for (const name of ["child", "notes"]) {
+      const pinned = await pinnedPath(repo, livePath(a, ["b", name]), { accounts, providers });
+      const [prefix, tail] = [pinned!.path.slice(0, pinned!.path.lastIndexOf("/")), name];
+      const list = parseFileList(pinned!.list!)!;
+      expect(Object.keys(list.files), name).toContain(tail);
+      // The list rebuilds from the container's own prefix, as the service worker asks for it.
+      const rebuilt = await buildFileList(repo, prefix.replace(/~[^/]*$/, ""), { accounts, providers });
+      expect(rebuilt?.listHash).toBe(prefix.match(/~([^/]*)$/)![1]);
+    }
   });
 });

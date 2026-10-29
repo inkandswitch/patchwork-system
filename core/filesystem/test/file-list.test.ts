@@ -150,6 +150,25 @@ describe("package lists", () => {
     expect(decode(then!.content)).toBe("x");
   });
 
+  it("records the heads of a nested doc that holds values, and reads them there", async () => {
+    const { repo, a, accounts, pkg } = await folderPackage();
+    const dir = repo.create<any>({
+      "@patchwork": { type: "directory" },
+      "a.js": { content: "old", mimeType: "text/javascript" },
+    });
+    pkg.change((d: any) => d.docs.push({ name: "dir", type: "directory", url: dir.url }));
+    const prefix = await chain(repo, livePath(a, ["packages", "fpkg"]), accounts);
+    const built = await buildFileList(repo, prefix!, { accounts });
+    const entry = built!.list.files["dir/a.js"];
+    expect(entry?.heads).toBeDefined();
+    dir.change((d: any) => (d["a.js"].content = "new"));
+    const then = await readPath(repo, `${built!.prefix}/dir/a.js`, {
+      accounts,
+      heads: parseHeads(entry!.heads!),
+    });
+    expect(decode(then!.content)).toBe("old");
+  });
+
   it("pins a live path to a folder with the folder's whole list", async () => {
     const { repo, a, accounts } = await folderPackage();
     const pinned = await pinnedPath(repo, livePath(a, ["packages", "fpkg"]), {
