@@ -92,7 +92,9 @@ export function createRouter({
       console.warn(`patchwork: path=${path} doesn't resolve here (yet)`);
       return;
     }
-    if (handle.documentId !== parseAutomergeUrl(docUrl).documentId) {
+    // The document, and the part of it (`automerge:<id>/<path>`), without heads.
+    const named = (url: string) => url.split("#")[0];
+    if (named(handle.url) !== named(docUrl)) {
       dropPath(path, `it names ${handle.url}, not ${docUrl}`);
     }
   };

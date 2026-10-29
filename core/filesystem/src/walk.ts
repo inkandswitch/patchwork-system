@@ -72,11 +72,20 @@ function lookUp(provider: PathProvider, node: unknown, names: string[]): Lookup 
 
 function listOf(provider: PathProvider | undefined, node: unknown): Child[] {
   try {
-    return provider?.list(node) ?? [];
+    const children = provider?.list(node);
+    return Array.isArray(children) ? children : [];
   } catch {
     return [];
   }
 }
+
+/**
+ * The path segments a child's name is written as: one, except a directory key, which spans
+ * several. The walk and file lists both write it this way, so a name reached by several
+ * spellings ("a%2Fb", or "a/b" consumed together) pins to the one tail its list has.
+ */
+const nameSegments = (provider: PathProvider | undefined, name: string) =>
+  provider === directoryProvider ? name.split("/") : [name];
 
 // idhashes never change, and every walk hashes the same few documents again.
 const idhashes = new Map<string, Promise<string>>();
@@ -325,7 +334,12 @@ export async function walkPath(
     if (consumed > names.length || (consumed < 1 && ("value" in child || "sub" in child))) {
       return undefined;
     }
-    const written = names.slice(0, consumed).map(encodeURIComponent);
+    const written =
+      consumed === 0
+        ? []
+        : typeof child.name === "string" && child.name
+          ? nameSegments(at.provider, child.name).map(encodeURIComponent)
+          : names.slice(0, consumed).map(encodeURIComponent);
     i += consumed;
 
     if ("value" in child) {
@@ -621,9 +635,7 @@ export async function listFiles(
   ): Promise<Link[]> => {
     const links: Link[] = [];
     for (const child of listOf(provider, node)) {
-      // Only a directory's keys span several path segments; a folder entry's name is one.
-      const names =
-        provider === directoryProvider ? child.name.split("/") : [child.name];
+      const names = nameSegments(provider, child.name);
       const childParts = [...parts, ...names];
       const childKeys = [...keys, names.length];
       const builtIn = provider === directoryProvider || provider === folderProvider;

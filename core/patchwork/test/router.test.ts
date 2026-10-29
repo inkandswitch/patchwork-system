@@ -265,3 +265,40 @@ describe("router: paths through package providers", () => {
     expect(opened[0].url).toBe(b!.sub("notes").url);
   });
 });
+
+describe("router: paths to part of a document", () => {
+  const PLUGIN_URL = "https://example.test/board2.js";
+  const board = {
+    kind: "board",
+    matches: (doc: any) => doc?.["@patchwork"]?.type === "board",
+    list: () => [{ name: "notes", sub: ["notes"] }],
+    lookup: (_doc: any, names: string[]) =>
+      names[0] === "notes" ? { child: { name: "notes", sub: ["notes"] }, consumed: 1 } : undefined,
+  };
+  let b: DocHandle<any> | undefined;
+  const withBoard = (repo: Repo) => {
+    b = repo.create({ "@patchwork": { type: "board" }, notes: { content: "n" } });
+    return { b: b.url };
+  };
+  afterEach(() => unregisterPlugins(PLUGIN_URL));
+
+  it("drops a path that names part of doc when doc is the whole document", async () => {
+    registerPlugins(
+      [{ id: "board2", name: "board2", type: "patchwork:path-provider", supportedDatatypes: ["board"], load: async () => board }],
+      PLUGIN_URL
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let boardUrl = "";
+    const { location } = await setup((a) => {
+      return `path=${livePath(a, ["b", "notes"])}`;
+    }, (repo) => {
+      const entries = withBoard(repo);
+      boardUrl = entries.b;
+      return entries;
+    });
+    location.hash = `doc=${boardUrl}&path=${hashParam(location, "path")}`;
+    await vi.waitFor(() => expect(hashParam(location, "path")).toBeUndefined(), { timeout: 3000 });
+    expect(hashParam(location, "doc")).toBe(boardUrl);
+    warn.mockRestore();
+  });
+});

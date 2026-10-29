@@ -139,11 +139,10 @@ Built-in providers, checked in order, first match wins:
   stands for its `default` branch. This replaces the special case in
   `core/bootloader/src/resolver.ts`.
 
-Providers are built in only, for now. Nothing trusts a provider's answers
-any more, since every byte is checked against the URL. But a provider runs
-inside every resolver, the automerge worker's included, so a package
-supplying one would run package code there. The provider interface is
-exported, shaped so package providers can be added later.
+These built-ins run in every resolver, the automerge worker's included.
+Nothing trusts a provider's answers, since every byte is checked against the
+URL. Packages can supply providers too (section 6), but they run only in
+tabs, after the built-ins, and only for documents a walk goes through.
 
 ### Namespace
 
@@ -395,8 +394,10 @@ Approved in conversation 2026-10-28. Implemented in `patchwork-filesystem`
 `patchwork-plugins` (`pathProviderFor`, `packagePathProviders`,
 `pathProviderTypes`), the tab resolver and the router, and the base
 sidebar. The built-in folder provider doesn't offer editing yet. In the
-sidebar, a document dropped on a provider's row is added (linked) and left
-where it was; files and new documents can't be dropped there.
+sidebar, a document dropped among an opened provider's children is added
+(linked) and left where it was. The row itself still takes drops as a folder
+entry. Files, new documents and sub-documents can't be dropped among a
+provider's children.
 
 The sidebar can open up a doc that isn't a folder when a built-in provider
 walks it: a directory doc, a branches doc, the account. This section proposes

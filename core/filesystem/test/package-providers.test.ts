@@ -199,3 +199,36 @@ describe("review fixes", () => {
     expect(listed?.missing).not.toContain("subby");
   });
 });
+
+describe("deferred review fixes", () => {
+  it("writes a name a provider spreads over several segments as the list does", async () => {
+    const { repo, a, accounts, b, child } = await boardFixture();
+    const slashy: PathProvider = {
+      ...board,
+      list: () => [{ name: "a/b", link: child.url }],
+      lookup: (_node, names) =>
+        names[0] === "a/b"
+          ? { child: { name: "a/b", link: child.url }, consumed: 1 }
+          : names[0] === "a" && names[1] === "b"
+            ? { child: { name: "a/b", link: child.url }, consumed: 2 }
+            : undefined,
+    };
+    const options = { accounts, providers: async (doc: unknown) => (board.matches(doc) ? slashy : undefined) };
+    const spread = await walkPath(repo, `${livePath(a, ["b"])}/a/b`, options);
+    const encoded = await walkPath(repo, livePath(a, ["b", "a/b"]), options);
+    expect(spread?.tail).toBe("a%2Fb");
+    expect(encoded?.tail).toBe("a%2Fb");
+    const listed = await listFiles(repo, spread!.pinned, options);
+    expect(listed?.files.map((f) => f.tail)).toContain(spread!.tail);
+    expect(b).toBeDefined();
+  });
+
+  it("treats a list that isn't an array as no children", async () => {
+    const { repo, a, accounts, b } = await boardFixture();
+    const odd: PathProvider = { ...board, list: () => ({}) as unknown as Child[] };
+    const providers = async (doc: unknown) => (board.matches(doc) ? odd : undefined);
+    expect(await listChildren(repo, b as DocHandle<unknown>, providers)).toEqual([]);
+    const end = await walkPath(repo, livePath(a, ["b", "child"]), { accounts, providers });
+    await expect(listFiles(repo, end!.pinned, { accounts, providers })).resolves.toBeDefined();
+  });
+});

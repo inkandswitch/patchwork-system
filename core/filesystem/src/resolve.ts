@@ -3,7 +3,7 @@ import {
   type Repo,
   isImmutableString,
 } from "@automerge/automerge-repo/slim";
-import { type PathProvider, asLink, providerFor, valueAt } from "./providers.js";
+import { type PathProvider, asLink, providerFor } from "./providers.js";
 
 export type Resolved = {
   content: string | Uint8Array;
@@ -54,10 +54,8 @@ async function resolveIn(
   const { child, consumed } = found;
   const rest = parts.slice(consumed);
   if ("value" in child) return resolveIn(repo, provider, child.value, rest, walk);
-  if ("sub" in child) {
-    const value = valueAt(node, child.sub);
-    return value === undefined ? undefined : resolveIn(repo, provider, value, rest, walk);
-  }
+  // Only built-ins walk here, and none hands out sub-documents.
+  if ("sub" in child) return undefined;
 
   // A union (an account's mount) is read through its first binding.
   const link = "link" in child ? child.link : child.union[0];
