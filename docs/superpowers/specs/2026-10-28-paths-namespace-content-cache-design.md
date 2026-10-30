@@ -264,13 +264,17 @@ Builds on the `open-document-path` branch (48f4ab98):
   `/packages`, deduplicated by document id; a package in both is imported
   through `/packages`. Entries migration moved (`movedToPackages`) load only
   through `/packages`, so removing a package there removes it.
-- The Packages tool (base `packages/`), on a host that loads `/packages`,
-  installs an automerge package by linking it into your packages folder (the
-  first `/packages` binding) and uninstalls by removing the link. Pinned and
+- The Packages tool (base `packages/`), on a host that loads `/packages` and
+  viewing the account's own module-settings doc, installs an automerge
+  package by linking it into your packages folder (the first `/packages`
+  binding) and uninstalls by removing the link. It tells which package a
+  plugin came from with `ModuleWatcher.packageFor`, since a `/packages`
+  package's plugins are registered under its pinned `/@/` url. Pinned and
   http modules still go into module settings, since a folder link follows
   the latest version and a folder can't hold an http module. A package
-  linked from a folder you share can't be uninstalled from the tool:
-  removing it there would uninstall it for everyone who shares it.
+  linked from a folder you share (even if yours links it too) can't be
+  uninstalled from the tool: removing it there would uninstall it for
+  everyone who shares it, and leaving it there keeps it loaded.
 - A link under `/packages` that isn't a package (no `package.json`) is
   warned about and skipped.
 
