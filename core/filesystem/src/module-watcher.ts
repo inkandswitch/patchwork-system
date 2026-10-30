@@ -325,6 +325,18 @@ export class ModuleWatcher extends EventTarget {
     return this.#status.get(documentId);
   }
 
+  /**
+   * The package an import url was loaded for, if this watcher loaded it. A
+   * `/packages` package is imported from its pinned `/@/` url, which is what
+   * its plugins are registered under; this maps that back to the package doc.
+   */
+  packageFor(importUrl: string): AutomergeUrl | undefined {
+    for (const [moduleKey, version] of this.#lastAnnounced) {
+      if (version === importUrl && isValidAutomergeUrl(moduleKey)) return moduleKey;
+    }
+    return undefined;
+  }
+
   #setStatus(moduleKey: string, status: PackageStatus) {
     if (!isValidAutomergeUrl(moduleKey)) return;
     this.#status.set(parseAutomergeUrl(moduleKey).documentId, status);

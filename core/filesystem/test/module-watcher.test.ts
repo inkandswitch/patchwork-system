@@ -820,6 +820,20 @@ describe("ModuleWatcher /packages folder", () => {
     await repo.shutdown().catch(() => {});
   });
 
+  it("says which package a loaded import url belongs to", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const source = folderSource(repo);
+    const announced: string[] = [];
+    const watcher = new ModuleWatcher(repo, {}, (name) => announced.push(name), undefined, undefined, source.tracker);
+    await watcher.addPackagesFolder("packages", source.entries, source.subscribe);
+    expect(announced).toHaveLength(2);
+    const packages = announced.map((url) => watcher.packageFor(url)).sort();
+    expect(packages).toEqual(source.docs.map((d) => d.url).sort());
+    expect(watcher.packageFor("https://elsewhere.test/x.js")).toBeUndefined();
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
   it("loads a package in both module settings and /packages once", async () => {
     const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
     const source = folderSource(repo);

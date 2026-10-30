@@ -20,3 +20,4 @@ Fixes to paths, packages and the content store from review.
   - opening another part of the same document drops the path;
   - a path-only hash that doesn't resolve is walked again when path providers register, so a cold boot opens a path through a package's datatype.
 - The service worker opens an account's content store only to write to it, so a `/@/` link naming an unknown account leaves no cache behind.
+- `ModuleWatcher.packageFor(importUrl)` says which package doc an import url was loaded for. A `/packages` package's plugins are registered under its pinned `/@/` url; this maps it back, so a tool like Packages can tell what's installed.
