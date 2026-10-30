@@ -131,6 +131,11 @@ export async function startServiceWorker(): Promise<ServiceWorkerHarness> {
   vi.stubGlobal("caches", caches);
   vi.stubGlobal("BroadcastChannel", TrackedBroadcastChannel);
   vi.resetModules();
+  // A fake tab shares this event loop, so its "accepted" can queue behind its
+  // own resolving; under load that passes 250ms, the tab counts as silent, and
+  // the request waits out a broadcast nothing here answers. Tests that want a
+  // tab declined have it say so.
+  vi.doMock("../src/handoff-timing.js", () => ({ ACCEPT_TIMEOUT_MS: 10_000 }));
   await import("../src/service-worker.js");
   // The module's own channels are open; the test's are the real class again.
   vi.stubGlobal("BroadcastChannel", RealBroadcastChannel);

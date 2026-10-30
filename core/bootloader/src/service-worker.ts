@@ -33,6 +33,7 @@ import {
 // installs a replacement service worker when they do, and the controllerchange
 // that follows is how open tabs learn a deploy happened (see setup.ts).
 import { buildId } from "./build-id.js";
+import { ACCEPT_TIMEOUT_MS } from "./handoff-timing.js";
 
 const DEFAULT_CACHE_NAME = "patchwork";
 
@@ -253,11 +254,6 @@ async function startWorkerIfMissing(id: string) {
 /** Signals that respondWith should reject; see {@link HandoffAbortMessage}. */
 class HandoffAborted extends Error {}
 
-// How long a tab has to say it'll resolve a request before the service
-// worker asks the next one. A tab that hasn't been handed its Repo yet says it
-// can't at once, so this is for one that can't answer at all: a frozen
-// background tab, or one from a build before tabs resolved.
-const ACCEPT_TIMEOUT_MS = 250;
 // A tab posts its reply and then lets go of its lock, but the lock can be
 // granted here before the reply is delivered.
 const REPLY_AFTER_LOCK_MS = 100;
