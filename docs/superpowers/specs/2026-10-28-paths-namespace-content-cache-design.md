@@ -260,10 +260,17 @@ Builds on the `open-document-path` branch (48f4ab98):
   - `PackageTracker.findLatest` keeps asking the service worker, in the new
     grammar.
 - The site's `system` HTTP manifest stays a separate source.
-- So does the module-settings doc, for now. The Packages UI (an installed
-  tool, not in this repo) still installs into it, so the watcher loads both
-  it and `/packages`, deduplicated by document id. A package in both is
-  imported through `/packages`.
+- So does the module-settings doc, for now. The watcher loads both it and
+  `/packages`, deduplicated by document id; a package in both is imported
+  through `/packages`. Entries migration moved (`movedToPackages`) load only
+  through `/packages`, so removing a package there removes it.
+- The Packages tool (base `packages/`), on a host that loads `/packages`,
+  installs an automerge package by linking it into your packages folder (the
+  first `/packages` binding) and uninstalls by removing the link. Pinned and
+  http modules still go into module settings, since a folder link follows
+  the latest version and a folder can't hold an http module. A package
+  linked from a folder you share can't be uninstalled from the tool:
+  removing it there would uninstall it for everyone who shares it.
 - A link under `/packages` that isn't a package (no `package.json`) is
   warned about and skipped.
 
@@ -274,10 +281,11 @@ Builds on the `open-document-path` branch (48f4ab98):
 - Migration, once at boot: if the account has `moduleSettingsUrl` and no
   `/packages` binding, create a folder, add a link for each automerge entry
   (named by `package.json` `name`, falling back to the doc title), and bind
-  it at `/packages`. The module-settings doc is left untouched.
-- Packages installed through the old Packages UI after the migration still
-  land in the module-settings doc, which this build keeps reading, but not
-  in `/packages`. Builds older than this one never see `/packages`.
+  it at `/packages`. The module-settings doc keeps its entries, and records
+  which it moved in `movedToPackages`.
+- Packages installed by an older host after the migration still land in the
+  module-settings doc, which this build keeps reading, but not in
+  `/packages`. Builds older than this one never see `/packages`.
 - `AccountDoc.moduleSettingsUrl` is deprecated in favour of the `/packages`
   binding.
 
