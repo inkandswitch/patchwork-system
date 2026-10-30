@@ -22,13 +22,11 @@ import {
 } from "@automerge/automerge-repo/slim";
 
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
-import type {
-  AutomergeRepoKeyhive,
-  SyncServerSelection,
-} from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 import { loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
+import { loadSyncServerIdentity } from "./keyhive-sync-server.js";
 import { startWorkerControl } from "./worker-control.js";
 import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
 import { createResolver } from "./resolver.js";
@@ -41,7 +39,7 @@ import {
 
 declare const __SYNC_SERVER__: {
   url: string;
-  keyhive?: SyncServerSelection;
+  keyhive?: boolean;
   useIdFactory?: boolean;
 };
 
@@ -106,7 +104,7 @@ async function buildRepo(): Promise<Repo> {
   await initWasm();
 
   const { repo, hive } = syncServer.keyhive
-    ? await buildKeyhiveRepo(syncServer.keyhive)
+    ? await buildKeyhiveRepo()
     : { repo: await buildPlainRepo() };
 
   builtRepo = repo;
@@ -127,12 +125,14 @@ async function buildPlainRepo(): Promise<Repo> {
   });
 }
 
-async function buildKeyhiveRepo(
-  keyhiveSyncServer: SyncServerSelection
-): Promise<{ repo: Repo; hive: AutomergeRepoKeyhive }> {
+async function buildKeyhiveRepo(): Promise<{
+  repo: Repo;
+  hive: AutomergeRepoKeyhive;
+}> {
   const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
     await import("@automerge/automerge-repo-keyhive");
   initKeyhiveWasm();
+  const keyhiveStorage = new IndexedDBStorageAdapter(keyhiveStorageName);
   const { hive, repo } = await initializeAutomergeRepoKeyhive({
     // ARK injects an `idFactory` deriving document ids from keyhive. A site
     // can opt out of it with `keyhive: { useIdFactory: false }`.
@@ -140,14 +140,12 @@ async function buildKeyhiveRepo(
       new Repo(
         syncServer.useIdFactory === false ? config : { ...config, idFactory }
       ),
-    storage: new IndexedDBStorageAdapter(keyhiveStorageName),
+    storage: keyhiveStorage,
     peerIdSuffix:
       `${storagePrefix}-resolver` + Math.random().toString(36).slice(2),
     automaticArchiveIngestion: true,
     cachingMode: "periodic",
-    // ARK selects the relay via `syncServer`, which pairs the contact card with
-    // the matching peer id. Omitting it defaults to "subduction".
-    syncServer: keyhiveSyncServer,
+    syncServer: await loadSyncServerIdentity(syncServer.url, keyhiveStorage),
     repo: {
       storage: new IndexedDBStorageAdapter(),
       subductionWebsocketEndpoints: [syncServer.url],
