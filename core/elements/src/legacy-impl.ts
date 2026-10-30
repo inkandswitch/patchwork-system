@@ -323,12 +323,12 @@ export class LegacyImpl {
     if (this.#element.hive && this.#docUrl) {
       // Legacy (padded-zero) doc: skip keyhive gate
       if (isKeyhiveDoc(this.#docUrl)) {
-        const bestAccess = await this.#element.hive.bestAccessForDoc(
+        const access = await this.#element.hive.accessForDoc(
           this.#element.hive.active.individual.id,
           this.#docUrl
         );
         if (epoch !== this.#initEpoch) return;
-        const accessLevel = bestAccess ? bestAccess.toString() : "None";
+        const accessLevel = access ? access.toString() : "None";
 
         if (accessLevel === "None") {
           this.#state = State.unable;
@@ -559,11 +559,11 @@ export class LegacyImpl {
       let accessCheckSucceeded = false;
       try {
         if (!isKeyhiveDoc(this.#docUrl)) return;
-        const bestAccess = await this.#element.hive.bestAccessForDoc(
+        const access = await this.#element.hive.accessForDoc(
           this.#element.hive.active.individual.id,
           this.#docUrl
         );
-        hasAccess = !!bestAccess;
+        hasAccess = !!access;
         accessCheckSucceeded = true;
       } catch {
         return;

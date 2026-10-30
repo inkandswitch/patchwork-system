@@ -6,10 +6,7 @@ import {
   SUBDUCTION_WASM,
 } from "@inkandswitch/patchwork-bootloader/emitted";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
-import type {
-  AutomergeRepoKeyhive,
-  SyncServerSelection,
-} from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 // eslint-disable-next-line
 // @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
 import initSubduction from "@automerge/automerge-subduction/slim";
@@ -17,6 +14,7 @@ import {
   keyhiveStorageName,
   storagePrefix,
 } from "@inkandswitch/patchwork-bootloader/storage";
+import { loadSyncServerIdentity } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 import type { SignerIdentity } from "./types.js";
 import debug from "debug";
 
@@ -24,7 +22,7 @@ const log = debug("patchwork:setup:repo");
 
 declare const __SYNC_SERVER__: {
   url: string;
-  keyhive?: SyncServerSelection;
+  keyhive?: boolean;
   useIdFactory?: boolean;
 };
 const syncServer =
@@ -75,6 +73,7 @@ export async function createRepo(): Promise<TabRepo> {
     const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
       await import("@automerge/automerge-repo-keyhive");
     initKeyhiveWasm();
+    const keyhiveStorage = new IndexedDBStorageAdapter(keyhiveStorageName);
     const { hive, repo } = await initializeAutomergeRepoKeyhive({
       // ARK injects an `idFactory` deriving document ids from keyhive. A site
       // can opt out of it with `keyhive: { useIdFactory: false }`.
@@ -84,12 +83,11 @@ export async function createRepo(): Promise<TabRepo> {
             ? repoConfig
             : { ...repoConfig, idFactory }
         ),
-      storage: new IndexedDBStorageAdapter(keyhiveStorageName),
+      storage: keyhiveStorage,
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
-      // ARK selects the relay via `syncServer`, defaulting to "subduction".
-      syncServer: syncServer.keyhive,
+      syncServer: await loadSyncServerIdentity(syncServer.url, keyhiveStorage),
       repo: {
         storage: new IndexedDBStorageAdapter(),
         subductionWebsocketEndpoints: [syncServer.url],

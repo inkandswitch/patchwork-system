@@ -318,12 +318,12 @@ export function registerPatchworkViewElement(
           const keyhiveDoc = isKeyhiveDoc(this.url);
 
           if (keyhiveDoc) {
-            const bestAccess = await params.hive.bestAccessForDoc(
+            const access = await params.hive.accessForDoc(
               params.hive.active.individual.id,
               this.url
             );
             if (epoch !== this.#initEpoch) return;
-            const accessLevel = bestAccess ? bestAccess.toString() : "None";
+            const accessLevel = access ? access.toString() : "None";
 
             if (accessLevel === "None") {
               this.#state = State.unable;
@@ -508,11 +508,11 @@ export function registerPatchworkViewElement(
           let accessCheckSucceeded = false;
           try {
             if (!isKeyhiveDoc(this.url)) return;
-            const bestAccess = await params.hive.bestAccessForDoc(
+            const access = await params.hive.accessForDoc(
               params.hive.active.individual.id,
               this.url
             );
-            hasAccess = !!bestAccess;
+            hasAccess = !!access;
             accessCheckSucceeded = true;
           } catch {
             return;
