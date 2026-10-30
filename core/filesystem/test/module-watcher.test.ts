@@ -318,7 +318,8 @@ describe("ModuleWatcher module lifecycle", () => {
         d.modules = [];
       });
       await pause(100);
-      expect(unloaded).toEqual([folder.url]);
+      // Under the url it was imported from, which its plugins are registered under.
+      expect(unloaded).toEqual([importCalls[0]]);
 
       folder.change((d: any) => {
         d.rev = 1;
@@ -768,5 +769,356 @@ describe("importPackageFromHttpUrl error handling", () => {
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toMatch(/couldn't parse it as JSON/);
     expect(err.cause).toBe(parseError);
+  });
+});
+
+describe("ModuleWatcher /packages folder", () => {
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /** Packages as a /packages folder lists them, and a tracker that looks them up as http modules. */
+  function folderSource(repo: InstanceType<typeof AutomergeRepo>) {
+    const docs = [0, 1].map(() => repo.create<any>({ "@patchwork": { type: "directory" } }));
+    let entries = docs.map((doc, i) => ({
+      url: doc.url,
+      name: `pkg${i}`,
+      memberStep: "m@h",
+    }));
+    let changed: () => void = () => {};
+    const lookups: string[] = [];
+    const tracker: PackageTracker = {
+      async findLatest(url) {
+        lookups.push(url);
+        return dataModule(`export const plugins = []; // ${url}`) as any;
+      },
+      watch: () => () => {},
+    };
+    return {
+      docs,
+      tracker,
+      lookups,
+      entries: () => entries,
+      subscribe: (onChange: () => void) => {
+        changed = onChange;
+        return () => {};
+      },
+      set(next: typeof entries) {
+        entries = next;
+        changed();
+      },
+    };
+  }
+
+  it("loads every package in the folder", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const source = folderSource(repo);
+    const loaded: string[] = [];
+    const watcher = new ModuleWatcher(repo, {}, (name) => loaded.push(name), undefined, undefined, source.tracker);
+    await watcher.addPackagesFolder("packages", source.entries, source.subscribe);
+    expect(loaded).toHaveLength(2);
+    expect(source.lookups.sort()).toEqual(source.docs.map((d) => d.url).sort());
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("imports a package's pinned url, first and on reload, through the package import", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const doc = repo.create<any>({ "@patchwork": { type: "directory" } });
+    let version = 0;
+    let moved: (seen?: string) => void = () => {};
+    const tracker: PackageTracker = {
+      findLatest: async () => `https://patchwork.test/@/acct/packages/p@v${version}~list` as any,
+      watch: (_url, onChange) => {
+        moved = onChange;
+        return () => {};
+      },
+    };
+    const imported: string[] = [];
+    const watcher = new ModuleWatcher(
+      repo,
+      {},
+      () => {},
+      undefined,
+      async (url) => {
+        imported.push(url);
+        return { plugins: [] };
+      },
+      tracker
+    );
+    await watcher.addPackagesFolder(
+      "packages",
+      () => [{ url: doc.url, name: "p", memberStep: "m@h" }],
+      () => () => {}
+    );
+    expect(imported).toEqual(["https://patchwork.test/@/acct/packages/p@v0~list"]);
+    version = 1;
+    moved();
+    await pause(400);
+    expect(imported).toEqual([
+      "https://patchwork.test/@/acct/packages/p@v0~list",
+      "https://patchwork.test/@/acct/packages/p@v1~list",
+    ]);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("says which package a loaded import url belongs to", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const source = folderSource(repo);
+    const announced: string[] = [];
+    const watcher = new ModuleWatcher(repo, {}, (name) => announced.push(name), undefined, undefined, source.tracker);
+    await watcher.addPackagesFolder("packages", source.entries, source.subscribe);
+    expect(announced).toHaveLength(2);
+    const packages = announced.map((url) => watcher.packageFor(url)).sort();
+    expect(packages).toEqual(source.docs.map((d) => d.url).sort());
+    expect(watcher.packageFor("https://elsewhere.test/x.js")).toBeUndefined();
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("loads a package in both module settings and /packages once", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const source = folderSource(repo);
+    const atHeads = source.docs[0].view(source.docs[0].heads()).url;
+    const settings = repo.create<any>({
+      "@patchwork": { type: "patchwork:module-settings" },
+      modules: [atHeads],
+    });
+    const loaded: string[] = [];
+    const watcher = new ModuleWatcher(
+      repo,
+      {},
+      (name) => loaded.push(name),
+      undefined,
+      undefined,
+      source.tracker
+    );
+    // As patchwork wires them: /packages first, then the user's module settings.
+    await watcher.addPackagesFolder("packages", source.entries, source.subscribe);
+    await watcher.addUrl("user", settings.url);
+    await pause(50);
+    expect(loaded).toHaveLength(2);
+    expect(source.lookups).not.toContain(atHeads);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("doesn't load a module-settings entry migration moved to /packages, once it's removed there", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const source = folderSource(repo);
+    const [moved, kept] = source.docs;
+    const settings = repo.create<any>({
+      "@patchwork": { type: "patchwork:module-settings" },
+      modules: [moved.url, kept.url],
+      movedToPackages: [moved.documentId],
+    });
+    const loaded: string[] = [];
+    const watcher = new ModuleWatcher(repo, {}, (name) => loaded.push(name), undefined, undefined, source.tracker);
+    // The moved package was removed from /packages; the other was never in it.
+    source.set([]);
+    await watcher.addPackagesFolder("packages", source.entries, source.subscribe);
+    await watcher.addUrl("user", settings.url);
+    await pause(50);
+    expect(source.lookups).not.toContain(moved.url);
+    expect(source.lookups).toContain(kept.url);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("doesn't reload a renamed package, and unloads a removed one", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const source = folderSource(repo);
+    const loaded: string[] = [];
+    const unloaded: string[] = [];
+    const watcher = new ModuleWatcher(
+      repo,
+      {},
+      (name) => loaded.push(name),
+      (name) => unloaded.push(name),
+      undefined,
+      source.tracker
+    );
+    await watcher.addPackagesFolder("packages", source.entries, source.subscribe);
+    expect(loaded).toHaveLength(2);
+
+    source.set(source.entries().map((e, i) => (i === 0 ? { ...e, name: "renamed" } : e)));
+    await pause(50);
+    expect(loaded).toHaveLength(2);
+
+    source.set([source.entries()[0]]);
+    await pause(50);
+    expect(unloaded).toHaveLength(1);
+    expect(loaded).toContain(unloaded[0]);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+});
+
+describe("ModuleWatcher /packages, through the real lookup chain", () => {
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function packagesAccount() {
+    const { idhash } = await import("../src/paths.js");
+    const { pinnedPath } = await import("../src/walk.js");
+    const { trackPackagesFolder, watchPackagesFolder } = await import("../src/packages-folder.js");
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const pkg = () => {
+      const json = repo.create({ "@patchwork": { type: "file" }, content: "{}", mimeType: "application/json" });
+      return repo.create<any>({ "@patchwork": { type: "directory" }, "package.json": json.url });
+    };
+    const [p1, p2, p3] = [pkg(), pkg(), pkg()];
+    const member = repo.create<any>({
+      title: "packages",
+      docs: [
+        { name: "one", type: "directory", url: p1.url },
+        { name: "two", type: "directory", url: p2.url },
+      ],
+    });
+    const account = repo.create<any>({
+      "@patchwork": { type: "account" },
+      namespace: { "/packages": [{ url: member.url }] },
+    });
+    const a = await idhash(account.documentId);
+    const accounts = new Map([[a, account.url]]);
+    // The pinned path a lookup would redirect to, as a module that says which.
+    const lookUp = async (path: string) => {
+      const pinned = await pinnedPath(repo, path, { accounts, only: "end" });
+      return `data:text/javascript,export const plugins = []//${pinned!.path}`;
+    };
+    let entries: any[] = [];
+    const listeners = new Set<() => void>();
+    const first = Promise.withResolvers<void>();
+    watchPackagesFolder(repo, account, (next) => {
+      entries = next;
+      first.resolve();
+      for (const listener of listeners) listener();
+    });
+    await first.promise;
+    const fallback: PackageTracker = { findLatest: async (u) => u, watch: () => () => {} };
+    const tracker = trackPackagesFolder(Promise.resolve(a), () => entries, fallback, lookUp);
+    const loaded: string[] = [];
+    const unloaded: string[] = [];
+    const watcher = new ModuleWatcher(
+      repo,
+      {},
+      (name) => loaded.push(name),
+      (name) => unloaded.push(name),
+      undefined,
+      tracker
+    );
+    await watcher.addPackagesFolder("packages", () => entries, (onChange) => {
+      listeners.add(onChange);
+      return () => listeners.delete(onChange);
+    });
+    return { repo, member, p3, watcher, loaded, unloaded };
+  }
+
+  it("adding a package to the folder loads only that package", async () => {
+    const { repo, member, p3, watcher, loaded } = await packagesAccount();
+    expect(loaded).toHaveLength(2);
+    member.change((d: any) => d.docs.push({ name: "three", type: "directory", url: p3.url }));
+    await pause(300);
+    expect(loaded).toHaveLength(3);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("renaming a package reloads nothing", async () => {
+    const { repo, member, watcher, loaded } = await packagesAccount();
+    member.change((d: any) => (d.docs[0].name = "uno"));
+    await pause(300);
+    expect(loaded).toHaveLength(2);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("removing a package unloads it under the name it was loaded with", async () => {
+    const { repo, member, watcher, loaded, unloaded } = await packagesAccount();
+    member.change((d: any) => d.docs.splice(1, 1));
+    await pause(300);
+    expect(unloaded).toHaveLength(1);
+    expect(loaded).toContain(unloaded[0]);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+});
+
+describe("ModuleWatcher lookup retries", () => {
+  it("retries a lookup that failed", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const doc = repo.create<any>({ "@patchwork": { type: "directory" } });
+    let calls = 0;
+    const tracker: PackageTracker = {
+      async findLatest() {
+        if (calls++ === 0) throw new Error("not yet");
+        return dataModule("export const plugins = []") as any;
+      },
+      watch: () => () => {},
+    };
+    const loaded: string[] = [];
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const watcher = new ModuleWatcher(repo, {}, (name) => loaded.push(name), undefined, undefined, tracker);
+    await watcher.addPackagesFolder(
+      "packages",
+      () => [{ url: doc.url, name: "p", memberStep: "m@h" }],
+      () => () => {}
+    );
+    expect(loaded).toHaveLength(0);
+    await vi.waitFor(() => expect(loaded).toHaveLength(1), { timeout: 3000 });
+    watcher.dispose();
+    errors.mockRestore();
+    await repo.shutdown().catch(() => {});
+  });
+});
+
+describe("ModuleWatcher package status", () => {
+  function setup(module: string) {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const doc = repo.create<any>({ "@patchwork": { type: "directory" } });
+    const tracker: PackageTracker = {
+      findLatest: async () => dataModule(module) as any,
+      watch: () => () => {},
+    };
+    const watcher = new ModuleWatcher(repo, {}, () => {}, undefined, undefined, tracker);
+    const events: string[] = [];
+    watcher.addEventListener("status", () =>
+      events.push(watcher.packageStatus(doc.url)?.state ?? "none")
+    );
+    const add = () =>
+      watcher.addPackagesFolder(
+        "packages",
+        () => [{ url: doc.url, name: "p", memberStep: "m@h" }],
+        () => () => {}
+      );
+    return { repo, doc, watcher, events, add };
+  }
+
+  it("says a package loaded, and which plugins it brought", async () => {
+    const { repo, doc, watcher, events, add } = setup(
+      "export const plugins = [{ type: 'patchwork:tool', id: 'demo' }]"
+    );
+    await add();
+    expect(watcher.packageStatus(doc.url)).toEqual({ state: "loaded", plugins: ["demo"] });
+    expect(watcher.packageStatus(doc.documentId)?.state).toBe("loaded");
+    expect(events).toContain("loading");
+    expect(events.at(-1)).toBe("loaded");
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("says a package failed, and why", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { repo, doc, watcher, add } = setup("throw new Error('kaboom')");
+    await add();
+    expect(watcher.packageStatus(doc.url)).toMatchObject({ state: "failed" });
+    expect(watcher.packageStatus(doc.url)?.error).toContain("kaboom");
+    watcher.dispose();
+    errors.mockRestore();
+    await repo.shutdown().catch(() => {});
+  });
+
+  it("knows nothing of a document that isn't a package", async () => {
+    const { repo, watcher } = setup("export const plugins = []");
+    expect(watcher.packageStatus("automerge:4NMNnkMhL8jXrdJ9jamS58PAVdXu")).toBeUndefined();
+    await repo.shutdown().catch(() => {});
   });
 });

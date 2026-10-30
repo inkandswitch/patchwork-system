@@ -1,0 +1,325 @@
+import { describe, it, expect } from "vitest";
+import {
+  Repo,
+  encodeHeads,
+  stringifyAutomergeUrl,
+  type AutomergeUrl,
+} from "@automerge/automerge-repo";
+import {
+  contentHash,
+  formatHeads,
+  idhash,
+  livePath,
+  parseFileList,
+  pinnedPath,
+  walkPath,
+} from "@inkandswitch/patchwork-filesystem";
+import { registerPlugins, unregisterPlugins } from "@inkandswitch/patchwork-plugins";
+import { createResolver } from "../src/resolver.js";
+import { registerAccount, resolveHandoffsWith, handleResolveRequest } from "../src/tab-resolver.js";
+import type { HandoffRequestMessage, HandoffResponseMessage } from "../src/types.js";
+
+// No `caches` in node: a resolver that still wrote the cache would throw.
+
+const file = (repo: Repo, content: string) =>
+  repo.create({ "@patchwork": { type: "file" }, content, mimeType: "text/plain" }).url;
+const folder = (repo: Repo, entries: Record<string, AutomergeUrl>) =>
+  repo.create({
+    title: "folder",
+    docs: Object.entries(entries).map(([name, url]) => ({ name, type: "x", url })),
+  });
+
+async function fixture() {
+  const repo = new Repo();
+  const notes = file(repo, "hi");
+  const foo = folder(repo, { notes });
+  const root = folder(repo, { Projects: folder(repo, { foo: foo.url }).url });
+  const account = repo.create({
+    "@patchwork": { type: "account" },
+    namespace: { "/": [{ url: root.url }] },
+  });
+  const a = await idhash(account.documentId);
+  const accounts = new Map([[a, account.url]]);
+  const resolver = createResolver(() => Promise.resolve(repo), undefined, () => accounts);
+  return { repo, a, accounts, account, resolver, notes };
+}
+
+/** A path's chain of doc steps, without file lists: what a resolver is asked to read. */
+const chain = async (repo: Repo, path: string, accounts: ReadonlyMap<string, AutomergeUrl>) =>
+  (await walkPath(repo, path, { accounts }))!.pinned;
+
+const withRequest = (
+  path: string,
+  extra: { heads?: string; list?: boolean; only?: string }
+): HandoffRequestMessage => {
+  const message = pathRequest(path);
+  return { ...message, request: { ...message.request, ...extra } };
+};
+
+const pathRequest = (path: string): HandoffRequestMessage => ({
+  id: "1",
+  type: "request",
+  cachename: "patchwork",
+  request: {
+    url: `https://p.test/@/${path}`,
+    handoffURL: `patchwork-path:${path}`,
+    path,
+    headers: {},
+    method: "GET",
+    destination: "script",
+    referrer: "",
+  },
+});
+
+const inline = (reply: unknown) => (reply as HandoffResponseMessage).response;
+const body = (reply: unknown) => {
+  const b = inline(reply).body;
+  return typeof b === "string" ? b : new TextDecoder().decode(b);
+};
+
+describe("resolver: /@/ paths", () => {
+  it("answers a live path with a 307 whose body is the list it names", async () => {
+    const { repo, a, accounts, resolver } = await fixture();
+    const live = livePath(a, ["Projects", "foo", "notes"]);
+    const reply = await resolver.answer(pathRequest(live));
+    expect(reply?.type).toBe("response");
+    expect(inline(reply).status).toBe(307);
+    const pinned = await pinnedPath(repo, live, { accounts, only: "end" });
+    expect(inline(reply).headers?.location).toBe(`/@/${pinned!.path}`);
+    expect(inline(reply).headers?.["cache-control"]).toBe("no-store");
+    const list = inline(reply).body as Uint8Array;
+    expect(pinned!.path).toContain(`~${await contentHash(list)}/notes`);
+    expect(Object.keys(parseFileList(list)!.files)).toEqual(["notes"]);
+  });
+
+  it("answers a container's full list", async () => {
+    const { repo, a, accounts, resolver } = await fixture();
+    const foo = await chain(repo, livePath(a, ["Projects", "foo"]), accounts);
+    const reply = await resolver.answer(withRequest(foo, { list: true }));
+    expect(inline(reply).status).toBe(200);
+    const pinned = await pinnedPath(repo, foo, { accounts });
+    expect(inline(reply).body).toEqual(pinned!.list);
+  });
+
+  it("answers a one-file list, the same a redirect hands out", async () => {
+    const { repo, a, accounts, resolver } = await fixture();
+    const live = livePath(a, ["Projects", "foo", "notes"]);
+    const foo = await chain(repo, livePath(a, ["Projects", "foo"]), accounts);
+    const reply = await resolver.answer(withRequest(foo, { list: true, only: "notes" }));
+    const pinned = await pinnedPath(repo, live, { accounts, only: "end" });
+    expect(inline(reply).body).toEqual(pinned!.list);
+  });
+
+  it("reads a file at given heads, after it changed", async () => {
+    const { repo, a, accounts, resolver, notes } = await fixture();
+    const path = await chain(repo, livePath(a, ["Projects", "foo", "notes"]), accounts);
+    const handle = await repo.find<{ content: string }>(notes);
+    const heads = formatHeads(handle.heads());
+    handle.change((d) => (d.content = "changed"));
+    expect(body(await resolver.answer(pathRequest(path)))).toBe("changed");
+    expect(body(await resolver.answer(withRequest(path, { heads })))).toBe("hi");
+  });
+
+  it("answers a pinned path with its bytes inline", async () => {
+    const { repo, a, accounts, resolver } = await fixture();
+    const pinned = await chain(repo, livePath(a, ["Projects", "foo", "notes"]), accounts);
+    const reply = await resolver.answer(pathRequest(pinned));
+    expect(inline(reply).status).toBe(200);
+    expect(inline(reply).headers?.["content-type"]).toBe("text/plain");
+    expect(body(reply)).toBe("hi");
+  });
+
+  it("redirects a pinned-looking path that isn't canonical", async () => {
+    const { repo, a, account, resolver } = await fixture();
+    const heads = [...account.heads()].sort().join(".");
+    const reply = await resolver.answer(pathRequest(`${a}@${heads}/Projects`));
+    expect(inline(reply).status).toBe(307);
+    void repo;
+  });
+
+  it("answers an unknown path with 404", async () => {
+    const { a, resolver } = await fixture();
+    const reply = await resolver.answer(pathRequest(livePath(a, ["nope"])));
+    expect(inline(reply).status).toBe(404);
+  });
+
+  it("aborts a pinned path whose heads never arrive", async () => {
+    const { a, resolver } = await fixture();
+    const [unknown] = encodeHeads(["00".repeat(32)]);
+    const reply = await resolver.answer(
+      pathRequest(`${a}@${unknown}/Projects`),
+      AbortSignal.timeout(200)
+    );
+    expect(reply?.type).toBe("abort");
+  });
+
+  it("answers 404 for heads that can't be heads", async () => {
+    const { a, resolver } = await fixture();
+    const reply = await resolver.answer(pathRequest(`${a}@3vQB7B6MrGQZaxCuFg4oh/Projects`));
+    expect(inline(reply).status).toBe(404);
+  });
+});
+
+describe("resolver: folder packages", () => {
+  async function folderPackage() {
+    const f = await fixture();
+    const x = f.repo.create({ "@patchwork": { type: "file" }, content: "x", mimeType: "text/plain" });
+    const sub = folder(f.repo, { "x.js": x.url });
+    const pkg = folder(f.repo, {
+      "package.json": file(f.repo, '{"main":"index.js"}'),
+      sub: sub.url,
+    });
+    const packages = folder(f.repo, { fpkg: pkg.url });
+    f.account.change((d: any) => (d.namespace["/packages"] = [{ url: packages.url }]));
+    return { ...f, x };
+  }
+
+  it("redirects a live path to a folder with the folder's whole list", async () => {
+    const { a, resolver } = await folderPackage();
+    const reply = await resolver.answer(pathRequest(livePath(a, ["packages", "fpkg"])));
+    expect(inline(reply).status).toBe(307);
+    const list = parseFileList(inline(reply).body as Uint8Array)!;
+    expect(Object.keys(list.files)).toEqual(expect.arrayContaining(["package.json", "sub/x.js"]));
+  });
+
+  it("reads at heads through a folder reached by name", async () => {
+    const { repo, a, accounts, resolver, x } = await folderPackage();
+    const prefix = await chain(repo, livePath(a, ["packages", "fpkg"]), accounts);
+    const heads = formatHeads(x.heads());
+    x.change((d: any) => (d.content = "changed"));
+    const reply = await resolver.answer(withRequest(`${prefix}/sub/x.js`, { heads }));
+    expect(inline(reply).status).toBe(200);
+    expect(body(reply)).toBe("x");
+  });
+});
+
+describe("resolver: accounts it doesn't know", () => {
+  it("a tab declines, so another tab or the worker is asked", async () => {
+    const { repo, a } = await fixture();
+    const tab = createResolver(() => Promise.resolve(repo), undefined, () => new Map(), {
+      declineUnknownAccounts: true,
+    });
+    expect(await tab.answer(pathRequest(livePath(a, ["Projects"])))).toBeUndefined();
+  });
+
+  it("a tab leaves /packages to the automerge worker", async () => {
+    const { repo, a, accounts } = await fixture();
+    const tab = createResolver(() => Promise.resolve(repo), undefined, () => accounts, {
+      declineUnknownAccounts: true,
+      declinePackages: true,
+    });
+    expect(await tab.answer(pathRequest(livePath(a, ["packages", "x"])))).toBeUndefined();
+    expect(await tab.answer(pathRequest(livePath(a, ["Projects"])))).toBeDefined();
+  });
+
+  it("the worker, asked last, answers 404", async () => {
+    const { repo, a } = await fixture();
+    const worker = createResolver(() => Promise.resolve(repo), undefined, () => new Map());
+    const reply = await worker.answer(pathRequest(livePath(a, ["Projects"])));
+    expect(inline(reply).status).toBe(404);
+  });
+});
+
+describe("resolver: legacy automerge URLs", () => {
+  it("answers inline, leaving caching to the service worker", async () => {
+    const { repo, resolver } = await fixture();
+    const pkg = repo.create({
+      "@patchwork": { type: "directory" },
+      "index.js": { content: "export default 1", mimeType: "text/javascript" },
+    });
+    const url = stringifyAutomergeUrl({ documentId: pkg.documentId, heads: pkg.heads() });
+    const reply = await resolver.answer({
+      ...pathRequest(""),
+      request: {
+        url: `https://p.test/${encodeURIComponent(url)}/index.js`,
+        handoffURL: `${url}/index.js`,
+        headers: {},
+        method: "GET",
+        destination: "script",
+        referrer: "",
+      },
+    });
+    expect(reply?.type).toBe("response");
+    expect(inline(reply).status).toBe(200);
+    expect(inline(reply).headers?.["cache-control"]).toContain("immutable");
+    expect(body(reply)).toBe("export default 1");
+  });
+});
+
+describe("registerAccount", () => {
+  it("makes the tab's resolver answer for that account", async () => {
+    const { repo, a, account } = await fixture();
+    resolveHandoffsWith(repo);
+    expect(await registerAccount(account.url)).toBe(a);
+
+    const { port1, port2 } = new MessageChannel();
+    const replies: unknown[] = [];
+    port1.onmessage = (event) => replies.push(event.data);
+    const handled = handleResolveRequest(
+      new MessageEvent("message", {
+        data: { ...pathRequest(livePath(a, ["Projects"])), type: "resolve" },
+        ports: [port2],
+      })
+    );
+    expect(handled).toBe(true);
+    await expect.poll(() => replies.length, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
+    port1.close();
+    expect(inline(replies.at(-1)).status).toBe(307);
+  });
+});
+
+describe("package path providers", () => {
+  const PLUGIN_URL = "https://example.test/board.js";
+  const board = {
+    kind: "board",
+    matches: (doc: any) => doc?.["@patchwork"]?.type === "board",
+    list: (doc: any) => [{ name: "child", link: doc.child }],
+    lookup: (doc: any, names: string[]) =>
+      names[0] === "child" ? { child: { name: "child", link: doc.child }, consumed: 1 } : undefined,
+  };
+
+  async function boardFixture() {
+    const base = await fixture();
+    const b = base.repo.create({ "@patchwork": { type: "board" }, child: file(base.repo, "c") });
+    const root = await base.repo.find<any>(base.account.doc()!.namespace["/"][0].url);
+    root.change((d: any) => d.docs.push({ name: "b", type: "board", url: b.url }));
+    return base;
+  }
+
+  it("walk through the providers a resolver is given; the worker's has none", async () => {
+    const { repo, a, accounts } = await boardFixture();
+    const path = livePath(a, ["b", "child"]);
+    const tab = createResolver(() => Promise.resolve(repo), undefined, () => accounts, {
+      providers: async (doc) => (board.matches(doc) ? board : undefined),
+    });
+    expect(inline(await tab.answer(pathRequest(path))).status).toBe(307);
+    const worker = createResolver(() => Promise.resolve(repo), undefined, () => accounts);
+    expect(inline(await worker.answer(pathRequest(path))).status).toBe(404);
+  });
+
+  it("a tab's resolver walks through registered path-provider plugins", async () => {
+    const { repo, a, account } = await boardFixture();
+    registerPlugins(
+      [{ id: "board", name: "board", type: "patchwork:path-provider", supportedDatatypes: ["board"], load: async () => board }],
+      PLUGIN_URL
+    );
+    try {
+      resolveHandoffsWith(repo);
+      await registerAccount(account.url);
+      const { port1, port2 } = new MessageChannel();
+      const replies: unknown[] = [];
+      port1.onmessage = (event) => replies.push(event.data);
+      handleResolveRequest(
+        new MessageEvent("message", {
+          data: { ...pathRequest(livePath(a, ["b", "child"])), type: "resolve" },
+          ports: [port2],
+        })
+      );
+      await expect.poll(() => replies.length, { timeout: 5000 }).toBeGreaterThanOrEqual(2);
+      port1.close();
+      expect(inline(replies.at(-1)).status).toBe(307);
+    } finally {
+      unregisterPlugins(PLUGIN_URL);
+    }
+  });
+});

@@ -4,3 +4,4 @@ export * from "./datatypes.js";
 export * from "./registry/guards.js";
 export * from "./account.js";
 export * from "./keyhive.js";
+export * from "./path-providers.js";

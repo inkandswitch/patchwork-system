@@ -40,8 +40,26 @@ export interface HandoffRequest {
    * `https://…/automerge%3Aabc/…` form) — the cache key.
    */
   url: string;
-  /** the decoded special URL, e.g. `automerge:abc/some/path` */
+  /**
+   * the decoded special URL, e.g. `automerge:abc/some/path`. For a `/@/` path
+   * it's `patchwork-path:` and the path, which older resolvers parse and then
+   * decline, since it isn't `automerge:`.
+   */
   handoffURL: string;
+  /**
+   * For a `/@/` URL, the path after `/@/`: live (answered with a redirect to
+   * its pinned form, whose body is the file list it names) or pinned (answered
+   * with its bytes, inline).
+   */
+  path?: string;
+  /** Read the file `path` names at these heads, as its file list recorded. */
+  heads?: string;
+  /** With `heads`: the heads its list recorded for the nested folders on the way. */
+  via?: string[];
+  /** Answer the file list of the container `path` names, not a file. */
+  list?: boolean;
+  /** With `list`: list only this tail, as the one-file list a redirect hands out. */
+  only?: string;
   /**
    * @deprecated A briefly-deployed shape put the special URL in `url` and
    * the cache key here. Only read, never sent.
@@ -193,3 +211,15 @@ export type SetupServiceWorkerResult = {
   shared?: SharedWorker;
   kill?: () => void;
 };
+
+/**
+ * Where the automerge worker's script is served, by default. The vite plugin keeps this name
+ * from one build to the next, since it's started by URL.
+ */
+export const AUTOMERGE_WORKER_PATH = "/automerge-protocol-handler-worker.js";
+
+/** Tab → automerge worker: resolve paths under this account. */
+export interface RegisterAccountMessage {
+  type: "register-account";
+  url: string;
+}

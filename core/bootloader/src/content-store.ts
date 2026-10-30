@@ -1,0 +1,64 @@
+// Bytes by their hash, in CacheStorage. Nothing here is trusted: any code on the origin can
+// write these caches, so every read is hashed and checked against the hash a pinned URL vouches
+// for, through its file list, before it's served (see pinned.ts). Reads and writes go through this one interface so the bytes can be
+// encrypted at rest later.
+
+export interface ContentStore {
+  get(hash: string): Promise<Uint8Array | undefined>;
+  put(hash: string, bytes: Uint8Array): Promise<void>;
+  delete(hash: string): Promise<void>;
+}
+
+export const CONTENT_CACHE_PREFIX = "patchwork-content-";
+
+/** One store per account, apart from the `patchwork` cache of site pages and assets. */
+export const contentCacheName = (acctHash: string) =>
+  `${CONTENT_CACHE_PREFIX}${acctHash}`;
+
+/** A store in `cache`, keyed by `<origin>/.content/<hash>`: an internal key, never fetched. */
+export function cacheStore(cache: Cache, origin: string): ContentStore {
+  const key = (hash: string) => `${origin}/.content/${hash}`;
+  return {
+    async get(hash) {
+      const response = await cache.match(key(hash));
+      return response ? new Uint8Array(await response.arrayBuffer()) : undefined;
+    },
+    async put(hash, bytes) {
+      await cache.put(key(hash), new Response(bytes as BlobPart));
+    },
+    async delete(hash) {
+      await cache.delete(key(hash));
+    },
+  };
+}
+
+/**
+ * {@link cacheStore} in the cache `name`, opened only when something is stored: a read or a
+ * delete of a cache that doesn't exist finds nothing, and creates nothing. Any `/@/` URL names an
+ * account, so opening on every request would leave a cache behind for each made-up one.
+ */
+export function lazyCacheStore(storage: CacheStorage, name: string, origin: string): ContentStore {
+  let opened: Promise<ContentStore> | undefined;
+  const open = () => (opened ??= storage.open(name).then((cache) => cacheStore(cache, origin)));
+  const existing = async () => (opened || (await storage.has(name)) ? open() : undefined);
+  return {
+    async get(hash) {
+      return (await existing())?.get(hash);
+    },
+    async put(hash, bytes) {
+      await (await open()).put(hash, bytes);
+    },
+    async delete(hash) {
+      await (await existing())?.delete(hash);
+    },
+  };
+}
+
+/**
+ * Forget everything stored for an account. There's no sign-out flow; a site calls this from its
+ * own. File lists the service worker holds in memory may still name these hashes, which then
+ * read as misses.
+ */
+export function clearAccountStore(acctHash: string): Promise<boolean> {
+  return caches.delete(contentCacheName(acctHash));
+}

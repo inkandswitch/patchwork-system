@@ -60,6 +60,7 @@ const ATTRS = {
   url: "url",
   docUrl: "doc-url",
   toolId: "tool-id",
+  path: "path",
 } as const;
 
 export type RegisterPatchworkViewElementParams = {
@@ -87,6 +88,8 @@ export type PatchworkViewElementBase = HTMLElement & {
   repo: Repo;
   docUrl?: AutomergeUrl | null;
   toolId?: string | null;
+  /** The live path the doc was opened at; see `OpenDocumentEventDetail.path`. */
+  path?: string | null;
 };
 
 export type PatchworkViewElement = PatchworkViewElementBase & {
@@ -187,6 +190,18 @@ export function registerPatchworkViewElement(
         if (this.toolId === id) return;
         if (id) this.setAttribute(ATTRS.toolId, id);
         else this.removeAttribute(ATTRS.toolId);
+      }
+
+      // Not observed: the mounted tool reads it, but a new path for the same
+      // doc shouldn't remount the tool.
+      get path(): string | null {
+        return this.getAttribute(ATTRS.path);
+      }
+
+      set path(path: string | null) {
+        if (this.path === path) return;
+        if (path) this.setAttribute(ATTRS.path, path);
+        else this.removeAttribute(ATTRS.path);
       }
 
       static get observedAttributes() {

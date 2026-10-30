@@ -1,20 +1,35 @@
-// Turning a handoff request into a reply, given a Repo: find the automerge
-// URL's document, resolve the path in it, and either write the response into
-// the service worker's cache or hand it back inline. A tab answers the service
-// worker with its own Repo this way (see tab-resolver.ts), and the automerge
-// worker answers the broadcasts nobody else could (automerge-protocol-handler).
+// Turning a handoff request into a reply, given a Repo: walk a `/@/` path, or
+// find a legacy automerge URL's document and resolve the path in it, and hand
+// the response back inline. What to keep is the service worker's call, never a
+// resolver's. A tab answers the service worker with its own Repo this way (see
+// tab-resolver.ts), and the automerge worker answers the broadcasts nobody else
+// could (automerge-protocol-handler).
 import { hasHeads } from "@automerge/automerge/slim";
 import {
+  decodeHeads,
   isValidAutomergeUrl,
   parseAutomergeUrl,
   stringifyAutomergeUrl,
+  type AutomergeUrl,
   type DocHandle,
   type Repo,
   type StorageId,
+  type UrlHeads,
 } from "@automerge/automerge-repo/slim";
 import {
+  buildFileList,
   getDefaultBranch,
+  IncompleteFileListError,
+  parseHeads,
+  parsePath,
+  pinnedPath,
+  readNode,
+  readPath,
   resolvePath,
+  toBytes,
+  walkPath,
+  type ExtraProviders,
+  type WalkOptions,
 } from "@inkandswitch/patchwork-filesystem";
 
 import type {
@@ -23,8 +38,6 @@ import type {
 } from "./types.js";
 
 const RESOLVE_TIMEOUT_MS = 30_000;
-
-const CACHEABLE_STATUSES = [200, 203, 204];
 
 const CATCH_UP_MS = 3_000;
 
@@ -178,19 +191,203 @@ function impatience(limit: number) {
   );
 }
 
+/**
+ * The walk's `find`: wait for pinned heads to arrive, or for a live document to catch up with
+ * the sync server, within `signal`. Heads that never arrive are remembered in `missing`, so a
+ * walk that fails because of them answers with a network error rather than a 404.
+ */
+export function waitingFind(
+  repo: Repo,
+  signal: AbortSignal,
+  missing: Set<string>,
+  { catchUp = true }: { catchUp?: boolean } = {}
+): NonNullable<WalkOptions["find"]> {
+  return async (url: AutomergeUrl, heads?: UrlHeads) => {
+    const handle = await repo.find(url, { signal });
+    if (heads) {
+      if (!(await waitForHeads(handle, decodeHeads(heads), signal))) {
+        missing.add(url);
+        throw new AbortHandoff(`heads ${heads.join(",")} of ${url} not found`);
+      }
+    } else if (catchUp) {
+      await caughtUpWithPeers(repo, handle, signal);
+    }
+    return handle;
+  };
+}
+
+/**
+ * A `/@/` path, answered inline:
+ *
+ * - `list`: the file list of the container the path names (canonical), as its bytes.
+ * - A live path, or a pinned-looking one that isn't canonical: a 307 to its pinned form, whose
+ *   list covers just the file asked for; the body is that list, for the service worker to check
+ *   and keep.
+ * - With `heads`: the file the path names, read at those heads (what its file list recorded),
+ *   whether or not the path is canonical, with the nested folders on the way read at `via`.
+ * - A canonical pinned path: the bytes.
+ * - One that doesn't resolve: 404.
+ *
+ * Pinned heads that never arrive throw {@link AbortHandoff}.
+ */
+async function resolveWalkPath(
+  repo: Repo,
+  path: string,
+  accounts: ReadonlyMap<string, AutomergeUrl>,
+  signal: AbortSignal,
+  {
+    heads,
+    via,
+    list,
+    only,
+  }: { heads?: string; via?: string[]; list?: boolean; only?: string } = {},
+  providers?: ExtraProviders
+): Promise<Response> {
+  try {
+    parsePath(path);
+  } catch (error) {
+    return new Response(error instanceof Error ? error.message : "malformed path", {
+      status: 400,
+    });
+  }
+  const missing = new Set<string>();
+  const options = { accounts, providers, find: waitingFind(repo, signal, missing) };
+  const notFound = () => {
+    if (missing.size) {
+      throw new AbortHandoff(`heads not found for ${[...missing].join(", ")}`);
+    }
+    return new Response(`nothing at ${path}`, {
+      status: 404,
+      headers: { "cache-control": "no-store" },
+    });
+  };
+
+  if (list) {
+    const built = await buildFileList(repo, path, {
+      ...options,
+      only: only === undefined ? undefined : [only],
+      // Each file as this node has it, without waiting on peers for every one.
+      findFile: waitingFind(repo, signal, missing, { catchUp: false }),
+    });
+    if (!built) return notFound();
+    return new Response(built.bytes as BlobPart, {
+      status: 200,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+    });
+  }
+
+  if (heads) {
+    // A file a list recorded, read at the heads it recorded. A file in a
+    // package's nested folder is reached by name, through a link without
+    // heads, so the path needn't be canonical; the service worker checks the
+    // bytes against the list either way.
+    const read = await readPath(repo, path, {
+      ...options,
+      heads: parseHeads(heads),
+      via: (Array.isArray(via) ? via : [])
+        .map((step) => parseHeads(String(step)))
+        .filter((step): step is UrlHeads => !!step),
+    });
+    if (!read) return notFound();
+    return new Response(toBytes(read.content) as BlobPart, {
+      status: 200,
+      headers: { "content-type": read.type },
+    });
+  }
+
+  const end = await walkPath(repo, path, options);
+  if (!end) return notFound();
+  if (!end.canonical) {
+    let pinned: Awaited<ReturnType<typeof pinnedPath>>;
+    try {
+      pinned = await pinnedPath(repo, path, {
+        ...options,
+        only: "end",
+        // Each file as this node has it, without waiting on peers for every one.
+        findFile: waitingFind(repo, signal, missing, { catchUp: false }),
+      });
+    } catch (error) {
+      // The file isn't readable here yet: not a 404, which would be memoized.
+      if (error instanceof IncompleteFileListError) throw new AbortHandoff(error.message);
+      throw error;
+    }
+    if (!pinned) return notFound();
+    return new Response((pinned.list ?? null) as BlobPart | null, {
+      status: 307,
+      headers: {
+        location: `/@/${pinned.path}`,
+        "content-type": "application/json",
+        "cache-control": "no-store",
+      },
+    });
+  }
+
+  const read = await readNode(repo, end.node);
+  if (!read) return notFound();
+  return new Response(toBytes(read.content) as BlobPart, {
+    status: 200,
+    headers: { "content-type": read.type },
+  });
+}
+
 export type Resolver = {
   /**
-   * Resolve `message`'s request and say how the service worker should answer
-   * it, having written the response into its cache if it's one to keep.
-   * Undefined if the special URL isn't an `automerge:` one.
+   * Resolve `message`'s request and hand the response back inline, for the
+   * service worker to serve and, if it chooses, keep. Undefined if it's neither
+   * a `/@/` path nor an `automerge:` URL. `signal` cuts the 30s allowance short.
    */
-  answer(message: HandoffRequestMessage): Promise<HandoffReplyMessage | undefined>;
+  answer(
+    message: HandoffRequestMessage,
+    signal?: AbortSignal
+  ): Promise<HandoffReplyMessage | undefined>;
 };
 
 export function createResolver(
   getRepo: () => Promise<Repo>,
-  log: (...args: unknown[]) => void = () => {}
+  log: (...args: unknown[]) => void = () => {},
+  accounts: () => ReadonlyMap<string, AutomergeUrl> = () => new Map(),
+  options: {
+    /**
+     * Decline (answer undefined) a path under an account this resolver
+     * doesn't know, so the service worker asks someone else. A tab learns its
+     * account only once it has loaded; the automerge worker, asked last,
+     * answers 404 instead.
+     */
+    declineUnknownAccounts?: boolean;
+    /**
+     * Decline paths through `/packages`, leaving them to the automerge
+     * worker. A package lookup reads every file in the package, and a tab
+     * shouldn't hold them all.
+     */
+    declinePackages?: boolean;
+    /**
+     * Providers for documents no built-in walks: a tab passes the ones packages register. The
+     * automerge worker never loads package code, so it passes none.
+     */
+    providers?: ExtraProviders;
+  } = {}
 ): Resolver {
+  const throughPackages = (path: string) => {
+    try {
+      const [first] = parsePath(path).segments;
+      return first?.kind === "name" && first.name === "packages";
+    } catch {
+      return false;
+    }
+  };
+  const knowsAccountOf = (path: string) => {
+    try {
+      const { root } = parsePath(path);
+      return root.kind !== "account" || accounts().has(root.acctHash);
+    } catch {
+      return true; // answered with a 400 below
+    }
+  };
+  const within = (signal?: AbortSignal) =>
+    signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(RESOLVE_TIMEOUT_MS)])
+      : AbortSignal.timeout(RESOLVE_TIMEOUT_MS);
+
   const resolveWithin = async (handoff: URL): Promise<Response> => {
     const repo = await getRepo();
     const signal = AbortSignal.timeout(RESOLVE_TIMEOUT_MS);
@@ -237,21 +434,48 @@ export function createResolver(
       response: { status, body, headers: { "content-type": "text/plain" } },
     }) satisfies HandoffReplyMessage;
 
-  return {
-    async answer({ id, cachename, request }) {
-      let handoff: URL;
-      try {
-        handoff = new URL(request.handoffURL);
-      } catch {
-        console.error("couldn't parse handoff url", request);
-        return inline(id, 400, `couldn't parse a special url out of ${request.url}`);
-      }
-      if (handoff.protocol !== "automerge:") return undefined;
+  const reply = async (id: string, response: Response): Promise<HandoffReplyMessage> => ({
+    id,
+    type: "response",
+    response: {
+      status: response.status,
+      headers: Object.fromEntries(response.headers.entries()),
+      body: response.body ? new Uint8Array(await response.arrayBuffer()) : undefined,
+    },
+  });
 
+  return {
+    async answer({ id, request }, signal) {
       let response: Response;
       try {
-        log(`resolving handoff ${id} for ${handoff}`);
-        response = await resolveHandoff(handoff);
+        if (request.path !== undefined) {
+          if (options.declineUnknownAccounts && !knowsAccountOf(request.path)) {
+            return undefined;
+          }
+          if (options.declinePackages && throughPackages(request.path)) return undefined;
+          const repo = await getRepo();
+          const limit = within(signal);
+          log(`resolving handoff ${id} for /@/${request.path}`);
+          response = await Promise.race([
+            resolveWalkPath(repo, request.path, accounts(), limit, request, options.providers),
+            new Promise<never>((_, reject) =>
+              limit.addEventListener("abort", () =>
+                reject(new AbortHandoff(`resolving /@/${request.path} timed out`))
+              )
+            ),
+          ]);
+        } else {
+          let handoff: URL;
+          try {
+            handoff = new URL(request.handoffURL);
+          } catch {
+            console.error("couldn't parse handoff url", request);
+            return inline(id, 400, `couldn't parse a special url out of ${request.url}`);
+          }
+          if (handoff.protocol !== "automerge:") return undefined;
+          log(`resolving handoff ${id} for ${handoff}`);
+          response = await resolveHandoff(handoff);
+        }
       } catch (error) {
         if (error instanceof AbortHandoff) {
           return { id, type: "abort", reason: error.message };
@@ -267,41 +491,10 @@ export function createResolver(
       }
 
       try {
-        const immutable =
-          CACHEABLE_STATUSES.includes(response.status) &&
-          !/(^|,)\s*no-store(\s*,|$)/.test(
-            response.headers.get("cache-control") ?? ""
-          );
-        if (!immutable) {
-          // Errors, redirects and the like go back inline for the service
-          // worker to serve directly. Mutable responses aren't cached because
-          // the same URL can resolve to different content later.
-          log(`responding inline to ${request.url} with ${response.status}`);
-          return {
-            id,
-            type: "response",
-            response: {
-              status: response.status,
-              headers: Object.fromEntries(response.headers.entries()),
-              body: response.body
-                ? new Uint8Array(await response.arrayBuffer())
-                : undefined,
-            },
-          };
-        }
-
-        // Reconstruct the request the service worker is holding so the entry
-        // matches its cache.match. `destination` isn't constructible but
-        // doesn't participate in cache matching.
-        const cacheKey = new Request(request.url, {
-          method: request.method,
-          headers: request.headers,
-          referrer: request.referrer,
-        });
-        const cache = await caches.open(cachename);
-        await cache.put(cacheKey, response);
-        log(`cached ${cacheKey.url} in ${cachename}`);
-        return { id, type: "cached" };
+        // Everything goes back inline. The service worker keeps what's
+        // immutable (see its serveHandoff), or checks it against a file list.
+        log(`responding inline to ${request.url} with ${response.status}`);
+        return await reply(id, response);
       } catch (error) {
         console.error(`failed to reply for ${request.url}`, error);
         return inline(id, 558, String(error));

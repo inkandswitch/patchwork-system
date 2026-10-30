@@ -6,13 +6,34 @@ import {
   type AutomergeWorkerMissingMessage,
   type HandoffReplyMessage,
   type HandoffRequestMessage,
+  type HandoffResponse,
   type ResolveAcceptedMessage,
   type ResolveRequestMessage,
 } from "./types.js";
+import {
+  contentHash,
+  toBytes,
+  type FileList,
+} from "@inkandswitch/patchwork-filesystem";
+import {
+  CONTENT_CACHE_PREFIX,
+  lazyCacheStore,
+  contentCacheName,
+} from "./content-store.js";
+import {
+  PinnedAbort,
+  handoffRequest,
+  keepFileList,
+  normalizePinned,
+  servePinned,
+  sharedRequests,
+  type PinnedDeps,
+} from "./pinned.js";
 // Referenced so this script's bytes change with every build. The browser only
 // installs a replacement service worker when they do, and the controllerchange
 // that follows is how open tabs learn a deploy happened (see setup.ts).
 import { buildId } from "./build-id.js";
+import { ACCEPT_TIMEOUT_MS } from "./handoff-timing.js";
 
 const DEFAULT_CACHE_NAME = "patchwork";
 
@@ -85,7 +106,11 @@ async function clearOtherCaches() {
   const names = await caches.keys();
   await Promise.all(
     names
-      .filter((name) => name !== cachename)
+      // Content stores are per account and checked on every read; they
+      // outlive cache renames and deploys.
+      .filter(
+        (name) => name !== cachename && !name.startsWith(CONTENT_CACHE_PREFIX)
+      )
       .map((name) => caches.delete(name))
   );
 }
@@ -184,6 +209,11 @@ handoffChannel.addEventListener("message", (event) => {
   for (const { message } of stranded) handoffChannel.postMessage(message);
 });
 
+// File lists this worker holds, by list hash: ones that may not be stored, and
+// ones read from the store. Lost when it stops; the store, or a resolver
+// rebuilding a list from its pinned heads, brings them back.
+const fileLists = new Map<string, FileList>();
+
 const MISSING_WORKER_NUDGE_MS = 5_000;
 // A worker that's been spawned only asks for the lock once its imports have
 // evaluated, so on a cold start it looks missing for a while.
@@ -224,11 +254,6 @@ async function startWorkerIfMissing(id: string) {
 /** Signals that respondWith should reject; see {@link HandoffAbortMessage}. */
 class HandoffAborted extends Error {}
 
-// How long a tab has to say it'll resolve a request before the service
-// worker asks the next one. A tab that hasn't been handed its Repo yet says it
-// can't at once, so this is for one that can't answer at all: a frozen
-// background tab, or one from a build before tabs resolved.
-const ACCEPT_TIMEOUT_MS = 250;
 // A tab posts its reply and then lets go of its lock, but the lock can be
 // granted here before the reply is delivered.
 const REPLY_AFTER_LOCK_MS = 100;
@@ -324,22 +349,9 @@ function askTab(
  */
 async function handoff(
   fetchEvent: FetchEvent,
-  handoffURL: URL
+  to: URL | { path: string; heads?: string; via?: string[]; list?: boolean; only?: string }
 ): Promise<HandoffReplyMessage> {
-  const request = fetchEvent.request;
-  const message: HandoffRequestMessage = {
-    id: crypto.randomUUID(),
-    type: "request",
-    cachename,
-    request: {
-      url: request.url,
-      handoffURL: handoffURL.href,
-      headers: Object.fromEntries(request.headers.entries()),
-      method: request.method,
-      destination: request.destination,
-      referrer: request.referrer,
-    },
-  };
+  const message = handoffRequest(fetchEvent.request, cachename, to);
   const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
   for (const tab of await resolvingTabs(fetchEvent.clientId)) {
     const answer = await askTab(tab, message, deadline);
@@ -479,10 +491,20 @@ async function serveHandoff(
 
   if (reply.type === "response") {
     log(`serving handed-off response for ${handoffURL}`, reply);
-    return new Response(reply.response.body ?? null, {
-      status: reply.response.status ?? 200,
-      headers: reply.response.headers,
-    });
+    const response = inlineResponse(reply.response);
+    // Resolvers hand everything back inline; what's immutable is kept here,
+    // under the request, as resolvers used to keep it. Not cachePage: a
+    // navigation to a document in a doc must not replace the app shell's
+    // offline copy at / and /index.html.
+    if (isImmutable(response)) {
+      const copy = response.clone();
+      fetchEvent.waitUntil(
+        cache.put(fetchEvent.request, copy).catch((error) => {
+          console.warn("error caching %s in %s", handoffURL, cachename, error);
+        })
+      );
+    }
+    return response;
   }
 
   const stored = await cache.match(fetchEvent.request);
@@ -494,6 +516,139 @@ async function serveHandoff(
   }
   log(`serving ${handoffURL} from cache ${cachename} after handoff`);
   return stored;
+}
+
+const inlineResponse = (response: HandoffResponse) =>
+  new Response(response.body ?? null, {
+    status: response.status ?? 200,
+    headers: response.headers,
+  });
+
+const IMMUTABLE_STATUSES = [200, 203, 204];
+
+function isImmutable(response: Response): boolean {
+  return (
+    IMMUTABLE_STATUSES.includes(response.status) &&
+    !/(^|,)\s*no-store(\s*,|$)/.test(response.headers.get("cache-control") ?? "")
+  );
+}
+
+/**
+ * A `/@/` path. A live one is handed off, and the redirect it answers with is
+ * served without its body, the file list the pinned URL names, which is kept
+ * once it checks out. A pinned one is served checked against its own list
+ * (pinned.ts).
+ */
+async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response> {
+  const normalized = normalizePinned(path);
+  if (!normalized) {
+    return new Response(`not a path: /@/${path}`, {
+      status: 400,
+      headers: { "content-type": "text/plain" },
+    });
+  }
+
+  const ask: Ask = async (to) => {
+    const reply = await handoff(fetchEvent, to);
+    if (reply.type === "abort") throw new HandoffAborted(reply.reason);
+    if (reply.type !== "response") {
+      return new Response(`unexpected ${reply.type} reply for /@/${to.path}`, {
+        status: 502,
+      });
+    }
+    const { status = 200, body, headers } = reply.response;
+    if (status !== 200) return inlineResponse(reply.response);
+    return {
+      body: toBytes(body ?? new Uint8Array()),
+      contentType: headers?.["content-type"] ?? "application/octet-stream",
+    };
+  };
+
+  const store =
+    normalized.acctHash && !normalized.share
+      ? lazyCacheStore(caches, contentCacheName(normalized.acctHash), self.location.origin)
+      : undefined;
+  const deps: PinnedDeps = {
+    lists: fileLists,
+    store,
+    hash: contentHash,
+    buildList: (prefix, only) => buildList(prefix, only, ask),
+    resolve: (target, heads, via) => ask({ path: target, heads, via }),
+    warn: (message) => lifecycle("warn", message),
+    keep: (work) =>
+      fetchEvent.waitUntil(
+        work.catch((error) => {
+          // Always loud, as for the page cache: a QuotaExceededError here
+          // is the first sign the origin is under storage pressure.
+          console.warn("error keeping /@/%s", path, error);
+        })
+      ),
+  };
+
+  try {
+    const response = await servePinned(normalized, deps);
+    if (response.status === 307) return keepRedirectedList(response, deps);
+    return response;
+  } catch (error) {
+    // Deliberate: fail the request as a network error, with no response.
+    if (error instanceof PinnedAbort || error instanceof HandoffAborted) {
+      lifecycle("warn", `failing /@/${path}: ${(error as Error).message}`);
+      throw error;
+    }
+    console.error("service worker error serving /@/%s", path, error);
+    // The stack is in the console above; the page gets the message only.
+    return new Response(error instanceof Error ? error.message : "service worker error", {
+      status: 556,
+      headers: { "content-type": "text/plain" },
+    });
+  }
+}
+
+/** A handoff's reply, as bytes, or a Response for anything else. */
+type Ask = (to: {
+  path: string;
+  heads?: string;
+  via?: string[];
+  list?: boolean;
+  only?: string;
+}) => Promise<{ body: Uint8Array; contentType: string } | Response>;
+
+// Concurrent requests for files of one package share a rebuild of its list.
+const sharedListBuilds = sharedRequests(
+  async (
+    _key: string,
+    ask: Ask,
+    prefix: string,
+    only: string | undefined
+  ): Promise<Uint8Array | undefined> => {
+    const answer = await ask({ path: prefix, list: true, only });
+    return answer instanceof Response ? undefined : answer.body;
+  }
+);
+const buildList = (prefix: string, only: string | undefined, ask: Ask) =>
+  sharedListBuilds(`${prefix}\n${only ?? ""}`, ask, prefix, only);
+
+/**
+ * A resolver's redirect from a live path carries, as its body, the file list
+ * the pinned URL names. Keep it if it hashes to the `~listHash` in `location`,
+ * and serve the redirect without it.
+ */
+async function keepRedirectedList(
+  response: Response,
+  deps: PinnedDeps
+): Promise<Response> {
+  const location = response.headers.get("location") ?? "";
+  const listHash = normalizePinned(location.replace(/^\/@\//, ""))?.candidates.find(
+    (candidate) => candidate.listHash
+  )?.listHash;
+  const body = new Uint8Array(await response.arrayBuffer());
+  if (listHash && body.length && !(await keepFileList(body, listHash, deps))) {
+    lifecycle("warn", `the file list with the redirect to ${location} isn't the one it names`);
+  }
+  return new Response(null, {
+    status: response.status,
+    headers: { location, "cache-control": "no-store" },
+  });
 }
 
 async function servePassthrough(
@@ -570,6 +725,15 @@ async function respond(
 self.addEventListener("fetch", (fetchEvent: FetchEvent) => {
   const request = fetchEvent.request;
   log("fetch event", request.url);
+  const url = new URL(request.url);
+  const ours = url.origin === self.location.origin;
+
   if (request.method !== "GET") return;
+
+  if (ours && url.pathname.startsWith("/@/")) {
+    fetchEvent.respondWith(servePath(fetchEvent, url.pathname.slice("/@/".length)));
+    return;
+  }
+
   fetchEvent.respondWith(respond(fetchEvent, specialURLFor(request)));
 });

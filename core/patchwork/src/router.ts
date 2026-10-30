@@ -9,12 +9,19 @@ import {
   type Repo,
 } from "@automerge/vanillajs/slim";
 import { openDocument } from "@inkandswitch/patchwork-elements";
+import { idhash, resolveLivePath } from "@inkandswitch/patchwork-filesystem";
+import {
+  docParamToUrl,
+  parseHashParams,
+  serializeHashParams,
+} from "./hash-params.js";
 import {
   type AccountDoc,
   type DatatypeDescription,
   type DatatypeImplementation,
   type ToolDescription,
   getRegistry,
+  packagePathProviders,
 } from "@inkandswitch/patchwork-plugins";
 
 // Legacy big-patchwork hash shape: `<slug>--<documentId>[?…]`. The slug can
@@ -24,42 +31,7 @@ import {
 const BIG_PATCHWORK_HASH_REGEX =
   /^(?<title>[^=&?/#]*)--(?<docId>[1-9A-HJ-NP-Za-km-z]+)/;
 
-// The `doc=` and `draft=` values are automerge URLs, kept literal rather than
-// percent-encoded so links stay readable.
-const RAW_HASH_KEYS = new Set(["doc", "draft"]);
-// A stable order means re-serializing the same logical params is
-// byte-identical, avoiding spurious `hashchange` round-trips.
-const HASH_KEY_ORDER = ["doc", "tool", "type", "title", "frame", "draft"];
-
-function serializeHashParams(params: URLSearchParams): string {
-  const keys = [...HASH_KEY_ORDER, ...params.keys()];
-  const parts: string[] = [];
-  const emitted = new Set<string>();
-  for (const key of keys) {
-    if (emitted.has(key)) continue;
-    const value = params.get(key);
-    if (!value) continue;
-    emitted.add(key);
-    parts.push(
-      `${key}=${RAW_HASH_KEYS.has(key) ? value : encodeURIComponent(value)}`
-    );
-  }
-  return parts.join("&");
-}
-
-/**
- * Coerce a `doc=` hash param to a full automerge URL. Accepts a full URL
- * (`automerge:<id>[#heads]`) or a bare document id, for older links.
- */
-export function docParamToUrl(docParam: string | null): AutomergeUrl | undefined {
-  if (!docParam) return undefined;
-  if (isValidAutomergeUrl(docParam as AutomergeUrl)) {
-    return docParam as AutomergeUrl;
-  }
-  const documentId = docParam.replace(/^automerge:/, "");
-  if (!isValidDocumentId(documentId)) return undefined;
-  return stringifyAutomergeUrl({ documentId: documentId as DocumentId });
-}
+export { docParamToUrl } from "./hash-params.js";
 
 export interface RouterParams {
   rootElement: HTMLElement;
@@ -87,11 +59,56 @@ export function createRouter({
   siteTitle,
   frameToolId,
 }: RouterParams): Router {
+  // A path in the hash resolves only under this site's own account.
+  const accounts = idhash(accountDocHandle.documentId).then(
+    (acctHash) => new Map([[acctHash, accountDocHandle.url]])
+  );
+  const resolvePathParam = async (path: string) => {
+    try {
+      // Package code runs here, so paths go through the providers packages register.
+      return await resolveLivePath(repo, path, {
+        accounts: await accounts,
+        providers: packagePathProviders,
+      });
+    } catch {
+      return undefined; // a path that doesn't parse names nothing
+    }
+  };
+  // The document, and the part of it (`automerge:<id>/<path>`), without heads.
+  const named = (url: string) => url.split("#")[0];
+  /**
+   * Take `path=` out of the hash, if it and `doc=` are still the ones that were
+   * checked: a check that resolves after a navigation is about the old one.
+   */
+  const dropPath = (path: string, docUrl: AutomergeUrl, reason: string) => {
+    const params = parseHashParams(window.location.hash.slice(1));
+    if (params.get("path") !== path) return;
+    const doc = docParamToUrl(params.get("doc"));
+    if (!doc || named(doc) !== named(docUrl)) return;
+    console.warn(`patchwork: dropping path=${path} from the URL: ${reason}`);
+    params.delete("path");
+    window.location.hash = serializeHashParams(params);
+  };
+  /**
+   * `doc=` says what is open; when `path=` names something else, `doc=` wins.
+   * A path that doesn't resolve stays: it may name something not synced yet.
+   */
+  const checkPath = async (docUrl: AutomergeUrl, path: string) => {
+    const handle = await resolvePathParam(path);
+    if (!handle) {
+      console.warn(`patchwork: path=${path} doesn't resolve here (yet)`);
+      return;
+    }
+    if (named(handle.url) !== named(docUrl)) {
+      dropPath(path, docUrl, `it names ${handle.url}, not ${docUrl}`);
+    }
+  };
+
   const route = async () => {
     // The first call seeds the root view's tool/doc so it can mount; later
     // calls reconcile the mounted view with the hash.
     if (!rootElement.hasAttribute("tool-id")) {
-      const params = new URLSearchParams(location.hash.slice(1));
+      const params = parseHashParams(location.hash.slice(1));
       const frame = params.get("frame");
       const toolId =
         frame ??
@@ -131,8 +148,9 @@ export function createRouter({
       return;
     }
 
-    const params = new URLSearchParams(hash);
+    const params = parseHashParams(hash);
     const docUrl = docParamToUrl(params.get("doc"));
+    const path = params.get("path") ?? undefined;
     const frame = params.get("frame");
 
     if (frame) {
@@ -146,29 +164,81 @@ export function createRouter({
       }
     }
 
-    if (docUrl) {
+    const open = (url: AutomergeUrl) =>
       rootElement.dispatchEvent(
         new CustomEvent("patchwork:open-document", {
           detail: {
-            url: docUrl,
+            url,
             toolId: params.get("tool"),
             title: params.get("title"),
             type: params.get("type"),
+            path,
           },
         })
       );
+
+    if (docUrl) {
+      open(docUrl);
+      if (path) void checkPath(docUrl, path);
+    } else if (path) {
+      // Just a path: open what it names, unless the hash has moved on while
+      // it was walked. One that doesn't resolve is left in the address bar,
+      // to be fixed or retried.
+      await openPath(path, open, true);
     }
   };
 
+  // A path-only hash that didn't resolve may go through a datatype whose
+  // package hasn't registered its path provider yet (on a cold boot, say).
+  // It's walked again whenever path providers change, until it resolves or
+  // the hash moves on.
+  let stopRetrying: (() => void) | undefined;
+  const pathOnly = (path: string) => {
+    const now = parseHashParams(window.location.hash.slice(1));
+    return now.get("path") === path && !now.get("doc");
+  };
+  async function openPath(
+    path: string,
+    open: (url: AutomergeUrl) => void,
+    first: boolean
+  ) {
+    const handle = await resolvePathParam(path);
+    if (!pathOnly(path)) return;
+    if (handle) {
+      stopRetrying?.();
+      open(handle.url);
+      return;
+    }
+    if (!first) return;
+    console.warn(`patchwork: path=${path} doesn't resolve here (yet); opening nothing`);
+    stopRetrying?.();
+    const stop = () => {
+      off();
+      if (stopRetrying === stop) stopRetrying = undefined;
+    };
+    // Runs inside whoever registered a plugin, so it mustn't throw at them.
+    const off = getRegistry("patchwork:path-provider").on("changed", () => {
+      try {
+        if (pathOnly(path)) void openPath(path, open, false).catch(stop);
+        else stop();
+      } catch {
+        stop();
+      }
+    });
+    stopRetrying = stop;
+    stopRetrying = off;
+  }
+
   rootElement.addEventListener("patchwork:open-document", async (event) => {
-    const { url, toolId, type, title } = event.detail as {
+    const { url, toolId, type, title, path } = event.detail as {
       url: AutomergeUrl;
       toolId?: string;
       type?: string;
       title?: string;
+      path?: string;
     };
 
-    const params = new URLSearchParams(window.location.hash.slice(1));
+    const params = parseHashParams(window.location.hash.slice(1));
     // `doc` is the full automerge URL, so heads live inside it and the separate
     // `heads=` param is gone.
     params.delete("heads");
@@ -176,14 +246,18 @@ export function createRouter({
     // navigating to a different document invalidates the selection, while
     // same-doc navigation (tool switches, heads changes) keeps it.
     const prevDoc = docParamToUrl(params.get("doc"));
-    if (
-      prevDoc &&
-      parseAutomergeUrl(prevDoc).documentId !== parseAutomergeUrl(url).documentId
-    ) {
-      params.delete("draft");
-    }
+    const sameDoc =
+      !!prevDoc &&
+      parseAutomergeUrl(prevDoc).documentId === parseAutomergeUrl(url).documentId;
+    if (prevDoc && !sameDoc) params.delete("draft");
+    // Where the doc was opened from survives a tool switch or heads change on
+    // the same doc, as `draft` does.
+    // Only on the same part of it, though: another sub-document is elsewhere.
+    const samePart = !!prevDoc && named(prevDoc) === named(url);
+    const keptPath = !path && samePart ? params.get("path") ?? undefined : path;
     params.set("doc", url);
     for (const [key, value] of [
+      ["path", keptPath],
       ["tool", toolId],
       ["title", title],
       ["type", type],

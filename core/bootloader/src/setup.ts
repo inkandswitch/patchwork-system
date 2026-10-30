@@ -1,12 +1,18 @@
-import type {
-  NewBuildInfo,
-  SetupServiceWorkerOptions,
-  SetupServiceWorkerResult,
+import {
+  AUTOMERGE_WORKER_PATH,
+  type RegisterAccountMessage,
+  type NewBuildInfo,
+  type SetupServiceWorkerOptions,
+  type SetupServiceWorkerResult,
 } from "./types.js";
 import { buildId, isNewerBuild } from "./build-id.js";
 import { promptForNewBuild } from "./new-build-prompt.js";
 import debug from "debug";
-import { handleResolveRequest } from "./tab-resolver.js";
+import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import {
+  handleResolveRequest,
+  registerAccount as resolveAccountInTab,
+} from "./tab-resolver.js";
 import {
   forwardWorkerConsole,
   lifecycleLog,
@@ -15,6 +21,7 @@ import {
 
 export { lifecycleLog };
 export { resolveHandoffsWith } from "./tab-resolver.js";
+export { clearAccountStore } from "./content-store.js";
 export { connectClassicSync } from "./classic-sync.js";
 
 const serviceWorkerDebugging = debug.enabled("patchwork:serviceworker");
@@ -107,8 +114,23 @@ function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
 // port closes, or when the Web Lock it holds for its lifetime is released (see
 // AUTOMERGE_WORKER_LOCK).
 
-let automergeProtocolHandlerWorkerPath =
-  "/automerge-protocol-handler-worker.js";
+let automergeProtocolHandlerWorkerPath = AUTOMERGE_WORKER_PATH;
+
+const registeredAccounts = new Set<AutomergeUrl>();
+
+/**
+ * Let `/@/<acctHash>/…` paths under this account resolve: in this tab, and in
+ * the automerge worker, which is told again whenever it's replaced. Returns the
+ * account's acctHash.
+ */
+export async function registerAccount(url: AutomergeUrl): Promise<string> {
+  registeredAccounts.add(url);
+  automergeProtocolHandlerWorker.post({
+    type: "register-account",
+    url,
+  } satisfies RegisterAccountMessage);
+  return resolveAccountInTab(url);
+}
 
 const automergeProtocolHandlerWorker = sharedWorkerHandle(
   "patchwork-automerge-protocol-handler",
@@ -117,6 +139,15 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
     debugging: workerDebugging,
     onMessage(event) {
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
+    },
+    // A new instance knows no accounts until it's told again.
+    onSpawn(worker) {
+      for (const url of registeredAccounts) {
+        worker.port.postMessage({
+          type: "register-account",
+          url,
+        } satisfies RegisterAccountMessage);
+      }
     },
     onRestarting(message) {
       // The worker restarts because a newer tab connected. If that build is

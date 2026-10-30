@@ -165,9 +165,10 @@ async function httpEntryPointUrl(
 }
 
 /**
- * Import the entry point of a package (at `folderDocUrl`, which should be
- * pinned to heads) and return the loaded implementation of a single one of the
- * plugins it exports, selected by its `pluginType` and `pluginId`.
+ * Import the entry point of a package (at `packageUrl`: a folder doc pinned
+ * to heads, or a pinned `/@/` URL) and return the loaded implementation of a
+ * single one of the plugins it exports, selected by its `pluginType` and
+ * `pluginId`.
  *
  * A plugin `id` is only unique *within* a plugin type (there is a separate
  * registry per type), so a package can export e.g. a `patchwork:datatype` and
@@ -181,25 +182,21 @@ async function httpEntryPointUrl(
  * with the live descriptor, so the registered description and the loaded
  * implementation come from the same pinned version.
  */
-export async function importPluginFromFolderDocUrl(
-  folderDocUrl: AutomergeUrl,
+export async function importPluginFromPackage(
+  packageUrl: string,
   pluginType: string,
   pluginId: string,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions
 ) {
-  const mod = await importPackageFromFolderDocUrl(
-    folderDocUrl,
-    subpath,
-    conditions
-  );
+  const mod = await importPackage(packageUrl, subpath, conditions);
   const plugins: any[] = Array.isArray(mod?.plugins) ? mod.plugins : [];
   const plugin = plugins.find(
     (p) => p?.type === pluginType && p?.id === pluginId
   );
   if (!plugin) {
     throw new Error(
-      `No plugin "${pluginType}:${pluginId}" exported by the package at ${folderDocUrl}`
+      `No plugin "${pluginType}:${pluginId}" exported by the package at ${packageUrl}`
     );
   }
   if (typeof plugin.load === "function") {
@@ -209,9 +206,18 @@ export async function importPluginFromFolderDocUrl(
     return import(/* @vite-ignore */ plugin.import);
   }
   throw new Error(
-    `Plugin "${pluginType}:${pluginId}" at ${folderDocUrl} has no load() function or import URL`
+    `Plugin "${pluginType}:${pluginId}" at ${packageUrl} has no load() function or import URL`
   );
 }
+
+/** @deprecated Use {@link importPluginFromPackage}, which also takes a pinned `/@/` URL. */
+export const importPluginFromFolderDocUrl: (
+  folderDocUrl: AutomergeUrl,
+  pluginType: string,
+  pluginId: string,
+  subpath?: string,
+  conditions?: string[]
+) => Promise<any> = importPluginFromPackage;
 
 async function packageJsonContentsFromFolderDocUrl(
   folderDocUrl: AutomergeUrl

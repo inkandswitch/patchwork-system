@@ -1,13 +1,9 @@
 import {
-  type AutomergeUrl,
   type DocHandle,
   type Repo,
   isImmutableString,
-  isValidAutomergeUrl,
-  parseAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
-import type { FolderDoc } from "./types.js";
-import { getType } from "./metadata.js";
+import { type PathProvider, asLink, providerFor } from "./providers.js";
 
 export type Resolved = {
   content: string | Uint8Array;
@@ -37,95 +33,42 @@ type Walk = {
 /** A URL carries heads when it has a fragment: `automerge:abc#heads`. */
 const hasHeads = (url: unknown): boolean => String(url).includes("#");
 
+/** @deprecated Use {@link PathProvider}, which replaces it. */
+export type FolderStrategy = PathProvider;
+
 /**
- * `value` as a link, if it is one. A link written as an `ImmutableString`
- * (one op, where a plain string is an op per character) reads back as an
- * object, not a string; it's the same url.
+ * Resolve `parts` against `node`, a document or a value inside one, using the provider of the
+ * document it belongs to. Following a link hands the rest to that document's own provider.
  */
-function asLink(value: unknown): AutomergeUrl | undefined {
-  const url = isImmutableString(value) ? String(value) : value;
-  return typeof url === "string" && isValidAutomergeUrl(url) ? url : undefined;
-}
-
-export interface FolderStrategy {
-  matches(doc: unknown): boolean;
-  resolve(
-    repo: Repo,
-    handle: DocHandle<unknown>,
-    parts: string[],
-    walk: Walk
-  ): Promise<Resolved | undefined>;
-}
-
-const folderStrategy: FolderStrategy = {
-  matches(doc) {
-    return (
-      !!doc &&
-      typeof doc === "object" &&
-      "docs" in doc &&
-      Array.isArray((doc as { docs: unknown }).docs)
-    );
-  },
-  async resolve(repo, handle, parts, walk) {
-    const folder = handle.doc() as FolderDoc | undefined;
-    if (!folder?.docs) return undefined;
-
-    const part = parts[0];
-    const docLink = folder.docs.find((doc) => String(doc.name) === part);
-    const url = asLink(docLink?.url);
-    if (!url) return undefined;
-
-    // Following a bare link means everything below this point is current, not fixed.
-    walk.pinned &&= hasHeads(url);
-    const next = await repo.find(url);
-    return resolvePathInternal(repo, next, parts.slice(1), walk);
-  },
-};
-
-const directoryStrategy: FolderStrategy = {
-  matches(doc) {
-    return getType(doc as Parameters<typeof getType>[0]) === "directory";
-  },
-  async resolve(repo, handle, parts, walk) {
-    return walkDirectoryDoc(repo, handle.doc(), parts, walk);
-  },
-};
-
-async function walkDirectoryDoc(
+async function resolveIn(
   repo: Repo,
+  provider: PathProvider,
   node: unknown,
   parts: string[],
   walk: Walk
 ): Promise<Resolved | undefined> {
-  const link = asLink(node);
-  if (link) {
-    // Following a url consumes no parts, so revisiting the same url with the
-    // same remaining parts is a cycle.
-    const key = `${link}|${parts.join("/")}`;
-    if (walk.visited.has(key)) return undefined;
-    walk.visited.add(key);
-    walk.pinned &&= hasHeads(link);
-    const next = await repo.find(link);
-    return resolvePathInternal(repo, next, parts, walk);
-  }
+  if (parts.length === 0) return materialize(repo, node, undefined, walk);
 
-  if (parts.length === 0) {
-    return materialize(repo, node, undefined, walk);
-  }
+  const found = provider.lookup(node, parts);
+  if (!found) return undefined;
+  const { child, consumed } = found;
+  const rest = parts.slice(consumed);
+  if ("value" in child) return resolveIn(repo, provider, child.value, rest, walk);
+  // Only built-ins walk here, and none hands out sub-documents.
+  if ("sub" in child) return undefined;
 
-  if (!node || typeof node !== "object" || node instanceof Uint8Array) {
-    return undefined;
-  }
-
-  // Longest-prefix match: try "main/dist/index.js", then "main/dist", then "main"
-  const obj = node as Record<string, unknown>;
-  for (let i = parts.length; i >= 1; i--) {
-    const key = parts.slice(0, i).join("/");
-    if (key in obj) {
-      return walkDirectoryDoc(repo, obj[key], parts.slice(i), walk);
-    }
-  }
-  return undefined;
+  // A union (an account's mount) is read through its first binding.
+  const link = "link" in child ? child.link : child.union[0];
+  if (!link) return undefined;
+  // A step that consumes no parts can revisit the same url with the same remaining parts: a
+  // cycle.
+  const key = `${link}|${rest.join("/")}`;
+  if (walk.visited.has(key)) return undefined;
+  walk.visited.add(key);
+  // Following a bare link means everything below this point is current, not fixed.
+  walk.pinned &&= hasHeads(link);
+  const next = await repo.find(link);
+  return resolvePathInternal(repo, next, rest, walk);
 }
 
 // rule of thumb: bytes pass through, anything else gets JSON.stringify'd unless
@@ -207,8 +150,6 @@ async function materialize(
   return undefined;
 }
 
-const STRATEGIES: FolderStrategy[] = [directoryStrategy, folderStrategy];
-
 async function resolvePathInternal(
   repo: Repo,
   handle: DocHandle<unknown>,
@@ -220,12 +161,8 @@ async function resolvePathInternal(
   }
 
   const doc = handle.doc();
-  for (const strategy of STRATEGIES) {
-    if (strategy.matches(doc)) {
-      return strategy.resolve(repo, handle, parts, walk);
-    }
-  }
-  return undefined;
+  const provider = providerFor(doc);
+  return provider ? resolveIn(repo, provider, doc, parts, walk) : undefined;
 }
 
 export async function resolvePath(
@@ -239,4 +176,16 @@ export async function resolvePath(
     visited: new Set(),
     pinned: hasHeads(rootHandle.url),
   });
+}
+
+/**
+ * What `node` serves as, the way {@link resolvePath} serves the end of a path: a file doc's
+ * content with its mime type, bytes as they are, anything else as JSON.
+ */
+export async function readNode(
+  repo: Repo,
+  node: unknown
+): Promise<{ content: string | Uint8Array; type: string } | undefined> {
+  const read = await materialize(repo, node);
+  return read && { content: read.content, type: read.type };
 }

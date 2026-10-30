@@ -5,10 +5,10 @@
 // import the package entry point and report which plugins it exports, then
 // returns the same `{ plugins }` shape the watcher already feeds to
 // `registerPlugins` — except each plugin's `load()` re-imports the package
-// (pinned to the same heads) on this thread and runs the real plugin loader.
+// (pinned to the same heads, or the same pinned `/@/` URL) on this thread and
+// runs the real plugin loader.
 
-import { importPluginFromFolderDocUrl } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import { importPluginFromPackage } from "@inkandswitch/patchwork-filesystem";
 import { MODULE_LOADER_WORKER } from "./emitted.js";
 
 type Descriptor = Record<string, unknown> & { id?: string; type?: string };
@@ -51,7 +51,7 @@ function getWorker(): Worker {
   return worker;
 }
 
-function discoverDescriptors(urlAtHeads: AutomergeUrl): Promise<Descriptor[]> {
+function discoverDescriptors(urlAtHeads: string): Promise<Descriptor[]> {
   const id = nextRequestId++;
   return new Promise<Descriptor[]>((resolve, reject) => {
     pending.set(id, { resolve, reject });
@@ -60,9 +60,8 @@ function discoverDescriptors(urlAtHeads: AutomergeUrl): Promise<Descriptor[]> {
 }
 
 export async function importAutomergePackageViaWorker(
-  urlAtHeads: string
+  url: string
 ): Promise<{ plugins: Descriptor[] }> {
-  const url = urlAtHeads as AutomergeUrl;
   const descriptors = await discoverDescriptors(url);
   const plugins = descriptors.map((descriptor) => {
     const { id, type } = descriptor;
@@ -71,7 +70,7 @@ export async function importAutomergePackageViaWorker(
     if (typeof id !== "string" || typeof type !== "string") return descriptor;
     return {
       ...descriptor,
-      load: () => importPluginFromFolderDocUrl(url, type, id),
+      load: () => importPluginFromPackage(url, type, id),
     };
   });
   return { plugins };

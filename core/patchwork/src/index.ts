@@ -31,7 +31,11 @@ import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerg
 
 import {
   ModuleWatcher,
+  trackPackagesFolder,
   trackPackagesViaServiceWorker,
+  watchPackagesFolder,
+  type AccountNamespaceDoc,
+  type PackageEntry,
 } from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
 import { registerPatchworkViewElement } from "@inkandswitch/patchwork-elements";
@@ -49,6 +53,7 @@ import {
 import * as plugins from "@inkandswitch/patchwork-plugins";
 import setupServiceWorker, {
   connectClassicSync,
+  registerAccount,
   resolveHandoffsWith,
 } from "@inkandswitch/patchwork-bootloader";
 import debug from "debug";
@@ -62,6 +67,7 @@ import type {
 } from "./types.js";
 import { createRepo, initWasm } from "./repo.js";
 import { watchDocument } from "./watch-document.js";
+import { caughtUpWithServer, migratePackages } from "./migrate-packages.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 
@@ -179,6 +185,11 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   // Started with the site bundle alone so resolveAccountHandle has something to
   // await on — the `account` datatype lives there. The user's own
   // module-settings URL is added lazily once it appears on the account doc.
+  // Packages under /packages are looked up as pinned /@/ URLs, once the
+  // account is known; anything else (module settings, the site's manifest)
+  // through the service worker's legacy redirect.
+  const account = Promise.withResolvers<string>();
+  let packageEntries: PackageEntry[] = [];
   const moduleWatcher = new ModuleWatcher(
     repo,
     nameSources(moduleSources),
@@ -189,11 +200,15 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     options.importModulesInWorker === false
       ? undefined
       : importAutomergePackageViaWorker,
-    // Look packages up through the automerge worker and watch them through
-    // this tab's Subduction subscriptions, so their docs never load into this
-    // tab's Repo.
-    trackPackagesViaServiceWorker((url, onChange) =>
-      watchDocument(repo, url, onChange)
+    // Look packages up through the automerge worker (tabs leave /packages
+    // lookups to it) and watch them through this tab's Subduction
+    // subscriptions, so their docs never load into this tab's Repo.
+    trackPackagesFolder(
+      account.promise,
+      () => packageEntries,
+      trackPackagesViaServiceWorker((url, onChange) =>
+        watchDocument(repo, url, onChange)
+      )
     )
   );
 
@@ -202,6 +217,24 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
+  // So /@/<acctHash>/… paths under it resolve, here and in the automerge worker.
+  account.resolve(await registerAccount(accountDocHandle.url));
+  const migration = migratePackages(repo, accountDocHandle, {
+    // Another device may already have migrated this account.
+    caughtUp: () => caughtUpWithServer(repo, accountDocHandle),
+  }).catch((error) =>
+    console.warn("couldn't move module settings into /packages", error)
+  );
+  // Waiting to hear from the server can take up to 10s, and offline it never
+  // says yes, so boot doesn't wait long for it. A migration that finishes
+  // later binds /packages, and the watcher moves each package over once.
+  await Promise.race([
+    migration,
+    new Promise((resolve) => setTimeout(resolve, MIGRATION_WAIT_MS)),
+  ]);
+  await wirePackagesFolder(repo, accountDocHandle, moduleWatcher, (entries) => {
+    packageEntries = entries;
+  });
 
   wireModuleSettings(accountDocHandle, moduleWatcher);
 
@@ -267,6 +300,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
             toolId: openOptions.tool,
             type: openOptions.type,
             title: openOptions.title,
+            path: openOptions.path,
           },
         })
       );
@@ -349,6 +383,50 @@ function onModuleLoaded(name: string, mod: any): void {
     mod.plugins.map((p: any) => `${p.type}:${p.id}`)
   );
   registerPlugins(mod.plugins, name);
+}
+
+// How long boot waits for /packages' first listing before going on without it.
+const FIRST_LISTING_MS = 5_000;
+// How long boot waits for the move from module settings into /packages.
+const MIGRATION_WAIT_MS = 1_000;
+
+/**
+ * Feed the account's /packages folder to the ModuleWatcher. Waits for its
+ * first listing, so a package that module settings also lists is loaded once,
+ * through /packages, and adds the folder before module settings is wired.
+ */
+async function wirePackagesFolder(
+  repo: Repo,
+  accountDocHandle: DocHandle<AccountDoc>,
+  moduleWatcher: ModuleWatcher,
+  setEntries: (entries: PackageEntry[]) => void
+): Promise<void> {
+  let current: PackageEntry[] = [];
+  const listeners = new Set<() => void>();
+  const first = Promise.withResolvers<void>();
+  watchPackagesFolder(repo, accountDocHandle as unknown as DocHandle<AccountNamespaceDoc>, (entries) => {
+    current = entries;
+    setEntries(entries);
+    first.resolve();
+    for (const listener of listeners) listener();
+  });
+  await Promise.race([
+    first.promise,
+    new Promise((resolve) => setTimeout(resolve, FIRST_LISTING_MS)),
+  ]);
+  // Not awaited: it loads every package. It registers the folder before
+  // wireModuleSettings' addUrl does its own load, since both wait on the same
+  // doneLoading and this one asked first.
+  moduleWatcher
+    .addPackagesFolder(
+      "packages",
+      () => current,
+      (onChange) => {
+        listeners.add(onChange);
+        return () => listeners.delete(onChange);
+      }
+    )
+    .catch((error) => console.warn("couldn't load /packages", error));
 }
 
 /**

@@ -45,6 +45,17 @@ describe("resolvePath", () => {
     });
   }
 
+  it("follows a branches doc's default branch", async () => {
+    const repo = new Repo();
+    const pkg = publish(repo, (url) => url);
+    const branches = repo.create({
+      "@patchwork": { type: "branches" },
+      branches: { default: pkg.url },
+    });
+    const index = await resolvePath(repo, branches, ["dist", "index.js"]);
+    expect(index && decode(index.content)).toBe("export default 1");
+  });
+
   it("follows ImmutableString links in a folder doc", async () => {
     const repo = new Repo();
     const file = repo.create({

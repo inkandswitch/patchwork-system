@@ -5,6 +5,13 @@ export interface OpenDocumentEventDetail {
   toolId?: string;
   title?: string;
   type?: string;
+  /**
+   * The live path the document was opened at, like a cwd:
+   * `<acctHash>/Projects/foo`, each segment `encodeURIComponent`-encoded
+   * (see `livePath` in `@inkandswitch/patchwork-filesystem`). The router
+   * writes it to `&path=`.
+   */
+  path?: string;
 }
 
 export class OpenDocumentEvent extends CustomEvent<OpenDocumentEventDetail> {
@@ -58,7 +65,8 @@ declare global {
 export const openDocument = (
   element: HTMLElement | ShadowRoot,
   url: AutomergeUrl,
-  toolId?: string
+  toolId?: string,
+  path?: string
 ) => {
-  element.dispatchEvent(new OpenDocumentEvent({ url, toolId }));
+  element.dispatchEvent(new OpenDocumentEvent({ url, toolId, path }));
 };

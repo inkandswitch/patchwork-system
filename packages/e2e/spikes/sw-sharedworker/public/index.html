@@ -1,0 +1,64 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>spike: service worker ↔ shared worker</title>
+<pre id="out">running…</pre>
+<script type="module">
+  const WORKER_PATH = "/shared.js?v=spike";
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const within = (promise, ms, label) =>
+    Promise.race([promise, sleep(ms).then(() => `timed out: ${label}`)]);
+
+  async function main() {
+    await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+    await navigator.serviceWorker.ready;
+    if (!navigator.serviceWorker.controller) {
+      await new Promise((resolve) =>
+        navigator.serviceWorker.addEventListener("controllerchange", resolve, {
+          once: true,
+        })
+      );
+    }
+
+    // Started only once a service worker is active, as the real automerge
+    // worker is, so it can be controlled.
+    const shared = new SharedWorker(WORKER_PATH, { name: "automerge", type: "module" });
+    const sharedEnv = new Promise((resolve) => {
+      shared.port.onmessage = (event) => resolve(event.data.env);
+    });
+    shared.port.start();
+    const dedicated = new Worker(WORKER_PATH, { type: "module" });
+    const dedicatedEnv = new Promise((resolve) => {
+      dedicated.onmessage = (event) => {
+        if (event.data?.type === "env") resolve(event.data.env);
+      };
+    });
+
+    const envs = {
+      shared: await within(sharedEnv, 5000, "shared worker env"),
+      dedicated: await within(dedicatedEnv, 5000, "dedicated worker env"),
+    };
+    // Let the hellos land.
+    await sleep(500);
+
+    const controller = navigator.serviceWorker.controller;
+    controller.postMessage({ type: "forged-pong", nonce: "forged" });
+    const { port1, port2 } = new MessageChannel();
+    const sw = new Promise((resolve) => {
+      port1.onmessage = (event) => resolve(event.data);
+    });
+    controller.postMessage({ type: "run" }, [port2]);
+
+    return {
+      userAgent: navigator.userAgent,
+      envs,
+      sw: await within(sw, 20000, "service worker results"),
+    };
+  }
+
+  main()
+    .catch((error) => ({ error: String(error?.stack ?? error) }))
+    .then((results) => {
+      window.__results = results;
+      document.getElementById("out").textContent = JSON.stringify(results, null, 2);
+    });
+</script>

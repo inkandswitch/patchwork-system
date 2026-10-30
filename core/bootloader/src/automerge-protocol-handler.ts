@@ -17,9 +17,12 @@ import initSubduction from "@automerge/automerge-subduction/slim";
 
 import {
   Repo,
+  parseAutomergeUrl,
+  type AutomergeUrl,
   type DocumentId,
   type PeerId,
 } from "@automerge/automerge-repo/slim";
+import { idhash } from "@inkandswitch/patchwork-filesystem";
 
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
 import type {
@@ -37,6 +40,7 @@ import {
   HANDOFF_CHANNEL,
   type HandoffOnlineMessage,
   type HandoffRequestMessage,
+  type RegisterAccountMessage,
 } from "./types.js";
 
 declare const __SYNC_SERVER__: {
@@ -50,11 +54,30 @@ const syncServer =
     ? __SYNC_SERVER__
     : { url: "wss://subduction.sync.inkandswitch.com" };
 
+// acctHash → account url: the accounts whose `/@/` paths this worker resolves.
+// Tabs tell us theirs; the hash is computed here, so no tab can name an
+// account by the wrong one.
+const accounts = new Map<string, AutomergeUrl>();
+
+async function registerAccount({ url }: RegisterAccountMessage) {
+  try {
+    const { documentId } = parseAutomergeUrl(url as AutomergeUrl);
+    accounts.set(await idhash(documentId), url as AutomergeUrl);
+  } catch (error) {
+    console.warn("ignoring a register-account for %s", url, error);
+  }
+}
+
 const control = startWorkerControl("automerge-protocol-handler-worker", {
   onRestart: drainForRestart,
   // Held only so the tabs and the service worker can tell whether this
   // instance is still around; nothing here waits for it.
   lock: AUTOMERGE_WORKER_LOCK,
+  onMessage(data) {
+    if (data?.type === "register-account") {
+      void registerAccount(data as RegisterAccountMessage);
+    }
+  },
 });
 const log = control.log;
 
@@ -169,7 +192,7 @@ async function buildKeyhiveRepo(
 // them can (one still booting, one from an older build, a site that brings
 // its own Repo).
 
-const resolver = createResolver(getRepo, log);
+const resolver = createResolver(getRepo, log, () => accounts);
 const handoffChannel = new BroadcastChannel(HANDOFF_CHANNEL);
 
 const EVICT_IDLE_MS = 5_000;

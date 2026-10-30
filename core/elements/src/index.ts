@@ -11,6 +11,7 @@ import type {} from "solid-js";
 type LegacyPatchworkViewAttrs = {
   "doc-url"?: string;
   "tool-id"?: string | null;
+  path?: string | null;
   component?: never;
   url?: never;
 };
@@ -20,6 +21,7 @@ type PatchworkViewComponentAttrs = {
   url?: string;
   "doc-url"?: string;
   "tool-id"?: string | null;
+  path?: string | null;
 };
 
 type PatchworkViewAttrs =

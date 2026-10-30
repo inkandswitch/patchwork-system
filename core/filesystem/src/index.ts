@@ -1,8 +1,15 @@
+export * from "./content-hash.js";
+export * from "./file-list.js";
 export * from "./find-handle.js";
+export * from "./keyhive.js";
 export * from "./metadata.js";
 export * from "./module-watcher.js";
 export * from "./package-tracker.js";
 export * from "./packages.js";
+export * from "./packages-folder.js";
+export * from "./paths.js";
+export * from "./providers.js";
 export * from "./resolve.js";
 export * from "./urls.js";
+export * from "./walk.js";
 export type * from "./types.js";

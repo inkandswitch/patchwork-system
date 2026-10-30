@@ -7,10 +7,11 @@ import {
   stringifyAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
 import {
-  importPackageFromFolderDocUrl,
+  importPackage,
   importPackageFromHttpUrl,
 } from "./packages.js";
 import { type HasPatchworkMetadata } from "./metadata.js";
+import type { PackageEntry } from "./packages-folder.js";
 import {
   DEFAULT_BRANCH,
   trackPackagesInRepo,
@@ -22,6 +23,13 @@ const log = debug("patchwork:modules");
 
 export type ModuleSettingsDoc = {
   modules: AutomergeUrl[];
+  /**
+   * Documents whose unpinned entries `/packages` took over (see
+   * migratePackages): those entries load through `/packages` or not at all,
+   * so removing a package there removes it. Builds that predate `/packages`
+   * ignore this and keep loading them.
+   */
+  movedToPackages?: string[];
 } & HasPatchworkMetadata & {
     "@patchwork": { type: "patchwork:module-settings" };
   };
@@ -100,6 +108,9 @@ type WatchedModule = {
 const stripHeads = (url: AutomergeUrl) =>
   stringifyAutomergeUrl({ documentId: parseAutomergeUrl(url).documentId });
 
+const describeError = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
 function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
   console.warn(
     `module ${branchesDocUrl} is a branches doc. Branches docs are no longer supported as modules; falling back to the "${DEFAULT_BRANCH}" branch. Please let us know you hit this: post in #patchwork-testers or email chee@inkandswitch.com`
@@ -109,6 +120,12 @@ function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
 // todo this can be a function that takes a plugin system and returns a change
 // handler
 
+/** How a package is doing: what a sidebar shows beside it. */
+export type PackageStatus =
+  | { state: "loading" }
+  | { state: "loaded"; plugins: string[] }
+  | { state: "failed"; error: string };
+
 /**
  * Settings sources are passed in keyed by name (e.g. `{ system, user }`). Each
  * source URL may be either an Automerge module-settings doc (`automerge:...`,
@@ -116,8 +133,11 @@ function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
  * (fetched once at construction). The two kinds can be freely mixed, and the
  * module URLs *within* either kind can themselves point at Automerge package
  * docs (folders or directories) or plain HTTP(S) bundles.
+ *
+ * Dispatches a `"status"` event whenever a package's {@link PackageStatus}
+ * changes; read it with {@link ModuleWatcher.packageStatus}.
  */
-export class ModuleWatcher {
+export class ModuleWatcher extends EventTarget {
   repo: Repo;
   urls: Record<string, string>;
   handles: Record<string, DocHandle<ModuleSettingsDoc>> | undefined;
@@ -130,16 +150,26 @@ export class ModuleWatcher {
   // eventually succeeding and rolling the registry back to that old version.
   #announceGenerations = new Map<string, number>();
   #retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Lookups that failed, waiting to try again. */
+  #lookupRetries = new Map<string, ReturnType<typeof setTimeout>>();
   #lastAnnounced = new Map<string, string>();
   #activeModules = new Set<string>();
+  /** Package folders (`/packages`), by source name: what they list, and how to stop hearing them. */
+  #folders = new Map<
+    string,
+    { entries: () => PackageEntry[]; unsubscribe: () => void }
+  >();
   #disposed = false;
+  /** Package status, by the package doc's documentId. */
+  #status = new Map<string, PackageStatus>();
 
   onLoad: (name: string, mod: any) => void;
   onUnload?: (name: string) => void;
   /**
-   * How an Automerge package doc (pinned to heads) is turned into the
-   * `{ plugins }` shape `onLoad` consumes. Defaults to importing the package
-   * entry point directly on this thread. The browser bootloader overrides this
+   * How an Automerge package doc (pinned to heads, or the pinned `/@/` URL a
+   * `/packages` lookup answers with) is turned into the `{ plugins }` shape
+   * `onLoad` consumes. Defaults to importing the package entry point directly
+   * on this thread. The browser bootloader overrides this
    * to run the entry point in a worker for descriptor discovery and rebuild the
    * `{ plugins }` shape with main-thread `load()` functions.
    */
@@ -158,9 +188,10 @@ export class ModuleWatcher {
     callback: (name: string, mod: any) => void,
     onUnload?: (name: string) => void,
     importAutomergePackage: (urlAtHeads: string) => Promise<any> = (url) =>
-      importPackageFromFolderDocUrl(url as AutomergeUrl),
+      importPackage(url),
     tracker: PackageTracker = trackPackagesInRepo(repo)
   ) {
+    super();
     this.repo = repo;
     this.urls = { ...urls };
     this.onLoad = callback;
@@ -238,14 +269,40 @@ export class ModuleWatcher {
     );
   }
 
-  private async processModuleEntry(importName: string) {
+  private async processModuleEntry(importName: string, attempt = 0) {
     if (isValidAutomergeUrl(importName)) {
       // Watch before looking up, so a change landing in between still reloads.
       // Keyed by the settings entry, a branches doc's included, so removing
       // it from settings unloads this module.
+      const watched = this.#watchedModules.get(importName);
+      // Already found: its watch looks it up again when it moves. Looking up
+      // every package whenever its source's list changes would reload them.
+      if (watched?.version !== undefined) return;
       const entry = this.watchPackage(importName, stripHeads(importName));
       if (!entry) return;
-      const latest = await this.findLatestVersion(importName, entry);
+      let latest: AutomergeUrl | undefined;
+      try {
+        latest = await this.findLatestVersion(importName, entry);
+      } catch (error) {
+        // Nothing else brings it back until the package moves: back off and
+        // look again.
+        const delay = RETRY_DELAYS_MS[attempt];
+        console.warn(
+          `couldn't look up ${importName}${delay === undefined ? "" : `; trying again in ${delay}ms`}`,
+          error
+        );
+        this.#setStatus(importName, { state: "failed", error: describeError(error) });
+        if (delay !== undefined) {
+          const timer = setTimeout(() => {
+            this.#lookupRetries.delete(importName);
+            if (this.#activeModules.has(importName)) {
+              void this.processModuleEntry(importName, attempt + 1);
+            }
+          }, delay);
+          this.#lookupRetries.set(importName, timer);
+        }
+        return;
+      }
       // A newer lookup took over, and announces what it finds.
       if (!latest) return;
       entry.version = latest;
@@ -258,23 +315,62 @@ export class ModuleWatcher {
     await this.announce(importName);
   }
 
-  private async importPackageSafe(importName: string): Promise<any> {
+  /**
+   * How the package doc `urlOrDocumentId` is doing, or undefined if it isn't
+   * a package this watcher loads (an http module has none).
+   */
+  packageStatus(urlOrDocumentId: string): PackageStatus | undefined {
+    const documentId = isValidAutomergeUrl(urlOrDocumentId)
+      ? parseAutomergeUrl(urlOrDocumentId).documentId
+      : urlOrDocumentId;
+    return this.#status.get(documentId);
+  }
+
+  /**
+   * The package an import url was loaded for, if this watcher loaded it. A
+   * `/packages` package is imported from its pinned `/@/` url, which is what
+   * its plugins are registered under; this maps that back to the package doc.
+   */
+  packageFor(importUrl: string): AutomergeUrl | undefined {
+    for (const [moduleKey, version] of this.#lastAnnounced) {
+      if (version === importUrl && isValidAutomergeUrl(moduleKey)) return moduleKey;
+    }
+    return undefined;
+  }
+
+  #setStatus(moduleKey: string, status: PackageStatus) {
+    if (!isValidAutomergeUrl(moduleKey)) return;
+    this.#status.set(parseAutomergeUrl(moduleKey).documentId, status);
+    this.dispatchEvent(new Event("status"));
+  }
+
+  private async importPackageSafe(
+    importName: string,
+    moduleKey: string
+  ): Promise<{ mod: any } | { error: unknown }> {
     try {
       if (isValidAutomergeUrl(importName)) {
         // Pin to heads so descriptor discovery and any later main-thread load
         // resolve against the exact same version of the package doc.
-        return await this.importAutomergePackage(
-          await this.tracker.findLatest(importName)
-        );
+        return {
+          mod: await this.importAutomergePackage(
+            await this.tracker.findLatest(importName)
+          ),
+        };
       }
-      return await importPackageFromHttpUrl(importName);
+      // The tracker's answer for a package doc: a /packages package's pinned
+      // /@/ URL. It's still that doc's package, so it's imported the same way.
+      if (isValidAutomergeUrl(moduleKey)) {
+        return { mod: await this.importAutomergePackage(importName) };
+      }
+      return { mod: await importPackageFromHttpUrl(importName) };
     } catch (error) {
       console.error(
         `%c Failed to import ${importName}`,
         "color: #000, background: #ffbcef",
         error
       );
-      return undefined;
+      return { error };
     }
   }
 
@@ -314,15 +410,27 @@ export class ModuleWatcher {
       this.#announceGenerations.get(moduleKey) === generation;
 
     const attempt = async (attemptIndex: number): Promise<void> => {
-      const mod = await this.importPackageSafe(importUrl);
+      if (attemptIndex === 0) this.#setStatus(moduleKey, { state: "loading" });
+      const result = await this.importPackageSafe(importUrl, moduleKey);
       // A newer announce for this module started while we were importing or
       // backing off — its result wins; announcing ours now could regress the
       // registry to an older version.
       if (!current()) return;
-      if (mod) {
+      if ("mod" in result && result.mod) {
+        const mod = result.mod;
         this.#lastAnnounced.set(moduleKey, versionKey);
+        this.#setStatus(moduleKey, {
+          state: "loaded",
+          plugins: Array.isArray(mod.plugins)
+            ? mod.plugins.map((plugin: { id?: string }) => plugin?.id).filter(Boolean)
+            : [],
+        });
         return this.onLoad(importUrl, mod);
       }
+      this.#setStatus(moduleKey, {
+        state: "failed",
+        error: describeError("error" in result ? result.error : "it exported nothing"),
+      });
       const delay = RETRY_DELAYS_MS[attemptIndex];
       if (delay === undefined) return;
       const timer = setTimeout(() => {
@@ -410,6 +518,8 @@ export class ModuleWatcher {
     );
     if (this.#watchedModules.get(importName) !== entry) return undefined;
     if (lookup !== entry.lookups) return undefined;
+    // A /packages package comes back as its pinned /@/ URL, imported over http.
+    if (!isValidAutomergeUrl(latest)) return latest;
     const packageUrl = stripHeads(latest);
     if (packageUrl !== entry.packageUrl) {
       warnBranchesUnsupported(importName as AutomergeUrl);
@@ -489,12 +599,22 @@ export class ModuleWatcher {
   private unloadModule(entry: string) {
     this.detachDocWatcher(entry);
     this.cancelAnnounce(entry);
+    clearTimeout(this.#lookupRetries.get(entry));
+    this.#lookupRetries.delete(entry);
+    // Its plugins were registered under the url it was imported from.
+    const announced = this.#lastAnnounced.get(entry);
     this.#lastAnnounced.delete(entry);
-    this.onUnload?.(entry);
+    if (isValidAutomergeUrl(entry)) {
+      this.#status.delete(parseAutomergeUrl(entry).documentId);
+      this.dispatchEvent(new Event("status"));
+    }
+    this.onUnload?.(announced ?? entry);
   }
 
   dispose() {
     this.#disposed = true;
+    for (const { unsubscribe } of this.#folders.values()) unsubscribe();
+    this.#folders.clear();
     for (const handle of Object.values(this.handles ?? {})) {
       handle.removeListener("change", this.onChange);
     }
@@ -506,14 +626,50 @@ export class ModuleWatcher {
     }
     for (const timer of this.#retryTimers.values()) clearTimeout(timer);
     this.#retryTimers.clear();
+    for (const timer of this.#lookupRetries.values()) clearTimeout(timer);
+    this.#lookupRetries.clear();
     this.#activeModules.clear();
+  }
+
+  /**
+   * Load every package in a `/packages` folder, and keep loading what it lists:
+   * `subscribe` calls back whenever `entries` may have changed. A package is
+   * keyed by its document, so a rename reloads nothing, and one that module
+   * settings also lists loads once, through here. Looking packages up is the
+   * tracker's job (see trackPackagesFolder).
+   */
+  async addPackagesFolder(
+    name: string,
+    entries: () => PackageEntry[],
+    subscribe: (onChange: () => void) => () => void
+  ): Promise<void> {
+    await this.doneLoading;
+    if (this.#disposed) return;
+    this.#folders.get(name)?.unsubscribe();
+    this.#folders.set(name, { entries, unsubscribe: subscribe(this.onChange) });
+    await this.load();
   }
 
   private async load() {
     if (!this.handles) throw new Error("No handles");
     const urls = new Set<string>();
+    const inFolders = new Set<string>();
+    for (const { entries } of this.#folders.values()) {
+      for (const entry of entries()) {
+        urls.add(entry.url);
+        inFolders.add(parseAutomergeUrl(entry.url).documentId);
+      }
+    }
     for (const { doc } of this.settingsDocs()) {
-      for (const m of doc?.modules ?? []) urls.add(m);
+      const moved = new Set(Array.isArray(doc?.movedToPackages) ? doc.movedToPackages : []);
+      for (const m of doc?.modules ?? []) {
+        if (isValidAutomergeUrl(m)) {
+          const { documentId, heads } = parseAutomergeUrl(m);
+          if (inFolders.has(documentId)) continue;
+          if (!heads && moved.has(documentId)) continue;
+        }
+        urls.add(m);
+      }
     }
     const previousActive = this.#activeModules;
     this.#activeModules = urls;
