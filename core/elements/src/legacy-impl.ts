@@ -1,5 +1,6 @@
 import {
   parseAutomergeUrl,
+  stringifyAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
   type DocHandleChangePayload,
@@ -237,6 +238,16 @@ export class LegacyImpl {
   #docUrl: AutomergeUrl | null = null;
   #toolId: string | null = null;
   #handle: DocHandle<HasPatchworkMetadata> | null = null;
+  /**
+   * The doc whose type picks the tool: the handle's own, or, for part of a
+   * document (`automerge:<id>/<path>`) with no type of its own, the document
+   * it's part of. The tool still gets the part.
+   */
+  #typeHandle: DocHandle<HasPatchworkMetadata> | null = null;
+  // Called only once there's a handle, as `this.#handle.doc()` was.
+  #typeDoc(): HasPatchworkMetadata {
+    return (this.#typeHandle ?? this.#handle)!.doc();
+  }
   #tool: LoadedTool | null = null;
   #state: State = State.none;
   #requestedToolImports = new Set<string>();
@@ -380,7 +391,7 @@ export class LegacyImpl {
         // only change the outcome when no fallback is known yet or the new
         // tool supports this doc's type.
         if (this.#handle && this.#couldChangeFallback(addedTool)) {
-          this.#fallbackId = getFallbackTool(this.#handle.doc())?.id;
+          this.#fallbackId = getFallbackTool(this.#typeDoc())?.id;
         }
         const isFallbackTool = toolId == this.#fallbackId;
         if (isChosenTool || isFallbackTool) {
@@ -443,7 +454,22 @@ export class LegacyImpl {
 
     if (epoch !== this.#initEpoch) return;
 
+    // Part of a document with no type of its own opens in its document's tool.
+    let typeHandle: DocHandle<HasPatchworkMetadata> | null = null;
+    const { documentId, heads, segments } = parseAutomergeUrl(this.#docUrl! as AutomergeUrl);
+    if (segments?.length && !getType(handle.doc())) {
+      try {
+        typeHandle = await repo.find<HasPatchworkMetadata>(
+          stringifyAutomergeUrl({ documentId, heads })
+        );
+      } catch {
+        // its document can't be had: pick from the part alone
+      }
+      if (epoch !== this.#initEpoch) return;
+    }
+
     this.#handle = handle;
+    this.#typeHandle = typeHandle;
     this.#handle.on("change", this.#onDocChange);
     this.#teardowns.add(() => this.#handle!.off("change", this.#onDocChange));
 
@@ -458,7 +484,7 @@ export class LegacyImpl {
     const supported = added.supportedDatatypes;
     if (!supported) return false;
     if (supported === "*" || supported.includes("*")) return true;
-    const type = this.#handle ? getType(this.#handle.doc()) : undefined;
+    const type = this.#handle ? getType(this.#typeDoc()) : undefined;
     return type != null && supported.includes(type);
   }
 
@@ -500,6 +526,7 @@ export class LegacyImpl {
     this.#keyhiveRetrySetup = false;
     this.#unableNoAccess = false;
     this.#handle = null;
+    this.#typeHandle = null;
     this.#tool = null;
     this.#requestedToolImports.clear();
     this.#content.textContent = "";
@@ -606,7 +633,7 @@ export class LegacyImpl {
 
     this.#resetDisplay();
 
-    const doc = this.#handle.doc();
+    const doc = this.#typeDoc();
     const fallbackTool = getFallbackTool(doc);
     this.#fallbackId = fallbackTool?.id;
     const fallingBack = !this.#toolId;
@@ -909,7 +936,7 @@ export class LegacyImpl {
    */
   #suggestedImport(): { url: string; loading: boolean } | null {
     if (!this.#docUrl || !this.#handle) return null;
-    const url = getSuggestedImportUrl(this.#handle.doc());
+    const url = getSuggestedImportUrl(this.#typeDoc());
     if (!url) return null;
     return { url, loading: this.#requestedToolImports.has(url) };
   }

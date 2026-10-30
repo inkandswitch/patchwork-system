@@ -170,6 +170,43 @@ describe("patchwork-view (legacy mode)", () => {
     expect(toast?.querySelector("button.pw-error__load")).toBeTruthy();
   });
 
+  it("opens part of a document with no type of its own in its document's tool, handing it the part", async () => {
+    const id = `test-canvas-tool-${++seq}`;
+    const handed: string[] = [];
+    const render = (handle: { url: string }) => {
+      handed.push(handle.url);
+      return () => {};
+    };
+    toolRegistry.register(
+      {
+        id,
+        type: "patchwork:tool",
+        name: id,
+        supportedDatatypes: ["test-canvas"],
+        load: async () => render,
+        module: render,
+      } as never,
+      `test://${id}`
+    );
+    registeredTools.push(id);
+
+    const canvas = repo.create({
+      "@patchwork": { type: "test-canvas" },
+      store: { "shape:a": { id: "shape:a", typeName: "shape" } },
+    });
+    const part = canvas.sub("store", "shape:a").url;
+    const provider = document.createElement("repo-provider");
+    const view = document.createElement("patchwork-view-legacy");
+    view.setAttribute("doc-url", part);
+    provider.append(view);
+    document.body.append(provider);
+    await settle();
+    await settle();
+
+    expect(view.textContent).not.toContain("missing @patchwork metadata");
+    expect(handed).toEqual([part]);
+  });
+
   it("still mounts the wildcard stopgap when the doc suggests nothing", async () => {
     const raw = registerWildcardTool();
 
