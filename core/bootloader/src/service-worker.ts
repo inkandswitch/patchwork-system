@@ -353,7 +353,7 @@ function askTab(
  */
 async function handoff(
   fetchEvent: FetchEvent,
-  to: URL | { path: string; heads?: string; list?: boolean }
+  to: URL | { path: string; heads?: string; via?: string[]; list?: boolean; only?: string }
 ): Promise<HandoffReplyMessage> {
   const message = handoffRequest(fetchEvent.request, cachename, to);
   const deadline = Date.now() + HANDOFF_TIMEOUT_MS;
@@ -577,7 +577,7 @@ async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response
     store,
     hash: contentHash,
     buildList: (prefix, only) => buildList(prefix, only, ask),
-    resolve: (target, heads) => ask({ path: target, heads }),
+    resolve: (target, heads, via) => ask({ path: target, heads, via }),
     warn: (message) => lifecycle("warn", message),
     keep: (work) =>
       fetchEvent.waitUntil(
@@ -612,6 +612,7 @@ async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response
 type Ask = (to: {
   path: string;
   heads?: string;
+  via?: string[];
   list?: boolean;
   only?: string;
 }) => Promise<{ body: Uint8Array; contentType: string } | Response>;

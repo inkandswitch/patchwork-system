@@ -169,6 +169,49 @@ describe("package lists", () => {
     expect(decode(then!.content)).toBe("old");
   });
 
+  it("still reads a nested file renamed since it was pinned", async () => {
+    const { repo, accounts, prefix, sub } = await folderPackage();
+    const built = await buildFileList(repo, prefix, { accounts });
+    const entry = built!.list.files["sub/x.js"];
+    expect(entry.via).toEqual([formatHeads(sub.heads())]);
+    sub.change((d: any) => (d.docs[0].name = "y.js"));
+    const then = await readPath(repo, `${built!.prefix}/sub/x.js`, {
+      accounts,
+      heads: parseHeads(entry.heads!),
+      via: entry.via!.map((heads) => parseHeads(heads)!),
+    });
+    expect(decode(then!.content)).toBe("x");
+  });
+
+  it("still reads a value renamed in a nested directory doc since it was pinned", async () => {
+    const { repo, a, accounts, pkg } = await folderPackage();
+    const dir = repo.create<any>({
+      "@patchwork": { type: "directory" },
+      "a.js": { content: "old", mimeType: "text/javascript" },
+    });
+    pkg.change((d: any) => d.docs.push({ name: "dir", type: "directory", url: dir.url }));
+    const prefix = await chain(repo, livePath(a, ["packages", "fpkg"]), accounts);
+    const built = await buildFileList(repo, prefix!, { accounts });
+    const entry = built!.list.files["dir/a.js"];
+    expect(entry.via).toBeUndefined();
+    dir.change((d: any) => {
+      d["b.js"] = { content: "old", mimeType: "text/javascript" };
+      delete d["a.js"];
+    });
+    const then = await readPath(repo, `${built!.prefix}/dir/a.js`, {
+      accounts,
+      heads: parseHeads(entry.heads!),
+    });
+    expect(decode(then!.content)).toBe("old");
+  });
+
+  it("leaves via out of a list with no nested folders, so it hashes as before", async () => {
+    const { repo, a, accounts } = await fixture();
+    const prefix = await chain(repo, livePath(a, ["packages", "foo"]), accounts);
+    const built = await buildFileList(repo, prefix!, { accounts });
+    expect(new TextDecoder().decode(built!.bytes)).not.toContain('"via"');
+  });
+
   it("pins a live path to a folder with the folder's whole list", async () => {
     const { repo, a, accounts } = await folderPackage();
     const pinned = await pinnedPath(repo, livePath(a, ["packages", "fpkg"]), {

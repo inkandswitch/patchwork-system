@@ -74,12 +74,18 @@ class MemoryStore implements ContentStore {
 const REAL = toBytes("export default 42");
 const FORGED = toBytes("export default 666");
 
-async function setup(options: { store?: boolean } = {}) {
+async function setup(options: { store?: boolean; via?: string[] } = {}) {
   const sha256 = await contentHash(REAL);
   const list: FileList = {
     v: 1,
     files: {
-      "index.js": { sha256, type: "text/javascript", heads: "fh", store: options.store ?? true },
+      "index.js": {
+        sha256,
+        type: "text/javascript",
+        heads: "fh",
+        ...(options.via ? { via: options.via } : {}),
+        store: options.store ?? true,
+      },
     },
   };
   const listBytes = new TextEncoder().encode(canonicalJson(list));
@@ -93,7 +99,7 @@ async function setup(options: { store?: boolean } = {}) {
     buildList: vi.fn(
       async (_prefix: string, _only?: string) => listBytes as Uint8Array | undefined
     ),
-    resolve: vi.fn(async (_path: string, _heads?: string) => ({
+    resolve: vi.fn(async (_path: string, _heads?: string, _via?: string[]) => ({
       body: REAL,
       contentType: "text/javascript",
     }) as { body: Uint8Array; contentType: string } | Response | undefined),
@@ -161,12 +167,18 @@ describe("servePinned", () => {
     await expect(servePinned(normalized, deps)).rejects.toBeInstanceOf(PinnedAbort);
   });
 
+  it("rereads a file in a nested folder with the heads its list recorded on the way", async () => {
+    const { deps, normalized } = await setup({ via: ["sub"] });
+    expect(await text(await servePinned(normalized, deps))).toBe("export default 42");
+    expect(deps.resolve).toHaveBeenCalledWith("acct@h/pkg@h/index.js", "fh", ["sub"]);
+  });
+
   it("deletes a forged file, rereads it at the list's heads, and serves", async () => {
     const { deps, sha256, normalized, settle } = await setup();
     await deps.store.put(sha256, FORGED);
     expect(await text(await servePinned(normalized, deps))).toBe("export default 42");
     await settle();
-    expect(deps.resolve).toHaveBeenCalledWith("acct@h/pkg@h/index.js", "fh");
+    expect(deps.resolve).toHaveBeenCalledWith("acct@h/pkg@h/index.js", "fh", undefined);
     expect(deps.warn).toHaveBeenCalled();
     expect(deps.store.bytes.get(sha256)).toEqual(REAL);
   });
@@ -282,6 +294,9 @@ describe("handoffRequest", () => {
     const req = new Request("https://p.test/@/x");
     expect(handoffRequest(req, "patchwork", { path: "a@h/x", heads: "fh" }).request.heads).toBe("fh");
     expect(handoffRequest(req, "patchwork", { path: "a@h", list: true }).request.list).toBe(true);
+    const nested = { path: "a@h/sub/x", heads: "fh", via: ["sh"] };
+    expect(handoffRequest(req, "patchwork", nested).request.via).toEqual(["sh"]);
+    expect(handoffRequest(req, "patchwork", { path: "a@h/x", heads: "fh" }).request).not.toHaveProperty("via");
   });
 
   it("builds a legacy handoff with no path", () => {

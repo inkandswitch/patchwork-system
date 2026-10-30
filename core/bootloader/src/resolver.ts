@@ -224,7 +224,7 @@ export function waitingFind(
  *   list covers just the file asked for; the body is that list, for the service worker to check
  *   and keep.
  * - With `heads`: the file the path names, read at those heads (what its file list recorded),
- *   whether or not the path is canonical.
+ *   whether or not the path is canonical, with the nested folders on the way read at `via`.
  * - A canonical pinned path: the bytes.
  * - One that doesn't resolve: 404.
  *
@@ -235,7 +235,12 @@ async function resolveWalkPath(
   path: string,
   accounts: ReadonlyMap<string, AutomergeUrl>,
   signal: AbortSignal,
-  { heads, list, only }: { heads?: string; list?: boolean; only?: string } = {},
+  {
+    heads,
+    via,
+    list,
+    only,
+  }: { heads?: string; via?: string[]; list?: boolean; only?: string } = {},
   providers?: ExtraProviders
 ): Promise<Response> {
   try {
@@ -276,7 +281,13 @@ async function resolveWalkPath(
     // package's nested folder is reached by name, through a link without
     // heads, so the path needn't be canonical; the service worker checks the
     // bytes against the list either way.
-    const read = await readPath(repo, path, { ...options, heads: parseHeads(heads) });
+    const read = await readPath(repo, path, {
+      ...options,
+      heads: parseHeads(heads),
+      via: (Array.isArray(via) ? via : [])
+        .map((step) => parseHeads(String(step)))
+        .filter((step): step is UrlHeads => !!step),
+    });
     if (!read) return notFound();
     return new Response(toBytes(read.content) as BlobPart, {
       status: 200,

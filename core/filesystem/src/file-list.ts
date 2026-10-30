@@ -15,6 +15,12 @@ export type FileEntry = {
   type: string;
   /** The heads the file's document was read at; absent for a value inside the container. */
   heads?: string;
+  /**
+   * The heads of each nested folder doc on the way to the file, outermost first, for a file in
+   * a package's nested folder: a walk back to it reads them at these, so renaming the file
+   * after it was pinned doesn't lose it. Absent otherwise, so other lists hash as before.
+   */
+  via?: string[];
   /** Whether the bytes may be kept in the content store. */
   store: boolean;
 };
@@ -40,7 +46,9 @@ const isEntry = (value: unknown): value is FileEntry => {
     typeof entry.sha256 === "string" &&
     typeof entry.type === "string" &&
     typeof entry.store === "boolean" &&
-    (entry.heads === undefined || typeof entry.heads === "string")
+    (entry.heads === undefined || typeof entry.heads === "string") &&
+    (entry.via === undefined ||
+      (Array.isArray(entry.via) && entry.via.every((heads) => typeof heads === "string")))
   );
 };
 
@@ -92,6 +100,7 @@ export async function buildFileList(
       sha256: await contentHash(toBytes(file.content)),
       type: file.type,
       ...(file.heads ? { heads: formatHeads(file.heads) } : {}),
+      ...(file.via?.length ? { via: file.via.map(formatHeads) } : {}),
       store: root.kind === "account" && (throughPackages || !isProtected(file.documentId)),
     };
   }

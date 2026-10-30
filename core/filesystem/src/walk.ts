@@ -4,10 +4,12 @@ import {
   type DocumentId,
   type Repo,
   type UrlHeads,
+  decodeHeads,
   isImmutableString,
   parseAutomergeUrl,
   stringifyAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
+import { hasHeads } from "@automerge/automerge/slim";
 import {
   type DocStep,
   docStep,
@@ -511,14 +513,30 @@ export type FileContent = { content: string | Uint8Array; type: string };
 /**
  * What a path names, read: its pinned form, whether the input was canonical, and the bytes.
  * With `heads`, the document the path ends at is read at those heads instead: how a file is
- * read at the heads its file list recorded, after it has changed.
+ * read at the heads its file list recorded, after it has changed. With `via`, the heads its
+ * list recorded for the nested folders on the way: a document the walk reaches by a link
+ * without heads is read at whichever of these it has, so a file renamed since is still found.
  */
 export async function readPath(
   repo: Repo,
   path: string,
-  options: WalkOptions & { heads?: UrlHeads }
+  options: WalkOptions & { heads?: UrlHeads; via?: UrlHeads[] }
 ): Promise<(FileContent & { pinned: string; canonical: boolean }) | undefined> {
-  const end = await walkPath(repo, path, options);
+  const recorded = [...(options.via ?? []), ...(options.heads ? [options.heads] : [])];
+  const find0 = options.find ?? ((url: AutomergeUrl) => repo.find(url));
+  const end = await walkPath(repo, path, {
+    ...options,
+    find: recorded.length
+      ? async (url, at) => {
+          const handle = await find0(url, at);
+          if (at) return handle;
+          // A document's own change hashes: only it, or a copy of it, has them.
+          const doc = handle.doc();
+          const mine = doc && recorded.find((heads) => hasHeads(doc, decodeHeads(heads)));
+          return mine ? handle.view(mine) : handle;
+        }
+      : options.find,
+  });
   if (!end) return undefined;
   let node = end.node;
   if (options.heads) {
@@ -551,12 +569,14 @@ export async function readPath(
 
 /**
  * A file under a pinned document, the document that holds its bytes, and the heads that
- * document was read at if it was reached by a link.
+ * document was read at if it was reached by a link. `via`: the heads each nested folder doc
+ * on the way to it was read at, outermost first, when it's in a package's nested folder.
  */
 export type ListedFile = FileContent & {
   tail: string;
   documentId: DocumentId;
   heads?: UrlHeads;
+  via?: UrlHeads[];
 };
 
 const isNested = (value: unknown): value is Record<string, unknown> =>
@@ -625,7 +645,8 @@ export async function listFiles(
     keys: number[],
     node: unknown,
     holder: DocumentId,
-    heads?: UrlHeads
+    heads?: UrlHeads,
+    via: UrlHeads[] = []
   ) => {
     if (!wanted(parts)) return;
     const tail = tailOf(parts);
@@ -635,23 +656,33 @@ export async function listFiles(
     if (read) {
       found.set(tail, {
         keys,
-        file: { ...read, tail, documentId: holder, ...(heads ? { heads } : {}) },
+        file: {
+          ...read,
+          tail,
+          documentId: holder,
+          ...(heads ? { heads } : {}),
+          ...(via.length ? { via } : {}),
+        },
       });
     }
   };
 
-  // Values are read in place; links are gathered and read below.
-  type Link = { parts: string[]; keys: number[]; link: AutomergeUrl };
+  // Values are read in place; links are gathered and read below. `via`: the heads of the
+  // nested folder docs on the way to the link, outermost first.
+  type Link = { parts: string[]; keys: number[]; link: AutomergeUrl; via: UrlHeads[] };
   const entered = new Set<string>([rootId]);
   // `heads`: what the holder was read at, when it's a doc below the container (reached by a
   // link, so not pinned by the container's step): its values are read back at those heads.
+  // `via`: the heads of the nested folder docs above the holder, so a walk back to a file can
+  // read each at what it was, after a file in one is renamed.
   const visit = async (
     node: unknown,
     provider: PathProvider | undefined,
     holder: DocumentId,
     parts: string[],
     keys: number[],
-    heads?: UrlHeads
+    heads?: UrlHeads,
+    via: UrlHeads[] = []
   ): Promise<Link[]> => {
     const links: Link[] = [];
     for (const child of listOf(provider, node)) {
@@ -662,23 +693,30 @@ export async function listFiles(
       if ("sub" in child || "value" in child) {
         const value = "sub" in child ? valueAt(node, child.sub) : child.value;
         if (value === undefined) continue;
-        await add(childParts, childKeys, value, holder, heads);
+        await add(childParts, childKeys, value, holder, heads, via);
         // A package's provider walks on into the values it hands out, so list what's in them.
         if (!builtIn && value && typeof value === "object" && !(value instanceof Uint8Array)) {
-          links.push(...(await visit(value, provider, holder, childParts, childKeys, heads)));
+          links.push(...(await visit(value, provider, holder, childParts, childKeys, heads, via)));
           continue;
         }
       }
       if ("value" in child) {
         // Nested values are addressable by path only inside a directory doc.
         if (provider === directoryProvider && isNested(child.value)) {
-          links.push(...(await visit(child.value, provider, holder, childParts, childKeys, heads)));
+          links.push(
+            ...(await visit(child.value, provider, holder, childParts, childKeys, heads, via))
+          );
         }
       } else if (
         "link" in child &&
         (wanted(childParts) || (deep && wantedBelow(childParts)))
       ) {
-        links.push({ parts: childParts, keys: childKeys, link: child.link });
+        links.push({
+          parts: childParts,
+          keys: childKeys,
+          link: child.link,
+          via: heads ? [...via, heads] : via,
+        });
       }
     }
     return links;
@@ -696,7 +734,7 @@ export async function listFiles(
     queue.shift()?.();
   };
 
-  const read = async ({ parts, keys, link }: Link): Promise<void> => {
+  const read = async ({ parts, keys, link, via }: Link): Promise<void> => {
     let below: Link[] = [];
     await acquire();
     try {
@@ -713,7 +751,7 @@ export async function listFiles(
       // Built-ins decide what's a file, as the walk does for a path that ends here.
       const provider = providerFor(doc);
       if (!provider) {
-        await add(parts, keys, doc, parsed.documentId, heads);
+        await add(parts, keys, doc, parsed.documentId, heads, via);
       } else if (
         deep &&
         (provider === folderProvider || provider === directoryProvider) &&
@@ -721,8 +759,8 @@ export async function listFiles(
       ) {
         // Into a nested folder, by name: its files are under its name here.
         entered.add(parsed.documentId);
-        await add(parts, keys, doc, parsed.documentId, heads);
-        below = await visit(doc, provider, parsed.documentId, parts, keys, heads);
+        await add(parts, keys, doc, parsed.documentId, heads, via);
+        below = await visit(doc, provider, parsed.documentId, parts, keys, heads, via);
       }
     } catch {
       missing.push(tailOf(parts));

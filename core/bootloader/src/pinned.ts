@@ -103,12 +103,14 @@ export type PinnedDeps = {
    */
   buildList(prefix: string, only?: string): Promise<Uint8Array | undefined>;
   /**
-   * Ask a tab or the automerge worker for the file at `path`, read at `heads` if given: its
-   * bytes, a Response for any other answer (a redirect, a 404), or undefined.
+   * Ask a tab or the automerge worker for the file at `path`, read at `heads` if given, with
+   * the nested folders on the way read at `via`: its bytes, a Response for any other answer (a
+   * redirect, a 404), or undefined.
    */
   resolve(
     path: string,
-    heads?: string
+    heads?: string,
+    via?: string[]
   ): Promise<{ body: Uint8Array; contentType: string } | Response | undefined>;
   warn(message: string): void;
   /** Keep the service worker alive for work that outlives the response. */
@@ -225,7 +227,7 @@ export async function servePinned(
     }
   }
 
-  const answer = await deps.resolve(path, entry.heads);
+  const answer = await deps.resolve(path, entry.heads, entry.via);
   if (!answer || answer instanceof Response) {
     throw new PinnedAbort(
       `/@/${path} is in its file list, but a resolver answered ${answer?.status ?? "nothing"}`
@@ -265,7 +267,7 @@ export function sharedRequests<A extends unknown[], T>(
 export function handoffRequest(
   request: Request,
   cachename: string,
-  to: URL | { path: string; heads?: string; list?: boolean; only?: string }
+  to: URL | { path: string; heads?: string; via?: string[]; list?: boolean; only?: string }
 ): HandoffRequestMessage {
   const target =
     to instanceof URL
@@ -274,6 +276,7 @@ export function handoffRequest(
           handoffURL: `patchwork-path:${to.path}`,
           path: to.path,
           ...(to.heads ? { heads: to.heads } : {}),
+          ...(to.via?.length ? { via: to.via } : {}),
           ...(to.list ? { list: true } : {}),
           ...(to.only !== undefined ? { only: to.only } : {}),
         };

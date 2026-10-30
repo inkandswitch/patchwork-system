@@ -54,6 +54,8 @@ export interface HandoffRequest {
   path?: string;
   /** Read the file `path` names at these heads, as its file list recorded. */
   heads?: string;
+  /** With `heads`: the heads its list recorded for the nested folders on the way. */
+  via?: string[];
   /** Answer the file list of the container `path` names, not a file. */
   list?: boolean;
   /** With `list`: list only this tail, as the one-file list a redirect hands out. */

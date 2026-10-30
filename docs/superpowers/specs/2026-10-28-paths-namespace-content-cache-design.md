@@ -326,11 +326,17 @@ was pinned. It is canonical JSON: keys sorted, no whitespace.
   - `type` is its content type.
   - `heads` is the heads its document was read at. It's absent for a value
     inside the container, which the container's own heads pin.
+  - `via`, for a file in a package's nested folder, is the heads of each
+    nested folder doc on the way to it, outermost first. Those folders are
+    reached by links without heads, so a walk back to the file reads each
+    at the heads it has from `via`: renaming the file, or a folder above
+    it, doesn't lose it. Absent everywhere else, so lists without nested
+    folders hash as they did before it.
   - `store` says whether the bytes may be kept (see
     [What gets stored](#what-gets-stored)).
 - **No document ids, by design.** A resolver that needs a file's bytes walks
-  to it by name from the container at its pinned heads, and reads it at the
-  recorded heads. Automerge keeps history, so an old version stays readable
+  to it by name from the container at its pinned heads, through nested
+  folders at their `via` heads, and reads it at the recorded heads. Automerge keeps history, so an old version stays readable
   wherever the document is.
 - **The listHash is the SHA-256 of these bytes.** The list is content like
   any other: stored under its hash if its container's content may be stored,
