@@ -13,10 +13,10 @@ export const storagePrefix =
     : DEFAULT_STORAGE_PREFIX;
 
 /**
- * The keyhive version this build stores state for. Keyhive versions can't read
- * each other's state, so each gets its own database; `${storagePrefix}-keyhive`
- * (no version) holds the state written by automerge-repo-keyhive 0.5.
+ * The automerge-repo-keyhive version this build stores keyhive state for.
+ * Versions can't read each other's state, so each gets its own database;
+ * `${storagePrefix}-keyhive` (no version) holds the state written by 0.5.
  */
-export const keyhiveStorageVersion = "0.6";
+export const keyhiveStorageVersion = "0.8";
 
 export const keyhiveStorageName = `${storagePrefix}-keyhive-${keyhiveStorageVersion}`;

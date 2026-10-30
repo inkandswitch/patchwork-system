@@ -25,25 +25,26 @@ minimumReleaseAgeExclude:
   - "@inkandswitch/*"
   - "@chee/*"
   - solid-automerge
+  - '@keyhive/keyhive@0.6.0'
 
 catalog:
   "@automerge/automerge": 3.5.0
-  "@automerge/automerge-repo": 2.6.0-subduction.48
-  "@automerge/automerge-repo-keyhive": 0.6.0-alpha.1
-  "@automerge/automerge-repo-network-broadcastchannel": 2.6.0-subduction.48
-  "@automerge/automerge-repo-network-messagechannel": 2.6.0-subduction.48
-  "@automerge/automerge-repo-network-websocket": 2.6.0-subduction.48
-  "@automerge/automerge-repo-react-hooks": 2.6.0-subduction.48
-  "@automerge/automerge-repo-storage-indexeddb": 2.6.0-subduction.48
-  "@automerge/automerge-repo-storage-nodefs": 2.6.0-subduction.48
-  "@automerge/automerge-subduction": 0.16.1
-  "@automerge/react": 2.6.0-subduction.48
-  "@automerge/vanillajs": 2.6.0-subduction.48
+  "@automerge/automerge-repo": 2.6.0-subduction.49
+  "@automerge/automerge-repo-keyhive": 0.8.0-alpha.1
+  "@automerge/automerge-repo-network-broadcastchannel": 2.6.0-subduction.49
+  "@automerge/automerge-repo-network-messagechannel": 2.6.0-subduction.49
+  "@automerge/automerge-repo-network-websocket": 2.6.0-subduction.49
+  "@automerge/automerge-repo-react-hooks": 2.6.0-subduction.49
+  "@automerge/automerge-repo-storage-indexeddb": 2.6.0-subduction.49
+  "@automerge/automerge-repo-storage-nodefs": 2.6.0-subduction.49
+  "@automerge/automerge-subduction": 0.20.1
+  "@automerge/react": 2.6.0-subduction.49
+  "@automerge/vanillajs": 2.6.0-subduction.49
   "@codemirror/commands": ^6.10.4
   "@codemirror/language": ^6.12.4
   "@codemirror/state": ^6.7.1
   "@codemirror/view": ^6.43.6
-  "@keyhive/keyhive": 0.3.0-alpha.1
+  "@keyhive/keyhive": 0.6.0
   solid-automerge: ^2.0.1
   solid-js: ^1.9.13
   "@types/node": ^24.0.0
@@ -58,4 +59,4 @@ allowBuilds:
   esbuild: true
 
 patchedDependencies:
-  '@automerge/automerge-repo@2.6.0-subduction.48': patches/@automerge__automerge-repo@2.6.0-subduction.48.patch
+  '@automerge/automerge-repo@2.6.0-subduction.49': patches/@automerge__automerge-repo@2.6.0-subduction.49.patch

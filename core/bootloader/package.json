@@ -39,6 +39,10 @@
       "import": "./dist/storage.js",
       "types": "./dist/storage.d.ts"
     },
+    "./keyhive-sync-server": {
+      "import": "./dist/keyhive-sync-server.js",
+      "types": "./dist/keyhive-sync-server.d.ts"
+    },
     "./service-worker": {
       "import": "./dist/service-worker.js",
       "types": "./dist/service-worker.d.ts"
