@@ -7,7 +7,7 @@ import {
   stringifyAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
 import {
-  importPackageFromFolderDocUrl,
+  importPackage,
   importPackageFromHttpUrl,
 } from "./packages.js";
 import { type HasPatchworkMetadata } from "./metadata.js";
@@ -166,9 +166,10 @@ export class ModuleWatcher extends EventTarget {
   onLoad: (name: string, mod: any) => void;
   onUnload?: (name: string) => void;
   /**
-   * How an Automerge package doc (pinned to heads) is turned into the
-   * `{ plugins }` shape `onLoad` consumes. Defaults to importing the package
-   * entry point directly on this thread. The browser bootloader overrides this
+   * How an Automerge package doc (pinned to heads, or the pinned `/@/` URL a
+   * `/packages` lookup answers with) is turned into the `{ plugins }` shape
+   * `onLoad` consumes. Defaults to importing the package entry point directly
+   * on this thread. The browser bootloader overrides this
    * to run the entry point in a worker for descriptor discovery and rebuild the
    * `{ plugins }` shape with main-thread `load()` functions.
    */
@@ -187,7 +188,7 @@ export class ModuleWatcher extends EventTarget {
     callback: (name: string, mod: any) => void,
     onUnload?: (name: string) => void,
     importAutomergePackage: (urlAtHeads: string) => Promise<any> = (url) =>
-      importPackageFromFolderDocUrl(url as AutomergeUrl),
+      importPackage(url),
     tracker: PackageTracker = trackPackagesInRepo(repo)
   ) {
     super();
@@ -344,7 +345,8 @@ export class ModuleWatcher extends EventTarget {
   }
 
   private async importPackageSafe(
-    importName: string
+    importName: string,
+    moduleKey: string
   ): Promise<{ mod: any } | { error: unknown }> {
     try {
       if (isValidAutomergeUrl(importName)) {
@@ -355,6 +357,11 @@ export class ModuleWatcher extends EventTarget {
             await this.tracker.findLatest(importName)
           ),
         };
+      }
+      // The tracker's answer for a package doc: a /packages package's pinned
+      // /@/ URL. It's still that doc's package, so it's imported the same way.
+      if (isValidAutomergeUrl(moduleKey)) {
+        return { mod: await this.importAutomergePackage(importName) };
       }
       return { mod: await importPackageFromHttpUrl(importName) };
     } catch (error) {
@@ -404,7 +411,7 @@ export class ModuleWatcher extends EventTarget {
 
     const attempt = async (attemptIndex: number): Promise<void> => {
       if (attemptIndex === 0) this.#setStatus(moduleKey, { state: "loading" });
-      const result = await this.importPackageSafe(importUrl);
+      const result = await this.importPackageSafe(importUrl, moduleKey);
       // A newer announce for this module started while we were importing or
       // backing off — its result wins; announcing ours now could regress the
       // registry to an older version.

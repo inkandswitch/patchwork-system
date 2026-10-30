@@ -820,6 +820,47 @@ describe("ModuleWatcher /packages folder", () => {
     await repo.shutdown().catch(() => {});
   });
 
+  it("imports a package's pinned url, first and on reload, through the package import", async () => {
+    const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const doc = repo.create<any>({ "@patchwork": { type: "directory" } });
+    let version = 0;
+    let moved: (seen?: string) => void = () => {};
+    const tracker: PackageTracker = {
+      findLatest: async () => `https://patchwork.test/@/acct/packages/p@v${version}~list` as any,
+      watch: (_url, onChange) => {
+        moved = onChange;
+        return () => {};
+      },
+    };
+    const imported: string[] = [];
+    const watcher = new ModuleWatcher(
+      repo,
+      {},
+      () => {},
+      undefined,
+      async (url) => {
+        imported.push(url);
+        return { plugins: [] };
+      },
+      tracker
+    );
+    await watcher.addPackagesFolder(
+      "packages",
+      () => [{ url: doc.url, name: "p", memberStep: "m@h" }],
+      () => () => {}
+    );
+    expect(imported).toEqual(["https://patchwork.test/@/acct/packages/p@v0~list"]);
+    version = 1;
+    moved();
+    await pause(400);
+    expect(imported).toEqual([
+      "https://patchwork.test/@/acct/packages/p@v0~list",
+      "https://patchwork.test/@/acct/packages/p@v1~list",
+    ]);
+    watcher.dispose();
+    await repo.shutdown().catch(() => {});
+  });
+
   it("says which package a loaded import url belongs to", async () => {
     const repo = new AutomergeRepo({ peerId: "tab" as PeerId });
     const source = folderSource(repo);
