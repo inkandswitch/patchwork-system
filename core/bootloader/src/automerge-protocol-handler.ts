@@ -64,7 +64,7 @@ async function registerAccount({ url }: RegisterAccountMessage) {
     const { documentId } = parseAutomergeUrl(url as AutomergeUrl);
     accounts.set(await idhash(documentId), url as AutomergeUrl);
   } catch (error) {
-    console.warn(`ignoring a register-account for ${url}`, error);
+    console.warn("ignoring a register-account for %s", url, error);
   }
 }
 

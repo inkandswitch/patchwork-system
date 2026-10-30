@@ -504,7 +504,7 @@ async function serveHandoff(
       const copy = response.clone();
       fetchEvent.waitUntil(
         cache.put(fetchEvent.request, copy).catch((error) => {
-          console.warn(`error caching ${handoffURL} in ${cachename}`, error);
+          console.warn("error caching %s in %s", handoffURL, cachename, error);
         })
       );
     }
@@ -584,7 +584,7 @@ async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response
         work.catch((error) => {
           // Always loud, as for the page cache: a QuotaExceededError here
           // is the first sign the origin is under storage pressure.
-          console.warn(`error keeping /@/${path}`, error);
+          console.warn("error keeping /@/%s", path, error);
         })
       ),
   };
@@ -599,11 +599,12 @@ async function servePath(fetchEvent: FetchEvent, path: string): Promise<Response
       lifecycle("warn", `failing /@/${path}: ${(error as Error).message}`);
       throw error;
     }
-    console.error(`service worker error serving /@/${path}`, error);
-    return new Response(
-      error instanceof Error ? `${error.message}\n\n${error.stack}` : String(error),
-      { status: 556, headers: { "content-type": "text/plain" } }
-    );
+    console.error("service worker error serving /@/%s", path, error);
+    // The stack is in the console above; the page gets the message only.
+    return new Response(error instanceof Error ? error.message : "service worker error", {
+      status: 556,
+      headers: { "content-type": "text/plain" },
+    });
   }
 }
 

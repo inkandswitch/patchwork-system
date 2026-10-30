@@ -241,7 +241,9 @@ async function resolveWalkPath(
   try {
     parsePath(path);
   } catch (error) {
-    return new Response(String(error), { status: 400 });
+    return new Response(error instanceof Error ? error.message : "malformed path", {
+      status: 400,
+    });
   }
   const missing = new Set<string>();
   const options = { accounts, providers, find: waitingFind(repo, signal, missing) };
