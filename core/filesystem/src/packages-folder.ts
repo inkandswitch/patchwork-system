@@ -182,8 +182,9 @@ async function lookUpViaServiceWorker(path: string): Promise<string> {
 
 /**
  * A tracker for the packages under `/packages`: `findLatest` answers with the
- * package's pinned `/@/` URL, which the ModuleWatcher imports as an http
- * package. Anything else goes to `fallback`, which also does the watching.
+ * package's pinned `/@/` URL, which the ModuleWatcher imports through its
+ * package import (in a browser, discovered in the module-loader worker).
+ * Anything else goes to `fallback`, which also does the watching.
  */
 export function trackPackagesFolder(
   acctHash: Promise<string>,
@@ -210,7 +211,7 @@ export function trackPackagesFolder(
         return previous as AutomergeUrl;
       }
       known.set(documentId, latest);
-      // Not an automerge URL: the watcher imports it with importPackageFromHttpUrl.
+      // Not an automerge URL: the watcher hands it to its package import as it is.
       return latest as AutomergeUrl;
     },
     watch(url, onChange) {
