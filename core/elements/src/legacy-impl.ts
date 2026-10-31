@@ -411,7 +411,10 @@ export class LegacyImpl {
               isChosenTool) ||
             (this.#state == "fallback" && isFallbackTool)
           ) {
-            if (loadedTool.importUrl !== this.#tool?.importUrl) {
+            if (
+              loadedTool.id !== this.#tool?.id ||
+              loadedTool.importUrl !== this.#tool?.importUrl
+            ) {
               await this.#teardown();
               void this.#init();
             }
