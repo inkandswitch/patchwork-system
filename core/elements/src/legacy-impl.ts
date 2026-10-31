@@ -430,7 +430,10 @@ export class LegacyImpl {
       if (!type) return;
       if (added.id != type && !getSupertypes(type).includes(added.id)) return;
       const fallback = getFallbackTool(this.#handle.doc());
-      if (!fallback || fallback.id == this.#fallbackId) return;
+      if (!fallback) return;
+      if (fallback.id == this.#fallbackId && this.#state != State.unable) {
+        return;
+      }
       this.#fallbackId = fallback.id;
       if (!fallback.module) {
         // The "loaded" listener mounts it once it's in.
