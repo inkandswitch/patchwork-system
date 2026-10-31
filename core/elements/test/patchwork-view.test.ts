@@ -241,6 +241,21 @@ describe("patchwork-view (legacy mode)", () => {
     expect(raw.mounts).toBe(0);
   });
 
+  it("breaks ties between equally near supertypes by tool id", async () => {
+    const tldraw = registerTool(`test-a-tldraw-${++seq}`, ["test-tldraw"]);
+    const folder = registerTool(`test-z-folder-${++seq}`, ["test-folder"]);
+    registerDatatype("test-equal-supertype-sketchbox", [
+      "test-folder",
+      "test-tldraw",
+    ]);
+
+    mount({ "@patchwork": { type: "test-equal-supertype-sketchbox" } });
+    await settle();
+
+    expect(tldraw.mounts).toBe(1);
+    expect(folder.mounts).toBe(0);
+  });
+
   it("prefers the nearest supertype's tool", async () => {
     const far = registerTool(`test-a-far-${++seq}`, ["test-file"]);
     const near = registerTool(`test-z-near-${++seq}`, ["test-text"]);

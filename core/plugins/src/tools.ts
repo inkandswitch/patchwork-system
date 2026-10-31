@@ -13,7 +13,7 @@ import {
   type HasPatchworkMetadata,
 } from "@inkandswitch/patchwork-filesystem";
 import { getRegistry } from "./registry/index.js";
-import { getSupertypes } from "./datatypes.js";
+import { getSupertypes, type DatatypeDescription } from "./datatypes.js";
 
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
@@ -60,17 +60,36 @@ function datatypesOf(tool: ToolDescription): string[] {
   return datatypes === "*" ? ["*"] : datatypes;
 }
 
+function datatypeDepths(type: string): Map<string, number> {
+  const registry = getRegistry<DatatypeDescription>("patchwork:datatype");
+  const depths = new Map([[type, 0]]);
+  const queue = [type];
+  for (let i = 0; i < queue.length; i++) {
+    const current = queue[i];
+    for (const parent of registry.get(current)?.conformsTo ?? []) {
+      if (depths.has(parent)) continue;
+      depths.set(parent, depths.get(current)! + 1);
+      queue.push(parent);
+    }
+  }
+  return depths;
+}
+
 /**
- * How well `tool` fits a doc whose type and supertypes are `types` (as
- * `[type, ...getSupertypes(type)]`): the index of the nearest one it names,
- * `types.length` if it only matches through a `*` wildcard, or `undefined` if
- * it doesn't support the doc at all. Lower is a closer fit.
+ * How well `tool` fits a doc: the minimum inheritance depth of a datatype it
+ * names, the depth after the farthest supertype for a `*` wildcard, or
+ * `undefined` if it doesn't support the doc. Lower is a closer fit.
  */
-function matchRank(tool: ToolDescription, types: string[]): number | undefined {
+function matchRank(
+  tool: ToolDescription,
+  depths: Map<string, number>
+): number | undefined {
   const datatypes = datatypesOf(tool);
-  const index = types.findIndex((type) => datatypes.includes(type));
-  if (index >= 0) return index;
-  if (datatypes.includes("*")) return types.length;
+  const namedDepths = datatypes
+    .map((type) => depths.get(type))
+    .filter((depth): depth is number => depth !== undefined);
+  if (namedDepths.length > 0) return Math.min(...namedDepths);
+  if (datatypes.includes("*")) return depths.size;
   return undefined;
 }
 
@@ -79,9 +98,9 @@ function matchRank(tool: ToolDescription, types: string[]): number | undefined {
  * {@link getSupertypes}), and wildcard tools.
  */
 export function getSupportedToolsForType(type: string): LoadedTool[] {
-  const types = [type, ...getSupertypes(type)];
+  const depths = datatypeDepths(type);
   const plugins = getRegistry<ToolDescription>("patchwork:tool").filter(
-    (desc) => matchRank(desc, types) !== undefined
+    (desc) => matchRank(desc, depths) !== undefined
   );
 
   return plugins as LoadedTool[];
@@ -100,11 +119,12 @@ export function getSupportedTools(doc: HasPatchworkMetadata): LoadedTool[] {
 export function getFallbackTool(doc: HasPatchworkMetadata) {
   const type = getType(doc);
   if (!type) return undefined;
-  const types = [type, ...getSupertypes(type)];
+  const depths = datatypeDepths(type);
   return getSupportedToolsForType(type)
     .filter((tool) => !tool.unlisted)
     .sort(
       (a, b) =>
-        matchRank(a, types)! - matchRank(b, types)! || a.id.localeCompare(b.id)
+        matchRank(a, depths)! - matchRank(b, depths)! ||
+        a.id.localeCompare(b.id)
     )[0];
 }
