@@ -87,6 +87,7 @@
     "@inkandswitch/patchwork-filesystem": "workspace:^",
     "@inkandswitch/patchwork-plugins": "workspace:^",
     "@inkandswitch/patchwork-providers": "workspace:^",
+    "@inkandswitch/patchwork-undo": "workspace:^",
     "@types/debug": "^4.1.13",
     "debug": "^4.4.3",
     "esbuild": "^0.23.1",

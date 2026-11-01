@@ -37,10 +37,34 @@ type Unsubscribe = () => void;
  * must be reachable from `value`, and is neutered on this side once sent.
  */
 type Respond<T> = (value: T, transfer?: Transferable[]) => void;
-type Producer<T> = (respond: Respond<T>) => Unsubscribe | void;
+
+/**
+ * What a producer gets besides `respond`: `onCommand` registers a handler for
+ * the commands the consumer sends with {@link Connection.send}.
+ */
+export type AcceptContext<C = JSONValue> = {
+  onCommand(handler: (command: C) => void): void;
+};
+
+type Producer<T, C = JSONValue> = (
+  respond: Respond<T>,
+  context: AcceptContext<C>
+) => Unsubscribe | void;
 
 type ChangeMessage<T> = { type: "change"; value: T };
 type UnsubscribeMessage = { type: "unsubscribe" };
+type CommandMessage<C> = { type: "command"; value: C };
+
+/**
+ * A subscription the consumer can also talk back on: `send` posts a command
+ * to the answering provider over the subscription's own port, `close`
+ * unsubscribes. Commands sent before a provider answers are queued by the
+ * port and delivered once it does; with no provider they go nowhere.
+ */
+export type Connection<C = JSONValue> = {
+  send(command: C): void;
+  close(): void;
+};
 
 declare global {
   interface ElementEventMap {
@@ -79,6 +103,21 @@ export function subscribe<T extends JSONValue = JSONValue>(
   selector: Selector,
   listener: Listener<T>
 ): Unsubscribe {
+  return connect<T>(element, selector, listener).close;
+}
+
+/**
+ * {@link subscribe}, plus a way back: the returned connection's `send` posts
+ * a command to the answering provider, which receives it through the
+ * `onCommand` of its {@link accept} producer. Commands travel on the
+ * subscription's own port, so they reach exactly the provider that answered,
+ * in whatever realm it lives, and stop with the subscription.
+ */
+export function connect<T extends JSONValue = JSONValue, C = JSONValue>(
+  element: HTMLElement,
+  selector: Selector,
+  listener: Listener<T>
+): Connection<C> {
   const view = element.closest<HTMLElement>([...viewTags].join(","));
   const dispatchEl = view ?? element;
 
@@ -111,11 +150,17 @@ export function subscribe<T extends JSONValue = JSONValue>(
     })
   );
 
-  return () => {
-    if (signal.aborted) return;
-    controller.abort();
-    port.postMessage({ type: "unsubscribe" });
-    port.close();
+  return {
+    send(command) {
+      if (signal.aborted) return;
+      port.postMessage({ type: "command", value: command });
+    },
+    close() {
+      if (signal.aborted) return;
+      controller.abort();
+      port.postMessage({ type: "unsubscribe" });
+      port.close();
+    },
   };
 }
 
@@ -132,10 +177,14 @@ export function subscribe<T extends JSONValue = JSONValue>(
  * that can't be (or is expensive to) structured-clone, e.g. a `MessagePort`
  * or a large `ArrayBuffer`. `T` is left unconstrained for this reason — once
  * you transfer, the value is no longer plain JSON.
+ *
+ * The producer's second argument, `context`, carries `onCommand`: handlers
+ * registered there receive what a consumer opened with {@link connect}
+ * sends. Commands arriving after the subscription ended are dropped.
  */
-export function accept<T = JSONValue>(
+export function accept<T = JSONValue, C = JSONValue>(
   event: SubscribeEvent,
-  producer: Producer<T>
+  producer: Producer<T, C>
 ): void {
   event.stopPropagation();
   const port = event.detail.port;
@@ -146,9 +195,16 @@ export function accept<T = JSONValue>(
     port.postMessage({ type: "change", value }, transfer ?? []);
   };
 
+  const commandHandlers: Array<(command: C) => void> = [];
+  const context: AcceptContext<C> = {
+    onCommand(handler) {
+      commandHandlers.push(handler);
+    },
+  };
+
   let teardown: Unsubscribe | void;
   try {
-    teardown = producer(respond);
+    teardown = producer(respond, context);
   } catch (err) {
     console.error("[patchwork-providers] subscribe producer threw:", err);
   }
@@ -164,8 +220,19 @@ export function accept<T = JSONValue>(
     port.close();
   };
 
-  port.onmessage = (event: MessageEvent<UnsubscribeMessage>) => {
+  port.onmessage = (
+    event: MessageEvent<UnsubscribeMessage | CommandMessage<C>>
+  ) => {
     if (event.data?.type === "unsubscribe") stop();
+    else if (event.data?.type === "command" && alive) {
+      for (const handler of commandHandlers) {
+        try {
+          handler(event.data.value);
+        } catch (err) {
+          console.error("[patchwork-providers] command handler threw:", err);
+        }
+      }
+    }
   };
 }
 

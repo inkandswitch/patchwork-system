@@ -16,24 +16,32 @@
   ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsc -w --preserveWatchOutput"
+    "dev": "tsc -w --preserveWatchOutput",
+    "test": "vitest run"
   },
   "author": "Ink & Switch",
   "license": "ISC",
   "dependencies": {
-    "@inkandswitch/patchwork-providers": "workspace:^"
+    "@inkandswitch/patchwork-providers": "workspace:^",
+    "@inkandswitch/patchwork-undo": "workspace:^"
   },
   "peerDependencies": {
+    "@automerge/automerge": "*",
     "@automerge/automerge-repo": "*",
     "@automerge/automerge-repo-react-hooks": "*",
     "react": "^18.0.0"
   },
   "devDependencies": {
+    "@automerge/automerge": "catalog:",
     "@automerge/automerge-repo": "catalog:",
     "@automerge/automerge-repo-react-hooks": "catalog:",
+    "@automerge/automerge-subduction": "catalog:",
     "@types/react": "catalog:",
+    "happy-dom": "^20.0.0",
     "react": "catalog:",
-    "typescript": "^5.9.3"
+    "react-dom": "catalog:",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.6"
   },
   "repository": {
     "type": "git",

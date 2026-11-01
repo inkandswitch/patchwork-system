@@ -1,3 +1,59 @@
+diff --git a/dist/Document.d.ts b/dist/Document.d.ts
+index bcd42dda1aaa18d668f3ccbd849f204fe96f23a3..7cbef37741476742fd3d935e9d82a35f6632370b 100644
+--- a/dist/Document.d.ts
++++ b/dist/Document.d.ts
+@@ -23,7 +23,7 @@ export declare class Document<T = unknown> {
+     deleted: boolean;
+     /** Sync-info lookup injected by `Repo` from its `SyncStateTracker`. */
+     syncInfoLookup?: (storageId: StorageId) => SyncInfo | undefined;
+-    constructor(documentId: DocumentId, initialDoc: A.Doc<T>, syncInfoLookup?: (storageId: StorageId) => SyncInfo | undefined);
++    constructor(documentId: DocumentId, initialDoc: A.Doc<T>, syncInfoLookup?: (storageId: StorageId) => SyncInfo | undefined, author?: string);
+     /**
+      * The whole document at `heads` (the live snapshot when `heads` is
+      * undefined). Views are memoized per snapshot so repeated reads from
+diff --git a/dist/Document.js b/dist/Document.js
+index 8b7451d670660b1ff9376e22f7e4548c4d6056b8..b45ff78fdb18841ed42079fde8427f42342a95ce 100644
+--- a/dist/Document.js
++++ b/dist/Document.js
+@@ -27,9 +27,11 @@ export class Document {
+      * heads, and `A.view` at a historical point is identical regardless.
+      */
+     #viewCache = new Map();
+-    constructor(documentId, initialDoc, syncInfoLookup) {
++    #author;
++    constructor(documentId, initialDoc, syncInfoLookup, author) {
+         this.documentId = documentId;
+-        this.doc = initialDoc;
++        this.#author = author;
++        this.doc = withAuthor(initialDoc, author);
+         this.syncInfoLookup = syncInfoLookup;
+         this.registry = new HandleRegistry(this);
+         this.log = makeLogger(`automerge-repo:doc:${documentId.slice(0, 5)}`);
+@@ -57,7 +59,7 @@ export class Document {
+      */
+     applyMutation(mutator) {
+         const before = this.doc;
+-        const after = mutator(before);
++        const after = withAuthor(mutator(before), this.#author);
+         // Always adopt the new snapshot even when heads are unchanged -
+         // `A.change` can hand back a fresh snapshot whose `before` is now
+         // "outdated" for subsequent mutations.
+@@ -77,6 +79,15 @@ export class Document {
+         }
+     }
+ }
++/**
++ * Give `doc` the author for its own actor. Automerge records the author in the
++ * actor's first change, so this has to happen before that change.
++ */
++function withAuthor(doc, author) {
++    if (author && A.getAuthor(doc) !== author)
++        A.getBackend(doc).setAuthor(author);
++    return doc;
++}
+ function arrayEqual(a, b) {
+     if (a.length !== b.length)
+         return false;
 diff --git a/dist/DocumentSource.d.ts b/dist/DocumentSource.d.ts
 index 08d36a6efcf9b93ba170dfe8a6a54e51a1b8f92d..fafdbda628f968bb266588d5a45192f5fb965cde 100644
 --- a/dist/DocumentSource.d.ts
@@ -12,7 +68,7 @@ index 08d36a6efcf9b93ba170dfe8a6a54e51a1b8f92d..fafdbda628f968bb266588d5a45192f5
      /**
       * Optional: drain any pending writes for the given documents (or all
 diff --git a/dist/Repo.d.ts b/dist/Repo.d.ts
-index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..d1839005b1a01612be7bd85e9369443f81e7af3a 100644
+index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..743073e4352fb23d84ecfda4daa347c2d16d5bc8 100644
 --- a/dist/Repo.d.ts
 +++ b/dist/Repo.d.ts
 @@ -36,7 +36,7 @@ export declare class Repo extends EventEmitter<RepoEvents> {
@@ -20,7 +76,7 @@ index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..d1839005b1a01612be7bd85e9369443f
      /** @hidden */
      peerMetadataByPeerId: Record<PeerId, PeerMetadata>;
 -    constructor({ storage, network, peerId, sharePolicy, shareConfig, isEphemeral, enableRemoteHeadsGossiping, denylist, saveDebounceRate, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, }?: RepoConfig);
-+    constructor({ storage, network, peerId, sharePolicy, shareConfig, isEphemeral, enableRemoteHeadsGossiping, denylist, saveDebounceRate, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, subductionSaveThrottle, headsChannel, }?: RepoConfig);
++    constructor({ storage, network, peerId, sharePolicy, shareConfig, isEphemeral, enableRemoteHeadsGossiping, denylist, saveDebounceRate, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, subductionSaveThrottle, headsChannel, author, }?: RepoConfig);
      /** Returns all the handles we have cached. */
      get handles(): Record<DocumentId, DocHandle<any>>;
      /** Returns a list of all connected peer ids */
@@ -38,7 +94,7 @@ index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..d1839005b1a01612be7bd85e9369443f
      }[];
      /**
       * Tunable timeouts for the Subduction sync engine and its
-@@ -284,6 +287,12 @@ export interface RepoConfig {
+@@ -284,6 +287,19 @@ export interface RepoConfig {
       * `storage` when only one of the two Repos runs the interceptor.
       */
      subductionBlobInterceptor?: BlobInterceptor;
@@ -48,23 +104,34 @@ index 15d4ca65aa613fb567335f09c8fcb8cb9c4a954a..d1839005b1a01612be7bd85e9369443f
 +     */
 +    subductionSaveThrottle?: number;
 +    headsChannel?: string;
++    /**
++     * The Automerge author every document this Repo opens or creates records
++     * for its own actor: a hex string, written into the actor's first change.
++     * Automerge keeps it on the document's backend, which a load into an empty
++     * document replaces, so the Repo sets it again after every mutation.
++     */
++    author?: string;
  }
  /** A function that determines whether we should share a document with a peer
   *
 diff --git a/dist/Repo.js b/dist/Repo.js
-index adfddd9b3926510604274217c42f97f104e119a3..6662564892a1ba850e12072fac41bf37f644a826 100644
+index adfddd9b3926510604274217c42f97f104e119a3..9d10c4017708e07066a860eae640aea1d6859629 100644
 --- a/dist/Repo.js
 +++ b/dist/Repo.js
-@@ -57,7 +57,7 @@ export class Repo extends EventEmitter {
+@@ -57,9 +57,11 @@ export class Repo extends EventEmitter {
      #subductionEphemeralCount = 0;
      #idFactory;
      #peerId;
 -    constructor({ storage, network = [], peerId = randomPeerId(), sharePolicy, shareConfig, isEphemeral = storage === undefined, enableRemoteHeadsGossiping = false, denylist = [], saveDebounceRate = 100, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, } = {}) {
-+    constructor({ storage, network = [], peerId = randomPeerId(), sharePolicy, shareConfig, isEphemeral = storage === undefined, enableRemoteHeadsGossiping = false, denylist = [], saveDebounceRate = 100, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, subductionSaveThrottle, headsChannel, } = {}) {
++    #author;
++    constructor({ storage, network = [], peerId = randomPeerId(), sharePolicy, shareConfig, isEphemeral = storage === undefined, enableRemoteHeadsGossiping = false, denylist = [], saveDebounceRate = 100, idFactory, signer, subductionPolicy, subductionWebsocketEndpoints, subductionAdapters, subductionTimeouts, subductionCompactionDeleteConcurrency, subductionBlobInterceptor, subductionSaveThrottle, headsChannel, author, } = {}) {
          super();
          this.#peerId = peerId;
++        this.#author = author;
          this.#remoteHeadsGossipingEnabled = enableRemoteHeadsGossiping;
-@@ -119,6 +119,8 @@ export class Repo extends EventEmitter {
+         this.#idFactory = idFactory || null;
+         // Handle legacy sharePolicy
+@@ -119,6 +121,8 @@ export class Repo extends EventEmitter {
              timeouts: subductionTimeouts,
              compactionDeleteConcurrency: subductionCompactionDeleteConcurrency,
              blobInterceptor: subductionBlobInterceptor,
@@ -73,7 +140,53 @@ index adfddd9b3926510604274217c42f97f104e119a3..6662564892a1ba850e12072fac41bf37
              onRemoteHeadsChanged: (documentId, storageId, heads, timestamp) => {
                  const handle = this.#queries[documentId]?.handle;
                  if (handle) {
-@@ -702,11 +704,10 @@ export class Repo extends EventEmitter {
+@@ -314,7 +318,7 @@ export class Repo extends EventEmitter {
+         if (existing) {
+             return existing;
+         }
+-        const document = new Document(documentId, initialDoc ?? Automerge.init(), storageId => this.#syncStateTracker.getSyncInfo(documentId, storageId));
++        const document = new Document(documentId, initialDoc ?? Automerge.init(), storageId => this.#syncStateTracker.getSyncInfo(documentId, storageId), this.#author);
+         const handle = new DocHandle(document, {});
+         const query = new DocumentQuery(handle, this.#sources);
+         this.#queries[documentId] = query;
+@@ -407,6 +411,10 @@ export class Repo extends EventEmitter {
+         }
+         return this.#subductionSource.getSubduction();
+     }
++    /** A new document's first change is made before its `Document` exists. */
++    #initOptions() {
++        return this.#author ? { author: this.#author } : {};
++    }
+     getStorageIdOfPeer(peerId) {
+         return this.peerMetadataByPeerId[peerId]?.storageId;
+     }
+@@ -419,10 +427,10 @@ export class Repo extends EventEmitter {
+         let initialDoc;
+         // If the initial value is an empty object, use the empty change initialisation path instead of the from path
+         if (isPlainObject(initialValue) && hasAtLeastOneKey(initialValue)) {
+-            initialDoc = Automerge.from(initialValue);
++            initialDoc = Automerge.from(initialValue, this.#initOptions());
+         }
+         else {
+-            initialDoc = Automerge.emptyChange(Automerge.init());
++            initialDoc = Automerge.emptyChange(Automerge.init(this.#initOptions()));
+         }
+         const { documentId } = parseAutomergeUrl(generateAutomergeUrl());
+         const query = this.#ensureQuery(documentId, initialDoc);
+@@ -446,10 +454,10 @@ export class Repo extends EventEmitter {
+         // nicer way to achieve this.
+         let initialDoc;
+         if (initialValue) {
+-            initialDoc = Automerge.from(initialValue);
++            initialDoc = Automerge.from(initialValue, this.#initOptions());
+         }
+         else {
+-            initialDoc = Automerge.emptyChange(Automerge.init());
++            initialDoc = Automerge.emptyChange(Automerge.init(this.#initOptions()));
+         }
+         let { documentId } = parseAutomergeUrl(generateAutomergeUrl());
+         if (this.#idFactory) {
+@@ -702,11 +710,10 @@ export class Repo extends EventEmitter {
       * @param documentId - documentId of the DocHandle to remove from handleCache, if present in cache.
       */
      async removeFromCache(documentId) {
@@ -992,6 +1105,55 @@ index 4692619444edfae0ef5f111cef6ce29499507afa..8625c93795d5870df6472d144725aae1
          this.#storage.close();
          await this.#awaitStorageIdle();
      }
+diff --git a/src/Document.ts b/src/Document.ts
+index 71d5299a2f0aa5918fa0c1302b5abdcd650c1ea3..8ee58272c401978262b6c00cc76b87e19cf1412e 100644
+--- a/src/Document.ts
++++ b/src/Document.ts
+@@ -35,14 +35,17 @@ export class Document<T = unknown> {
+    * heads, and `A.view` at a historical point is identical regardless.
+    */
+   #viewCache = new Map<string, A.Doc<T>>()
++  #author: string | undefined
+ 
+   constructor(
+     documentId: DocumentId,
+     initialDoc: A.Doc<T>,
+-    syncInfoLookup?: (storageId: StorageId) => SyncInfo | undefined
++    syncInfoLookup?: (storageId: StorageId) => SyncInfo | undefined,
++    author?: string
+   ) {
+     this.documentId = documentId
+-    this.doc = initialDoc
++    this.#author = author
++    this.doc = withAuthor(initialDoc, author)
+     this.syncInfoLookup = syncInfoLookup
+     this.registry = new HandleRegistry(this)
+     this.log = makeLogger(`automerge-repo:doc:${documentId.slice(0, 5)}`)
+@@ -71,7 +74,7 @@ export class Document<T = unknown> {
+    */
+   applyMutation(mutator: (doc: A.Doc<any>) => A.Doc<any>): void {
+     const before = this.doc
+-    const after = mutator(before)
++    const after = withAuthor(mutator(before), this.#author)
+     // Always adopt the new snapshot even when heads are unchanged -
+     // `A.change` can hand back a fresh snapshot whose `before` is now
+     // "outdated" for subsequent mutations.
+@@ -91,6 +94,15 @@ export class Document<T = unknown> {
+   }
+ }
+ 
++/**
++ * Give `doc` the author for its own actor. Automerge records the author in the
++ * actor's first change, so this has to happen before that change.
++ */
++function withAuthor<D>(doc: A.Doc<D>, author: string | undefined): A.Doc<D> {
++  if (author && A.getAuthor(doc) !== author) A.getBackend(doc).setAuthor(author)
++  return doc
++}
++
+ function arrayEqual(a: readonly string[], b: readonly string[]): boolean {
+   if (a.length !== b.length) return false
+   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
 diff --git a/src/DocumentSource.ts b/src/DocumentSource.ts
 index 363cbbad5af3f2db28ed5fa0ca85ca584a60bb49..d9eb3c5d8429607480867bf105d0e772ba1aecfd 100644
 --- a/src/DocumentSource.ts
@@ -1006,19 +1168,32 @@ index 363cbbad5af3f2db28ed5fa0ca85ca584a60bb49..d9eb3c5d8429607480867bf105d0e772
    shareConfigChanged(): void
  
 diff --git a/src/Repo.ts b/src/Repo.ts
-index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..e784353a779c092f418b0e0f15d1bb6e7182f47d 100644
+index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..1f8e94b9380cd6e6fd78818deba134b6c047b69d 100644
 --- a/src/Repo.ts
 +++ b/src/Repo.ts
-@@ -136,6 +136,8 @@ export class Repo extends EventEmitter<RepoEvents> {
+@@ -117,6 +117,7 @@ export class Repo extends EventEmitter<RepoEvents> {
+   #subductionEphemeralCount = 0
+   #idFactory: ((initialHeads: Heads) => Promise<Uint8Array>) | null
+   #peerId: PeerId
++  #author: string | undefined
+ 
+   constructor({
+     storage,
+@@ -136,9 +137,13 @@ export class Repo extends EventEmitter<RepoEvents> {
      subductionTimeouts,
      subductionCompactionDeleteConcurrency,
      subductionBlobInterceptor,
 +    subductionSaveThrottle,
 +    headsChannel,
++    author,
    }: RepoConfig = {}) {
      super()
      this.#peerId = peerId
-@@ -213,6 +215,8 @@ export class Repo extends EventEmitter<RepoEvents> {
++    this.#author = author
+     this.#remoteHeadsGossipingEnabled = enableRemoteHeadsGossiping
+ 
+     this.#idFactory = idFactory || null
+@@ -213,6 +218,8 @@ export class Repo extends EventEmitter<RepoEvents> {
        timeouts: subductionTimeouts,
        compactionDeleteConcurrency: subductionCompactionDeleteConcurrency,
        blobInterceptor: subductionBlobInterceptor,
@@ -1027,7 +1202,53 @@ index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..e784353a779c092f418b0e0f15d1bb6e
        onRemoteHeadsChanged: (documentId, storageId, heads, timestamp) => {
          const handle = this.#queries[documentId]?.handle
          if (handle) {
-@@ -930,11 +934,12 @@ export class Repo extends EventEmitter<RepoEvents> {
+@@ -479,7 +486,8 @@ export class Repo extends EventEmitter<RepoEvents> {
+     const document = new Document(
+       documentId,
+       initialDoc ?? Automerge.init(),
+-      storageId => this.#syncStateTracker.getSyncInfo(documentId, storageId)
++      storageId => this.#syncStateTracker.getSyncInfo(documentId, storageId),
++      this.#author
+     )
+     const handle = new DocHandle(document, {})
+     const query = new DocumentQuery(handle, this.#sources)
+@@ -590,6 +598,11 @@ export class Repo extends EventEmitter<RepoEvents> {
+     return this.#subductionSource.getSubduction()
+   }
+ 
++  /** A new document's first change is made before its `Document` exists. */
++  #initOptions<T>(): Automerge.InitOptions<T> {
++    return this.#author ? { author: this.#author } : {}
++  }
++
+   getStorageIdOfPeer(peerId: PeerId): StorageId | undefined {
+     return this.peerMetadataByPeerId[peerId]?.storageId
+   }
+@@ -604,9 +617,9 @@ export class Repo extends EventEmitter<RepoEvents> {
+ 
+     // If the initial value is an empty object, use the empty change initialisation path instead of the from path
+     if (isPlainObject(initialValue) && hasAtLeastOneKey(initialValue)) {
+-      initialDoc = Automerge.from(initialValue)
++      initialDoc = Automerge.from(initialValue, this.#initOptions())
+     } else {
+-      initialDoc = Automerge.emptyChange(Automerge.init())
++      initialDoc = Automerge.emptyChange(Automerge.init(this.#initOptions()))
+     }
+ 
+     const { documentId } = parseAutomergeUrl(generateAutomergeUrl())
+@@ -635,9 +648,9 @@ export class Repo extends EventEmitter<RepoEvents> {
+     // nicer way to achieve this.
+     let initialDoc: Automerge.Doc<T>
+     if (initialValue) {
+-      initialDoc = Automerge.from(initialValue)
++      initialDoc = Automerge.from(initialValue, this.#initOptions())
+     } else {
+-      initialDoc = Automerge.emptyChange(Automerge.init())
++      initialDoc = Automerge.emptyChange(Automerge.init(this.#initOptions()))
+     }
+ 
+     let { documentId } = parseAutomergeUrl(generateAutomergeUrl())
+@@ -930,11 +943,12 @@ export class Repo extends EventEmitter<RepoEvents> {
     * @param documentId - documentId of the DocHandle to remove from handleCache, if present in cache.
     */
    async removeFromCache(documentId: DocumentId): Promise<void> {
@@ -1042,7 +1263,7 @@ index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..e784353a779c092f418b0e0f15d1bb6e
    }
  
    async shutdown() {
-@@ -1060,8 +1065,11 @@ export interface RepoConfig {
+@@ -1060,8 +1074,11 @@ export interface RepoConfig {
      adapter: NetworkAdapterInterface
      serviceName: string
      /** Whether to initiate ("connect") or accept ("accept") the subduction
@@ -1056,7 +1277,7 @@ index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..e784353a779c092f418b0e0f15d1bb6e
    }[]
  
    /**
-@@ -1088,6 +1096,14 @@ export interface RepoConfig {
+@@ -1088,6 +1105,22 @@ export interface RepoConfig {
     * `storage` when only one of the two Repos runs the interceptor.
     */
    subductionBlobInterceptor?: BlobInterceptor
@@ -1068,6 +1289,14 @@ index 0b408d6bda6582078083949c2fea63cfd0ef5e1b..e784353a779c092f418b0e0f15d1bb6e
 +  subductionSaveThrottle?: number
 +
 +  headsChannel?: string
++
++  /**
++   * The Automerge author every document this Repo opens or creates records
++   * for its own actor: a hex string, written into the actor's first change.
++   * Automerge keeps it on the document's backend, which a load into an empty
++   * document replaces, so the Repo sets it again after every mutation.
++   */
++  author?: string
  }
  
  /** A function that determines whether we should share a document with a peer

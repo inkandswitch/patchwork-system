@@ -1,0 +1,89 @@
+{
+  "name": "@inkandswitch/patchwork-undo",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
+    "directory": "packages/undo"
+  },
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Collaborative undo and redo of a realm's own edits to Automerge documents.",
+  "license": "MIT",
+  "author": "Ink & Switch",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w --preserveWatchOutput",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./codemirror": {
+      "import": "./dist/codemirror.js",
+      "types": "./dist/codemirror.d.ts"
+    },
+    "./tldraw": {
+      "import": "./dist/tldraw.js",
+      "types": "./dist/tldraw.d.ts"
+    },
+    "./prosemirror": {
+      "import": "./dist/prosemirror.js",
+      "types": "./dist/prosemirror.d.ts"
+    }
+  },
+  "peerDependencies": {
+    "@automerge/automerge": "*",
+    "@automerge/automerge-repo": "*",
+    "@codemirror/commands": "^6.0.0",
+    "@codemirror/state": "^6.0.0",
+    "@codemirror/view": "^6.0.0",
+    "prosemirror-state": "^1.0.0"
+  },
+  "devDependencies": {
+    "@automerge/automerge": "catalog:",
+    "@automerge/automerge-repo": "catalog:",
+    "@automerge/automerge-subduction": "catalog:",
+    "@automerge/prosemirror": "0.2.0",
+    "@codemirror/commands": "catalog:",
+    "@codemirror/state": "catalog:",
+    "@codemirror/view": "catalog:",
+    "@tldraw/editor": "5.5.2",
+    "happy-dom": "^20.0.0",
+    "prosemirror-history": "1.5.1",
+    "prosemirror-keymap": "1.2.3",
+    "prosemirror-model": "1.25.12",
+    "prosemirror-schema-basic": "1.2.5",
+    "prosemirror-state": "1.4.4",
+    "prosemirror-transform": "1.12.2",
+    "prosemirror-view": "1.42.6",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.6"
+  },
+  "dependencies": {
+    "@inkandswitch/patchwork-providers": "workspace:^"
+  },
+  "peerDependenciesMeta": {
+    "@codemirror/commands": {
+      "optional": true
+    },
+    "@codemirror/state": {
+      "optional": true
+    },
+    "@codemirror/view": {
+      "optional": true
+    },
+    "prosemirror-state": {
+      "optional": true
+    }
+  }
+}

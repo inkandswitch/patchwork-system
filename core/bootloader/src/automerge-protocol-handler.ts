@@ -14,6 +14,7 @@ import { initializeWasm } from "@automerge/automerge/slim";
 // eslint-disable-next-line
 // @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
 import initSubduction from "@automerge/automerge-subduction/slim";
+import type { Signer } from "@automerge/automerge-subduction/slim";
 
 import {
   Repo,
@@ -27,7 +28,7 @@ import type {
   SyncServerSelection,
 } from "@automerge/automerge-repo-keyhive";
 
-import { loadOrCreateSigner } from "./signer.js";
+import { loadOrCreateSigner, signerIdentity } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
 import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
@@ -116,8 +117,10 @@ async function buildRepo(): Promise<Repo> {
 
 async function buildPlainRepo(): Promise<Repo> {
   const storage = new IndexedDBStorageAdapter();
+  const signer = await loadOrCreateSigner(storage);
   return new Repo({
-    signer: await loadOrCreateSigner(storage),
+    signer,
+    author: signerIdentity(signer).verifyingKey,
     storage,
     peerId:
       `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
@@ -136,10 +139,17 @@ async function buildKeyhiveRepo(
   const { hive, repo } = await initializeAutomergeRepoKeyhive({
     // ARK injects an `idFactory` deriving document ids from keyhive. A site
     // can opt out of it with `keyhive: { useIdFactory: false }`.
-    createRepo: ({ idFactory, ...config }) =>
-      new Repo(
+    createRepo: ({ idFactory, ...repoConfig }) => {
+      // RepoConfig types the signer `unknown`; ARK's is a Subduction signer.
+      const signer = repoConfig.signer as Signer | undefined;
+      const config = {
+        ...repoConfig,
+        author: signer && signerIdentity(signer).verifyingKey,
+      };
+      return new Repo(
         syncServer.useIdFactory === false ? config : { ...config, idFactory }
-      ),
+      );
+    },
     storage: new IndexedDBStorageAdapter(keyhiveStorageName),
     peerIdSuffix:
       `${storagePrefix}-resolver` + Math.random().toString(36).slice(2),

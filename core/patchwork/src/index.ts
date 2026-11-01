@@ -36,6 +36,7 @@ import {
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
 import { registerPatchworkViewElement } from "@inkandswitch/patchwork-elements";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
+import { registerUndoProviderElement } from "@inkandswitch/patchwork-undo";
 import {
   type AccountDoc,
   type DatatypeDescription,
@@ -172,6 +173,17 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     const repoProvider = document.createElement("repo-provider");
     rootElement.parentElement!.insertBefore(repoProvider, rootElement);
     repoProvider.appendChild(rootElement);
+  }
+
+  // `<undo-provider>` answers `patchwork:undo`: host UI (an Edit menu, a
+  // toolbar button) learns each document's undo state through it and sends
+  // undo and redo to the realm that holds the history. Mounted with the
+  // repo provider, so every page has it.
+  registerUndoProviderElement();
+  if (!rootElement.closest("undo-provider")) {
+    const undoProvider = document.createElement("undo-provider");
+    rootElement.parentElement!.insertBefore(undoProvider, rootElement);
+    undoProvider.appendChild(rootElement);
   }
 
   registerPatchworkViewElement({ hive, repo });

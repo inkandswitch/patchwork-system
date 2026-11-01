@@ -1,5 +1,9 @@
 import type { StorageAdapterInterface } from "@automerge/automerge-repo/slim";
-import { MemorySigner } from "@automerge/automerge-subduction/slim";
+import {
+  MemorySigner,
+  PeerId,
+  type Signer,
+} from "@automerge/automerge-subduction/slim";
 
 const SIGNER_KEY = ["patchwork", "subduction-signer"];
 const SIGNER_LOCK = "patchwork-subduction-signer";
@@ -29,4 +33,22 @@ export async function loadOrCreateSigner(
     await storage.save(SIGNER_KEY, seed);
     return MemorySigner.fromBytes(seed);
   });
+}
+
+/**
+ * What a signer is known by: its Subduction peer id, and its verifying key in
+ * hex. Every Repo passes the key as its Automerge `author`, so a document's
+ * history tells which of its actors signed as this origin.
+ */
+export function signerIdentity(signer: Signer): {
+  peerId: string;
+  verifyingKey: string;
+} {
+  const key = signer.verifyingKey();
+  return {
+    peerId: new PeerId(key).toString(),
+    verifyingKey: Array.from(key, (byte) =>
+      byte.toString(16).padStart(2, "0")
+    ).join(""),
+  };
 }

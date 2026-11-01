@@ -97,7 +97,7 @@ export function buildHtml(options: PatchworkSiteOptions): string {
   }
 
   const body = [
-    `<repo-provider><patchwork-view id="root"></patchwork-view></repo-provider>`,
+    `<repo-provider><undo-provider><patchwork-view id="root"></patchwork-view></undo-provider></repo-provider>`,
     `<script type="module" src="${entry}"></script>`,
   ];
 

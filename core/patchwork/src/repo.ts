@@ -1,6 +1,9 @@
 import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
-import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
+import {
+  loadOrCreateSigner,
+  signerIdentity as identify,
+} from "@inkandswitch/patchwork-bootloader/signer";
 import {
   AUTOMERGE_WASM,
   SUBDUCTION_WASM,
@@ -13,6 +16,7 @@ import type {
 // eslint-disable-next-line
 // @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
 import initSubduction from "@automerge/automerge-subduction/slim";
+import type { Signer } from "@automerge/automerge-subduction/slim";
 import {
   keyhiveStorageName,
   storagePrefix,
@@ -75,15 +79,20 @@ export async function createRepo(): Promise<TabRepo> {
     const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
       await import("@automerge/automerge-repo-keyhive");
     initKeyhiveWasm();
+    let signerIdentity: SignerIdentity | undefined;
     const { hive, repo } = await initializeAutomergeRepoKeyhive({
       // ARK injects an `idFactory` deriving document ids from keyhive. A site
-      // can opt out of it with `keyhive: { useIdFactory: false }`.
-      createRepo: ({ idFactory, ...repoConfig }) =>
-        new Repo(
-          syncServer.useIdFactory === false
-            ? repoConfig
-            : { ...repoConfig, idFactory }
-        ),
+      // can opt out of it with `keyhive: { useIdFactory: false }`. It also
+      // injects the signer it derives from the keyhive active keypair.
+      createRepo: ({ idFactory, ...repoConfig }) => {
+        // RepoConfig types the signer `unknown`; ARK's is a Subduction signer.
+        const signer = repoConfig.signer as Signer | undefined;
+        signerIdentity = signer && identify(signer);
+        const config = { ...repoConfig, author: signerIdentity?.verifyingKey };
+        return new Repo(
+          syncServer.useIdFactory === false ? config : { ...config, idFactory }
+        );
+      },
       storage: new IndexedDBStorageAdapter(keyhiveStorageName),
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       automaticArchiveIngestion: true,
@@ -98,8 +107,8 @@ export async function createRepo(): Promise<TabRepo> {
         enableRemoteHeadsGossiping: true,
       },
     });
-    log("keyhive setup complete");
-    return { repo, hive };
+    log("keyhive setup complete, tab subduction identity:", signerIdentity);
+    return { repo, hive, signerIdentity };
   }
 
   // The signer is explicit rather than the Repo's internal default so that
@@ -107,6 +116,7 @@ export async function createRepo(): Promise<TabRepo> {
   // tab presents to the server can be shown on window.patchwork.
   const storage = new IndexedDBStorageAdapter();
   const signer = await loadOrCreateSigner(storage);
+  const signerIdentity = identify(signer);
   const repo = new Repo({
     signer,
     storage,
@@ -116,15 +126,8 @@ export async function createRepo(): Promise<TabRepo> {
     subductionSaveThrottle: SAVE_THROTTLE_MS,
     headsChannel: HEADS_CHANNEL,
     enableRemoteHeadsGossiping: true,
+    author: signerIdentity.verifyingKey,
   });
-  const signerIdentity = {
-    peerId: signer.peerId().toString(),
-    verifyingKey: (
-      signer.verifyingKey() as Uint8Array<ArrayBufferLike> & {
-        toHex(): string;
-      }
-    ).toHex(),
-  };
   log("repo created, tab subduction identity:", signerIdentity);
   return { repo, signerIdentity };
 }

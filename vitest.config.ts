@@ -6,6 +6,9 @@ export default defineConfig({
       "core/filesystem",
       "core/patchwork",
       "packages/edge-handles",
+      "packages/providers/frameworks/react",
+      "packages/providers/frameworks/solid",
+      "packages/undo",
     ],
   },
 });

@@ -83,6 +83,7 @@
     "@inkandswitch/patchwork-filesystem": "workspace:^",
     "@inkandswitch/patchwork-plugins": "workspace:^",
     "@inkandswitch/patchwork-providers": "workspace:^",
+    "@inkandswitch/patchwork-undo": "workspace:^",
     "@keyhive/keyhive": "catalog:",
     "@types/debug": "^4.1.13",
     "debug": "^4.4.3",

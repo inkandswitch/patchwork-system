@@ -18,6 +18,13 @@ import type {
   JSONValue,
   Selector,
 } from "@inkandswitch/patchwork-providers";
+import {
+  undoFor,
+  watchUndo,
+  type Undo,
+  type UndoOptions,
+  type UndoStatus,
+} from "@inkandswitch/patchwork-undo";
 
 export type ElementSource = HTMLElement | (() => HTMLElement | undefined);
 
@@ -174,4 +181,82 @@ export function subscribeDoc<T extends object>(
 
   const doc = () => (ready() ? (store as Doc<T>) : undefined);
   return [doc, handle];
+}
+
+export type UndoControls = {
+  /** The current binding; undefined until both element and handle exist. */
+  binding: Accessor<Undo | undefined>;
+  canUndo: Accessor<boolean>;
+  canRedo: Accessor<boolean>;
+  undo(): void;
+  redo(): void;
+  checkpoint(): void;
+};
+
+/**
+ * Undo and redo for a tool editing `handle`'s document, from the shared
+ * history of the realm (see `undoFor` in `@inkandswitch/patchwork-undo`).
+ * Binds the page-wide keys to `element`; re-binds when `handle` changes and
+ * releases the binding on cleanup.
+ */
+export function createUndo<T>(
+  element: ElementSource,
+  handle: Accessor<DocHandle<T> | undefined>,
+  options?: UndoOptions
+): UndoControls {
+  const [binding, setBinding] = createSignal<Undo | undefined>(undefined);
+  const [canUndo, setCanUndo] = createSignal(false);
+  const [canRedo, setCanRedo] = createSignal(false);
+  createEffect(() => {
+    const target = resolveElement(element);
+    const h = handle();
+    if (!target || !h) return;
+    const b = undoFor(target, h, options);
+    setBinding(() => b);
+    const unsubscribe = b.subscribe((s) => {
+      setCanUndo(s.canUndo);
+      setCanRedo(s.canRedo);
+    });
+    onCleanup(() => {
+      unsubscribe();
+      b.dispose();
+      setBinding(undefined);
+    });
+  });
+  return {
+    binding,
+    canUndo,
+    canRedo,
+    undo: () => void binding()?.undo(),
+    redo: () => void binding()?.redo(),
+    checkpoint: () => binding()?.checkpoint(),
+  };
+}
+
+/**
+ * For host UI (an Edit menu, a toolbar button): the undo state of the
+ * document at `url`, or of the one the user used last, and the commands to
+ * send it, through the `patchwork:undo` provider.
+ */
+export function undoStatus(
+  element: ElementSource,
+  url?: string
+): { status: Accessor<UndoStatus>; undo(): void; redo(): void } {
+  const [status, setStatus] = createSignal<UndoStatus>({
+    url: url ?? null,
+    canUndo: false,
+    canRedo: false,
+  });
+  let watch: ReturnType<typeof watchUndo> | undefined;
+  onMount(() => {
+    const target = resolveElement(element);
+    if (!target) return;
+    watch = watchUndo(target, url, setStatus);
+    onCleanup(() => watch?.close());
+  });
+  return {
+    status,
+    undo: () => watch?.undo(),
+    redo: () => watch?.redo(),
+  };
 }
