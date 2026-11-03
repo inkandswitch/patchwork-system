@@ -1,3 +1,5 @@
+import type { ArkVersion } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
+
 /**
  * The bundler-agnostic option shape for a Patchwork site's generated
  * static assets (icons, index.html, manifest.webmanifest, Netlify config).
@@ -35,6 +37,18 @@ export interface PatchworkNetlifyOptions {
 }
 
 export interface PatchworkKeyhiveOptions {
+  /**
+   * The automerge-repo-keyhive to build with, which has to be the one the
+   * sync server runs. `"0.8"` is the current stack. `"0.6"` is the previous
+   * one, from `@inkandswitch/patchwork-ark-0.6`: ARK 0.6, keyhive 0.3, and
+   * the automerge-repo and subduction they were built with, swapped in whole.
+   * It only knows subduction.sync.inkandswitch.com's identity.
+   *
+   * Defaults to `"0.6"` when `syncServers.subduction` is on
+   * subduction.sync.inkandswitch.com, which hasn't moved to 0.8 yet, and
+   * `"0.8"` anywhere else. Each keeps its keyhive state in its own database.
+   */
+  ark?: ArkVersion;
   /**
    * Use the `idFactory` ARK injects into the repo config, which derives
    * document ids from keyhive. Default true. `false` drops it and lets the

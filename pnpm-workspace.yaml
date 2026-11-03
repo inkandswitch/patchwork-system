@@ -20,6 +20,33 @@ overrides:
   "@keyhive/keyhive": "catalog:"
   solid-automerge: "catalog:"
 
+  # packages/ark-0.6 is the previous keyhive stack, kept whole for sync
+  # servers still on it. The overrides above would pull every piece of it onto
+  # the current pins, so it and each of its pieces keep their own.
+  "@inkandswitch/patchwork-ark-0.6>@automerge/automerge-repo": 2.6.0-subduction.48
+  "@inkandswitch/patchwork-ark-0.6>@automerge/automerge-repo-keyhive": 0.6.0-alpha.1
+  "@inkandswitch/patchwork-ark-0.6>@automerge/automerge-repo-network-broadcastchannel": 2.6.0-subduction.48
+  "@inkandswitch/patchwork-ark-0.6>@automerge/automerge-repo-network-messagechannel": 2.6.0-subduction.48
+  "@inkandswitch/patchwork-ark-0.6>@automerge/automerge-repo-network-websocket": 2.6.0-subduction.48
+  "@inkandswitch/patchwork-ark-0.6>@automerge/automerge-repo-storage-indexeddb": 2.6.0-subduction.48
+  "@inkandswitch/patchwork-ark-0.6>@automerge/automerge-subduction": 0.16.1
+  "@inkandswitch/patchwork-ark-0.6>@automerge/vanillajs": 2.6.0-subduction.48
+  "@inkandswitch/patchwork-ark-0.6>@keyhive/keyhive": 0.3.0-alpha.1
+  "@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@automerge/automerge-repo": 2.6.0-subduction.48
+  "@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@automerge/automerge-repo-network-websocket": 2.6.0-subduction.48
+  "@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@automerge/automerge-subduction": 0.16.1
+  "@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@keyhive/keyhive": 0.3.0-alpha.1
+  "@automerge/automerge-repo@2.6.0-subduction.48>@automerge/automerge-subduction": 0.16.1
+  "@automerge/automerge-repo-network-broadcastchannel@2.6.0-subduction.48>@automerge/automerge-repo": 2.6.0-subduction.48
+  "@automerge/automerge-repo-network-messagechannel@2.6.0-subduction.48>@automerge/automerge-repo": 2.6.0-subduction.48
+  "@automerge/automerge-repo-network-websocket@2.6.0-subduction.48>@automerge/automerge-repo": 2.6.0-subduction.48
+  "@automerge/automerge-repo-storage-indexeddb@2.6.0-subduction.48>@automerge/automerge-repo": 2.6.0-subduction.48
+  "@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo": 2.6.0-subduction.48
+  "@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo-network-broadcastchannel": 2.6.0-subduction.48
+  "@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo-network-messagechannel": 2.6.0-subduction.48
+  "@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo-network-websocket": 2.6.0-subduction.48
+  "@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo-storage-indexeddb": 2.6.0-subduction.48
+
 minimumReleaseAgeExclude:
   - "@automerge/*"
   - "@inkandswitch/*"
@@ -59,4 +86,5 @@ allowBuilds:
   esbuild: true
 
 patchedDependencies:
+  '@automerge/automerge-repo@2.6.0-subduction.48': patches/@automerge__automerge-repo@2.6.0-subduction.48.patch
   '@automerge/automerge-repo@2.6.0-subduction.49': patches/@automerge__automerge-repo@2.6.0-subduction.49.patch

@@ -26,7 +26,7 @@ import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 import { loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
-import { loadSyncServerIdentity } from "./keyhive-sync-server.js";
+import { keyhiveSyncServer, type ArkVersion } from "./keyhive-sync-server.js";
 import { startWorkerControl } from "./worker-control.js";
 import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
 import { createResolver } from "./resolver.js";
@@ -41,6 +41,7 @@ declare const __SYNC_SERVER__: {
   url: string;
   keyhive?: boolean;
   useIdFactory?: boolean;
+  ark?: ArkVersion;
 };
 
 const syncServer =
@@ -145,7 +146,7 @@ async function buildKeyhiveRepo(): Promise<{
       `${storagePrefix}-resolver` + Math.random().toString(36).slice(2),
     automaticArchiveIngestion: true,
     cachingMode: "periodic",
-    syncServer: await loadSyncServerIdentity(syncServer.url, keyhiveStorage),
+    syncServer: await keyhiveSyncServer(syncServer, keyhiveStorage),
     repo: {
       storage: new IndexedDBStorageAdapter(),
       subductionWebsocketEndpoints: [syncServer.url],

@@ -1,4 +1,5 @@
 import type { PatchworkSiteOptions } from "./options.js";
+import type { ArkVersion } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 
 // Mirrors core/bootloader/src/sync-config.ts's DEFAULT_CLASSIC_SYNC_SERVER
 // and automerge-protocol-handler-worker.ts's SUBDUCTION_SYNC_URL selection —
@@ -10,17 +11,27 @@ export const DEFAULT_SYNC_SERVERS = {
   subduction: "wss://subduction.sync.inkandswitch.com",
 };
 
+/** Sync servers still running ARK 0.6, by host. */
+const ARK_06_HOSTS = ["subduction.sync.inkandswitch.com"];
+
 export function resolvePrimarySyncServer(options: PatchworkSiteOptions): {
   url: string;
   keyhive?: boolean;
   useIdFactory?: boolean;
+  ark?: ArkVersion;
 } {
   const url =
     (options.syncServers || undefined)?.subduction ??
     DEFAULT_SYNC_SERVERS.subduction;
   if (!options.keyhive) return { url };
   const keyhive = options.keyhive === true ? {} : options.keyhive;
-  return { url, keyhive: true, useIdFactory: keyhive.useIdFactory ?? true };
+  return {
+    url,
+    keyhive: true,
+    useIdFactory: keyhive.useIdFactory ?? true,
+    ark:
+      keyhive.ark ?? (ARK_06_HOSTS.includes(new URL(url).host) ? "0.6" : "0.8"),
+  };
 }
 
 function wsToHttpOrigin(wsUrl: string): string {

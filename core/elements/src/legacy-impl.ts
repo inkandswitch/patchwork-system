@@ -23,6 +23,7 @@ import {
 } from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import { activeAccessForDoc } from "./keyhive-access.js";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 
 const log = debug("patchwork:elements:legacy");
@@ -323,8 +324,8 @@ export class LegacyImpl {
     if (this.#element.hive && this.#docUrl) {
       // Legacy (padded-zero) doc: skip keyhive gate
       if (isKeyhiveDoc(this.#docUrl)) {
-        const access = await this.#element.hive.accessForDoc(
-          this.#element.hive.active.individual.id,
+        const access = await activeAccessForDoc(
+          this.#element.hive,
           this.#docUrl
         );
         if (epoch !== this.#initEpoch) return;
@@ -559,8 +560,8 @@ export class LegacyImpl {
       let accessCheckSucceeded = false;
       try {
         if (!isKeyhiveDoc(this.#docUrl)) return;
-        const access = await this.#element.hive.accessForDoc(
-          this.#element.hive.active.individual.id,
+        const access = await activeAccessForDoc(
+          this.#element.hive,
           this.#docUrl
         );
         hasAccess = !!access;

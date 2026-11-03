@@ -14,7 +14,10 @@ import {
   keyhiveStorageName,
   storagePrefix,
 } from "@inkandswitch/patchwork-bootloader/storage";
-import { loadSyncServerIdentity } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
+import {
+  keyhiveSyncServer,
+  type ArkVersion,
+} from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 import type { SignerIdentity } from "./types.js";
 import debug from "debug";
 
@@ -24,6 +27,7 @@ declare const __SYNC_SERVER__: {
   url: string;
   keyhive?: boolean;
   useIdFactory?: boolean;
+  ark?: ArkVersion;
 };
 const syncServer =
   typeof __SYNC_SERVER__ !== "undefined"
@@ -87,7 +91,7 @@ export async function createRepo(): Promise<TabRepo> {
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
-      syncServer: await loadSyncServerIdentity(syncServer.url, keyhiveStorage),
+      syncServer: await keyhiveSyncServer(syncServer, keyhiveStorage),
       repo: {
         storage: new IndexedDBStorageAdapter(),
         subductionWebsocketEndpoints: [syncServer.url],

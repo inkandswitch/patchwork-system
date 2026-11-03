@@ -1,5 +1,6 @@
 import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import { activeAccessForDoc } from "./keyhive-access.js";
 import {
   getRegistry,
   isKeyhiveDoc,
@@ -318,10 +319,7 @@ export function registerPatchworkViewElement(
           const keyhiveDoc = isKeyhiveDoc(this.url);
 
           if (keyhiveDoc) {
-            const access = await params.hive.accessForDoc(
-              params.hive.active.individual.id,
-              this.url
-            );
+            const access = await activeAccessForDoc(params.hive, this.url);
             if (epoch !== this.#initEpoch) return;
             const accessLevel = access ? access.toString() : "None";
 
@@ -508,10 +506,7 @@ export function registerPatchworkViewElement(
           let accessCheckSucceeded = false;
           try {
             if (!isKeyhiveDoc(this.url)) return;
-            const access = await params.hive.accessForDoc(
-              params.hive.active.individual.id,
-              this.url
-            );
+            const access = await activeAccessForDoc(params.hive, this.url);
             hasAccess = !!access;
             accessCheckSucceeded = true;
           } catch {

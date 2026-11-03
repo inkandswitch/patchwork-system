@@ -14,9 +14,10 @@ import type { Plugin } from "vite";
  * would bundle it unpatched. The plugin applies the patch there too.
  *
  * The edits are upstream-shaped and meant to be deleted once subduction takes
- * them. Until then they are pinned to one automerge-repo version and every
- * hunk has to match, so a dependency bump fails the build instead of quietly
- * un-patching it.
+ * them. Until then each patch is pinned to one automerge-repo version and
+ * every hunk has to match, so a dependency bump fails the build instead of
+ * quietly un-patching it. There's one patch per version a build can bundle:
+ * the current one, and the one the ARK 0.6 stack brings (`keyhive.ark`).
  */
 const AUTOMERGE_REPO = "@automerge/automerge-repo";
 const PATCHES_DIR = fileURLToPath(new URL("../patches/", import.meta.url));
@@ -29,7 +30,8 @@ export type Hunk = {
   lines: string[];
 };
 
-type Patch = { version: string; files: Record<string, Hunk[]> };
+/** Each patch's hunks by the file they edit, by the version they're for. */
+type Patches = Map<string, Record<string, Hunk[]>>;
 
 export function parsePatch(text: string): Record<string, Hunk[]> {
   const files: Record<string, Hunk[]> = {};
@@ -60,20 +62,25 @@ export function parsePatch(text: string): Record<string, Hunk[]> {
   return files;
 }
 
-async function loadPatch(): Promise<Patch> {
+async function loadPatches(): Promise<Patches> {
   const names = await readdir(PATCHES_DIR).catch(() => [] as string[]);
   const found = names.filter(
     (name) => name.startsWith(PATCH_PREFIX) && name.endsWith(".patch")
   );
-  if (found.length !== 1) {
+  if (found.length === 0) {
     throw new Error(
-      `@inkandswitch/patchwork: expected exactly one ${PATCH_PREFIX}*.patch ` +
-        `in ${PATCHES_DIR}, found ${found.length}.`
+      `@inkandswitch/patchwork: expected a ${PATCH_PREFIX}*.patch in ` +
+        `${PATCHES_DIR}, found none.`
     );
   }
-  const version = found[0].slice(PATCH_PREFIX.length, -".patch".length);
-  const text = await readFile(join(PATCHES_DIR, found[0]), "utf8");
-  return { version, files: parsePatch(text) };
+  const patches = await Promise.all(
+    found.map(async (name) => {
+      const version = name.slice(PATCH_PREFIX.length, -".patch".length);
+      const text = await readFile(join(PATCHES_DIR, name), "utf8");
+      return [version, parsePatch(text)] as const;
+    })
+  );
+  return new Map(patches);
 }
 
 function match(id: string): { file: string; root: string } | undefined {
@@ -86,11 +93,7 @@ function match(id: string): { file: string; root: string } | undefined {
 
 const versions = new Map<string, Promise<string>>();
 
-async function assertVersion(
-  root: string,
-  file: string,
-  expected: string
-): Promise<void> {
+function versionAt(root: string): Promise<string> {
   let version = versions.get(root);
   if (!version) {
     version = readFile(join(root, "package.json"), "utf8").then(
@@ -98,20 +101,37 @@ async function assertVersion(
       (error) => {
         throw new Error(
           `@inkandswitch/patchwork: couldn't read ${root}/package.json to ` +
-            `check the version the source patches are written against. ` +
+            `pick the source patch written against its version. ` +
             `Has the package's layout changed? (${error})`
         );
       }
     );
     versions.set(root, version);
   }
-  if ((await version) !== expected) {
-    throw new Error(
-      `@inkandswitch/patchwork: ${AUTOMERGE_REPO} is ${await version}, and the ` +
-        `pnpm patch in patches/ is for ${expected}. Re-make it against the ` +
-        `new version (${file} is one of the files it edits).`
-    );
-  }
+  return version;
+}
+
+/**
+ * The patch for the automerge-repo at `root`, which `file` is part of, or
+ * undefined if no patch edits `file`. Throws when the version has no patch
+ * but the patches for other versions edit `file`: the version moved and the
+ * patch didn't move with it.
+ */
+async function patchFor(
+  root: string,
+  file: string,
+  patches: Patches
+): Promise<{ version: string; files: Record<string, Hunk[]> } | undefined> {
+  const version = await versionAt(root);
+  const files = patches.get(version);
+  if (files) return files[file] ? { version, files } : undefined;
+  if (![...patches.values()].some((other) => other[file])) return;
+  throw new Error(
+    `@inkandswitch/patchwork: ${AUTOMERGE_REPO} is ${version}, and the pnpm ` +
+      `patches in patches/ are for ${[...patches.keys()].join(", ")}. ` +
+      `Re-make one against the new version (${file} is one of the files ` +
+      `they edit).`
+  );
 }
 
 function without(hunk: Hunk, prefix: string): string[] {
@@ -147,22 +167,22 @@ export function apply(code: string, file: string, hunks: Hunk[]): string {
 
 async function patchFile(
   id: string,
-  patch: Patch
+  patches: Patches
 ): Promise<string | undefined> {
   const found = match(id);
-  const hunks = found && patch.files[found.file];
-  if (!found || !hunks) return;
-  await assertVersion(found.root, found.file, patch.version);
-  return apply(await readFile(id, "utf8"), found.file, hunks);
+  const patch = found && (await patchFor(found.root, found.file, patches));
+  if (!found || !patch) return;
+  return apply(await readFile(id, "utf8"), found.file, patch.files[found.file]);
 }
 
 export function patches({
   complete = true,
 }: { complete?: boolean } = {}): Plugin {
-  const seen = new Set<string>();
+  // The files each version's patch was applied to.
+  const seen = new Map<string, Set<string>>();
   let serve = false;
-  let loading: Promise<Patch> | undefined;
-  const patch = () => (loading ??= loadPatch());
+  let loading: Promise<Patches> | undefined;
+  const load = () => (loading ??= loadPatches());
 
   return {
     name: "@patchwork/patches",
@@ -191,7 +211,7 @@ export function patches({
                   build.onLoad(
                     { filter: /automerge-repo[\\/]dist[\\/]/ },
                     async ({ path }) => {
-                      const contents = await patchFile(path, await patch());
+                      const contents = await patchFile(path, await load());
                       return contents ? { contents, loader: "js" } : undefined;
                     }
                   );
@@ -210,18 +230,24 @@ export function patches({
     async transform(code, id) {
       const found = match(id);
       if (!found) return;
-      const { version, files } = await patch();
-      const hunks = files[found.file];
-      if (!hunks) return;
-      await assertVersion(found.root, found.file, version);
-      seen.add(found.file);
-      return apply(code, found.file, hunks);
+      const patch = await patchFor(found.root, found.file, await load());
+      if (!patch) return;
+      const files = seen.get(patch.version) ?? new Set();
+      seen.set(patch.version, files.add(found.file));
+      return apply(code, found.file, patch.files[found.file]);
     },
 
+    // A build bundles one automerge-repo, so only that version's patch has to
+    // have applied in full. Bundling none of them means a layout change.
     async buildEnd(error) {
       if (serve || error || !complete) return;
-      const { files } = await patch();
-      const missing = Object.keys(files).filter((file) => !seen.has(file));
+      const patches = await load();
+      const versions = seen.size ? [...seen.keys()] : [...patches.keys()];
+      const missing = versions.flatMap((version) =>
+        Object.keys(patches.get(version)!).filter(
+          (file) => !seen.get(version)?.has(file)
+        )
+      );
       if (missing.length) {
         throw new Error(
           `@inkandswitch/patchwork: ${AUTOMERGE_REPO}'s ${missing.join(", ")} ` +

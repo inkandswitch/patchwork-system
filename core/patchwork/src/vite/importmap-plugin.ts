@@ -6,6 +6,7 @@ import type {
 import { fileURLToPath } from "node:url";
 import { relative } from "node:path";
 import { hashedFiles } from "./hashed-plugin.js";
+import { arkStack } from "./ark-plugin.js";
 
 /**
  * bootloader owns resolving/emitting its own dependencies (it's the one that
@@ -116,7 +117,10 @@ export function importmap(options?: PatchworkVitePluginOptions): Plugin {
         files.add(path, ref);
       }
 
-      for (const [fileName, ref] of emitWasmAssets.call(this)) {
+      for (const [fileName, ref] of emitWasmAssets.call(
+        this,
+        arkStack(options)
+      )) {
         files.add(`/${fileName}`, ref);
       }
       added?.();

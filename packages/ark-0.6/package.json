@@ -1,0 +1,30 @@
+{
+  "name": "@inkandswitch/patchwork-ark-0.6",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
+    "directory": "packages/ark-0.6"
+  },
+  "version": "0.0.0",
+  "author": "Ink & Switch",
+  "type": "module",
+  "license": "MIT",
+  "description": "The automerge-repo-keyhive 0.6 stack, for Patchwork keyhive builds against sync servers that haven't moved to 0.8.",
+  "files": [
+    "readme.md"
+  ],
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@automerge/automerge-repo": "2.6.0-subduction.48",
+    "@automerge/automerge-repo-keyhive": "0.6.0-alpha.1",
+    "@automerge/automerge-repo-network-broadcastchannel": "2.6.0-subduction.48",
+    "@automerge/automerge-repo-network-messagechannel": "2.6.0-subduction.48",
+    "@automerge/automerge-repo-network-websocket": "2.6.0-subduction.48",
+    "@automerge/automerge-repo-storage-indexeddb": "2.6.0-subduction.48",
+    "@automerge/automerge-subduction": "0.16.1",
+    "@automerge/vanillajs": "2.6.0-subduction.48",
+    "@keyhive/keyhive": "0.3.0-alpha.1"
+  }
+}
