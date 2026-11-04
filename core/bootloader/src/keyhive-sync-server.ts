@@ -8,8 +8,8 @@ const CONTACT_CARD_KEY = ["patchwork", "sync-server-contact-card"];
 
 /**
  * The automerge-repo-keyhive a keyhive build is made with: `"0.8"` is the
- * current stack, `"0.6"` the previous one (see
- * `@inkandswitch/patchwork-ark-0.6`) for servers that haven't moved.
+ * current stack, `"0.6"` the previous one (`@inkandswitch/patchwork`'s
+ * `@ark-0.6/*` dependencies) for servers that haven't moved.
  */
 export type ArkVersion = "0.6" | "0.8";
 

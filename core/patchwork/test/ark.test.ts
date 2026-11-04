@@ -50,8 +50,7 @@ describe("keyhive.ark", () => {
 });
 
 describe("arkAliases", () => {
-  const stack = arkStack({ keyhive: { ark: "0.6" } })!;
-  const aliases = arkAliases(stack, "production");
+  const aliases = arkAliases("production");
   const target = (specifier: string) => {
     const alias = aliases.find(({ find }) => (find as RegExp).test(specifier));
     return alias && specifier.replace(alias.find, alias.replacement);
@@ -80,9 +79,22 @@ describe("arkAliases", () => {
     expect(wasm?.endsWith("/dist/wasm.js")).toBe(true);
   });
 
+  it("resolves wasm from next to ARK 0.6", () => {
+    expect(arkStack({ keyhive: { ark: "0.6" } })).toContain(
+      "@automerge+automerge-repo-keyhive@0.6.0-alpha.1"
+    );
+  });
+
+  it("keeps the build on patchwork's own automerge", () => {
+    expect(target("@automerge/automerge")).toContain(
+      "@automerge+automerge@3.5.0"
+    );
+    expect(target("@automerge/automerge/slim")).toContain(
+      "@automerge+automerge@3.5.0"
+    );
+  });
+
   it("leaves everything outside the stack alone", () => {
-    expect(target("@automerge/automerge")).toBeUndefined();
-    expect(target("@automerge/automerge/slim")).toBeUndefined();
     expect(target("@automerge/automerge-repo-react-hooks")).toBeUndefined();
   });
 });

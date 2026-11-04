@@ -1,25 +1,34 @@
 import type { Alias, Plugin } from "vite";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { exports as resolveExports } from "resolve.exports";
 import type { PatchworkSiteOptions } from "../site-kit/options.js";
 import { resolvePrimarySyncServer } from "../site-kit/sync-servers.js";
 
 /**
- * The package.json of `@inkandswitch/patchwork-ark-0.6`, whose dependencies
- * are the previous keyhive stack, or undefined when this build is on the
- * current one. Resolving the stack's packages from next to it gets the old
- * ones, and so do the wasm binaries.
+ * The scope patchwork installs the previous keyhive stack under, one npm
+ * alias per package: `"@ark-0.6/automerge-repo":
+ * "npm:@automerge/automerge-repo@2.6.0-subduction.48"`, and so on. They sit
+ * next to the current versions without clashing, and every site that
+ * installs patchwork gets them.
+ */
+const STACK_SCOPE = "@ark-0.6/";
+
+/**
+ * ARK 0.6's package.json, or undefined when this build is on the current
+ * stack. ARK 0.6's own dependencies are the old keyhive and subduction, so
+ * resolving their wasm from next to it gets the old binaries.
  */
 export function arkStack(
   options: PatchworkSiteOptions = {}
 ): string | undefined {
   if (resolvePrimarySyncServer(options).ark !== "0.6") return;
-  return require.resolve("@inkandswitch/patchwork-ark-0.6/package.json");
+  return join(
+    findPackage(`${STACK_SCOPE}automerge-repo-keyhive`, patchworkManifest()),
+    "package.json"
+  );
 }
-
-const require = createRequire(import.meta.url);
 
 type Manifest = {
   name: string;
@@ -40,6 +49,19 @@ function ancestors(dir: string): string[] {
   return parent === dir ? [dir] : [dir, ...ancestors(parent)];
 }
 
+/** @inkandswitch/patchwork's own package.json, from src or dist alike. */
+function patchworkManifest(): string {
+  const found = ancestors(dirname(fileURLToPath(import.meta.url)))
+    .map((dir) => join(dir, "package.json"))
+    .find(
+      (path) =>
+        existsSync(path) &&
+        readManifest(path).name === "@inkandswitch/patchwork"
+    );
+  if (!found) throw new Error("@inkandswitch/patchwork: no package.json");
+  return found;
+}
+
 /** `name`'s directory, found the way node would from inside `from`'s. */
 function findPackage(name: string, from: string): string {
   const found = ancestors(dirname(from))
@@ -48,7 +70,7 @@ function findPackage(name: string, from: string): string {
   if (!found) {
     throw new Error(
       `@inkandswitch/patchwork: couldn't find ${name} from ${from}. Is ` +
-        `@inkandswitch/patchwork-ark-0.6 installed with its dependencies?`
+        `@inkandswitch/patchwork installed with its dependencies?`
     );
   }
   return realpathSync(found);
@@ -91,7 +113,7 @@ function escapeRegExp(text: string): string {
 /**
  * An alias for every subpath of every package in the stack, each matching
  * only its own specifier exactly and replaced by the absolute path of the
- * file vite would pick for it from the stack's own node_modules.
+ * file vite would pick for it from patchwork's `@ark-0.6/*` copy.
  *
  * The replacements are files rather than specifiers resolved from somewhere
  * else, so the alias is the last word: every importer gets the same file,
@@ -102,15 +124,41 @@ function escapeRegExp(text: string): string {
  * Conditions are vite's defaults for the browser: `browser`, `module`,
  * `import`, `default` and the mode's `development` or `production`.
  */
-export function arkAliases(stack: string, mode: string): Alias[] {
+export function arkAliases(mode: string): Alias[] {
   const condition = mode === "production" ? "production" : "development";
-  return Object.keys(readManifest(stack).dependencies ?? {}).flatMap((name) => {
-    const dir = findPackage(name, stack);
+  const self = patchworkManifest();
+  const stack = Object.entries(readManifest(self).dependencies ?? {})
+    .filter(([alias]) => alias.startsWith(STACK_SCOPE))
+    .map(([alias, spec]) => ({
+      name: aliasedName(spec),
+      dir: findPackage(alias, self),
+    }));
+  const shared = SHARED.map((name) => ({ name, dir: findPackage(name, self) }));
+  return [...stack, ...shared].flatMap(({ name, dir }) => {
     const manifest = readManifest(join(dir, "package.json"));
     return manifest.exports != null
       ? exportedAliases(name, dir, manifest, condition)
       : unexportedAliases(name, dir, manifest);
   });
+}
+
+/**
+ * Packages the old stack shares with the rest of the build, pinned to
+ * patchwork's own copy. automerge-repo 2.6.0-subduction.48 depends on
+ * automerge 3.3.2 exactly, and a second automerge is a second wasm module
+ * whose docs the first can't read, so the old repo gets the current one.
+ */
+const SHARED = ["@automerge/automerge"];
+
+/**
+ * The package an npm alias stands for:
+ * `"npm:@automerge/automerge-repo@2.6.0-subduction.48"` is
+ * `"@automerge/automerge-repo"`.
+ */
+function aliasedName(spec: string): string {
+  const target = spec.slice("npm:".length);
+  const at = target.lastIndexOf("@");
+  return at > 0 ? target.slice(0, at) : target;
 }
 
 /** Exactly `specifier`, and nothing longer or shorter. */
@@ -172,19 +220,18 @@ function unexportedAliases(
 /**
  * Builds against the previous keyhive stack (`keyhive.ark: "0.6"`): every
  * import of one of its packages, from anywhere, gets the copy
- * `@inkandswitch/patchwork-ark-0.6` depends on instead of the current one.
+ * patchwork installs under `@ark-0.6/*` instead of the current one.
  * The pieces only work with each other (the subduction wasm objects ARK
  * passes around can't cross versions), so it's the whole stack or none of it.
  * Does nothing on the current stack.
  */
 export function ark(options: PatchworkSiteOptions = {}): Plugin | undefined {
-  const stack = arkStack(options);
-  if (!stack) return;
+  if (!arkStack(options)) return;
   return {
     name: "@patchwork/ark-0.6",
     enforce: "pre",
     config(_, { mode }) {
-      return { resolve: { alias: arkAliases(stack, mode) } };
+      return { resolve: { alias: arkAliases(mode) } };
     },
   };
 }

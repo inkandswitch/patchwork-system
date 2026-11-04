@@ -40,8 +40,9 @@ export interface PatchworkKeyhiveOptions {
   /**
    * The automerge-repo-keyhive to build with, which has to be the one the
    * sync server runs. `"0.8"` is the current stack. `"0.6"` is the previous
-   * one, from `@inkandswitch/patchwork-ark-0.6`: ARK 0.6, keyhive 0.3, and
-   * the automerge-repo and subduction they were built with, swapped in whole.
+   * one, which patchwork installs under `@ark-0.6/*`: ARK 0.6, keyhive 0.3,
+   * and the automerge-repo and subduction they were built with, swapped in
+   * whole.
    * It only knows subduction.sync.inkandswitch.com's identity.
    *
    * Defaults to `"0.6"` when `syncServers.subduction` is on
