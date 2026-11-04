@@ -19,6 +19,7 @@ import {
   type ArkVersion,
 } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 import type { SignerIdentity } from "./types.js";
+import type { PublicReaderOptions } from "@inkandswitch/patchwork-bootloader/public-pair";
 import debug from "debug";
 
 const log = debug("patchwork:setup:repo");
@@ -46,6 +47,21 @@ export function initWasm(): Promise<void> {
     ]).then(() => undefined);
   }
   return wasmReady;
+}
+
+/**
+ * Give the Repo a peer that reads docs made public to Patchwork. It starts
+ * after the Repo does and nothing waits on it: a find for a public doc is
+ * answered once it's there.
+ */
+async function attachPublicReader(options: PublicReaderOptions) {
+  try {
+    const { attachPublicReader } =
+      await import("@inkandswitch/patchwork-bootloader/public-pair");
+    await attachPublicReader(options);
+  } catch (error) {
+    console.error("couldn't start the public reader", error);
+  }
 }
 
 /**
@@ -78,6 +94,7 @@ export async function createRepo(): Promise<TabRepo> {
       await import("@automerge/automerge-repo-keyhive");
     initKeyhiveWasm();
     const keyhiveStorage = new IndexedDBStorageAdapter(keyhiveStorageName);
+    const identity = await keyhiveSyncServer(syncServer, keyhiveStorage);
     const { hive, repo } = await initializeAutomergeRepoKeyhive({
       // ARK injects an `idFactory` deriving document ids from keyhive. A site
       // can opt out of it with `keyhive: { useIdFactory: false }`.
@@ -91,7 +108,7 @@ export async function createRepo(): Promise<TabRepo> {
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
-      syncServer: await keyhiveSyncServer(syncServer, keyhiveStorage),
+      syncServer: identity,
       repo: {
         storage: new IndexedDBStorageAdapter(),
         subductionWebsocketEndpoints: [syncServer.url],
@@ -101,6 +118,16 @@ export async function createRepo(): Promise<TabRepo> {
       },
     });
     log("keyhive setup complete");
+    // Docs made public to Patchwork (pushwork's `--public-access read`) are
+    // read through its public pair, which only ARK 0.8's keyhive has.
+    if (syncServer.ark !== "0.6") {
+      void attachPublicReader({
+        repo,
+        hive,
+        url: syncServer.url,
+        syncServer: identity,
+      });
+    }
     return { repo, hive };
   }
 

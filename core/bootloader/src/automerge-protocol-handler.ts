@@ -134,6 +134,7 @@ async function buildKeyhiveRepo(): Promise<{
     await import("@automerge/automerge-repo-keyhive");
   initKeyhiveWasm();
   const keyhiveStorage = new IndexedDBStorageAdapter(keyhiveStorageName);
+  const identity = await keyhiveSyncServer(syncServer, keyhiveStorage);
   const { hive, repo } = await initializeAutomergeRepoKeyhive({
     // ARK injects an `idFactory` deriving document ids from keyhive. A site
     // can opt out of it with `keyhive: { useIdFactory: false }`.
@@ -146,7 +147,7 @@ async function buildKeyhiveRepo(): Promise<{
       `${storagePrefix}-resolver` + Math.random().toString(36).slice(2),
     automaticArchiveIngestion: true,
     cachingMode: "periodic",
-    syncServer: await keyhiveSyncServer(syncServer, keyhiveStorage),
+    syncServer: identity,
     repo: {
       storage: new IndexedDBStorageAdapter(),
       subductionWebsocketEndpoints: [syncServer.url],
@@ -158,6 +159,23 @@ async function buildKeyhiveRepo(): Promise<{
   hive.networkAdapter.whenReady().then(() => {
     (hive.networkAdapter as any).syncKeyhive();
   });
+
+  // Packages made public to Patchwork are read through its public pair, which
+  // only ARK 0.8's keyhive has. Nothing waits on it starting.
+  if (syncServer.ark !== "0.6") {
+    import("./public-pair.js")
+      .then(({ attachPublicReader }) =>
+        attachPublicReader({
+          repo,
+          hive,
+          url: syncServer.url,
+          syncServer: identity,
+        })
+      )
+      .catch((error) =>
+        console.error("couldn't start the public reader", error)
+      );
+  }
 
   return { repo, hive };
 }

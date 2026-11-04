@@ -19,12 +19,13 @@
 // The reader Repo never writes: anything the user changes in a public doc
 // stays local. Pushwork makes repos public this way (`--public-access read`).
 
-import type {
-  DocumentId,
-  PeerId,
-  Repo,
-  StorageAdapterInterface,
-  StorageKey,
+import {
+  stringifyAutomergeUrl,
+  type DocumentId,
+  type PeerId,
+  type Repo,
+  type StorageAdapterInterface,
+  type StorageKey,
 } from "@automerge/automerge-repo/slim";
 import type {
   AutomergeRepoKeyhive,
@@ -43,8 +44,8 @@ export { PATCHWORK_PUBLIC_PAIR, type PublicPrincipals };
 
 const log = debug("patchwork:public-pair");
 
-/** How long the reader's keyhive has to stop changing before pending blobs are retried. */
-const RETRY_AFTER_MS = 250;
+/** How long the fetcher's keyhive events gather before the reader ingests them. */
+const RELAY_AFTER_MS = 100;
 const HEX = 16;
 const HEX_DIGITS_PER_BYTE = 2;
 
@@ -86,9 +87,8 @@ export async function attachPublicReader({
 }: PublicReaderOptions): Promise<PublicReader> {
   const ark = await import("@automerge/automerge-repo-keyhive");
   const { Repo } = await import("@automerge/automerge-repo/slim");
-  const { MessageChannelNetworkAdapter } = await import(
-    "@automerge/automerge-repo-network-messagechannel"
-  );
+  const { MessageChannelNetworkAdapter } =
+    await import("@automerge/automerge-repo-network-messagechannel");
 
   const reader = await openReader(ark, principals);
   const queue = serial();
@@ -117,35 +117,52 @@ export async function attachPublicReader({
         storage: new MemoryStorage(),
         network: [new MessageChannelNetworkAdapter(channel.port2)],
         subductionWebsocketEndpoints: [url],
-        // Answer what the user's Repo asks for, and offer nothing else.
+        // It holds only docs the user's Repo was offered, so it offers
+        // them all back as soon as it has them.
         shareConfig: {
-          announce: async () => false,
+          announce: async () => true,
           access: async () => true,
         },
       },
     });
 
   // Everything the fetcher learns goes to the reader, which is what makes a
-  // doc's keys reachable to it. Blobs that arrived before their keys are
-  // retried once the reader's state stops changing.
-  let retry: ReturnType<typeof setTimeout> | undefined;
-  const relay = async (bytes: Uint8Array) => {
+  // doc's keys reachable to it. A sync brings thousands of events, so they're
+  // ingested in batches, off the event that brought them. Blobs that arrived
+  // before their keys are retried once a batch has changed the reader.
+  let batch: Uint8Array[] = [];
+  let flush: ReturnType<typeof setTimeout> | undefined;
+  const relay = async () => {
+    flush = undefined;
+    const events = batch;
+    batch = [];
     try {
       const grew = await queue(async () => {
         const before = (await reader.stats()).totalOps;
-        await reader.ingestEventsBytes([bytes]);
+        await reader.ingestEventsBytes(events);
         return (await reader.stats()).totalOps !== before;
       });
-      if (!grew) return;
-      clearTimeout(retry);
-      retry = setTimeout(() => publicRepo.shareConfigChanged(), RETRY_AFTER_MS);
+      log(
+        "relayed %d keyhive events%s",
+        events.length,
+        grew ? "" : ", none new"
+      );
+      if (grew) publicRepo.shareConfigChanged();
     } catch (error) {
-      log("relaying a keyhive event failed: %O", error);
+      log("relaying %d keyhive events failed: %O", events.length, error);
     }
   };
-  fetcher.emitter.on("update", (event) => void relay(event.toBytes()));
+  fetcher.emitter.on("update", (event) => {
+    batch.push(event.toBytes());
+    flush ??= setTimeout(() => void relay(), RELAY_AFTER_MS);
+  });
 
-  offerUnknownDocs(ark, repo, hive, publicRepo.peerId);
+  // The user's Repo holds its requests back while its own source is still
+  // trying the server, which can be for as long as it keeps retrying. So a
+  // doc it offers is fetched straight away, and offered back once it's here.
+  offerUnknownDocs(ark, repo, hive, publicRepo.peerId, (documentId) =>
+    publicRepo.findWithProgress(documentId)
+  );
   repo.networkSubsystem.addNetworkAdapter(
     new MessageChannelNetworkAdapter(channel.port1)
   );
@@ -155,25 +172,32 @@ export async function attachPublicReader({
 
 /**
  * Have `repo` offer the reader (`readerPeer`) only the docs its own keyhive
- * doesn't know: ones made public to Patchwork, or ones the user can't read at
- * all. The user's own docs never reach it. Every other peer is shared with as
- * before.
+ * doesn't know, ones made public to Patchwork or ones the user can't read at
+ * all, and `fetch` each as it's offered. The user's own docs never reach the
+ * reader. Every other peer is shared with as before.
  */
 function offerUnknownDocs(
   ark: Ark,
   repo: Repo,
   hive: AutomergeRepoKeyhive,
-  readerPeer: PeerId
+  readerPeer: PeerId,
+  fetch: (documentId: DocumentId) => void
 ) {
   // ARK's peer ids end in a random part per instance; the rest names the reader
   const prefix = readerPeer.slice(0, readerPeer.lastIndexOf("-"));
   const isReader = (peerId: PeerId) => peerId.startsWith(prefix);
   const offered = async (documentId?: DocumentId) => {
     if (!documentId) return false;
-    const url = `automerge:${documentId}` as const;
+    const url = stringifyAutomergeUrl({ documentId });
     if (ark.isUnprotectedDoc(url)) return false;
     try {
-      return !(await hive.keyhive.hasDocument(ark.docIdFromAutomergeUrl(url)));
+      const known = await hive.keyhive.hasDocument(
+        ark.docIdFromAutomergeUrl(url)
+      );
+      if (known) return false;
+      log("offering %s to the public reader", documentId);
+      fetch(documentId);
+      return true;
     } catch (error) {
       log("couldn't tell whether keyhive knows %s: %O", documentId, error);
       return false;
@@ -197,7 +221,7 @@ async function openReader(ark: Ark, p: PublicPrincipals): Promise<Keyhive> {
   const key = ark.ContactCard.fromBytes(fromBase64(p.readerCard)).id.toBytes();
   const publicKey = await crypto.subtle.importKey(
     "raw",
-    key,
+    new Uint8Array(key),
     { name: "Ed25519" },
     true,
     ["verify"]
@@ -216,7 +240,10 @@ async function openReader(ark: Ark, p: PublicPrincipals): Promise<Keyhive> {
 }
 
 /** The fetcher's Ed25519 key pair, from its seed, extractable as ARK needs. */
-async function fetcherKeyPair(ark: Ark, seedHex: string): Promise<CryptoKeyPair> {
+async function fetcherKeyPair(
+  ark: Ark,
+  seedHex: string
+): Promise<CryptoKeyPair> {
   const seed = fromHex(seedHex);
   const x = toBase64Url(ark.Signer.memorySignerFromBytes(seed).verifyingKey);
   const jwk = { kty: "OKP", crv: "Ed25519", x };
@@ -260,12 +287,15 @@ class ReaderInterceptor {
     blob: Uint8Array,
     loadBlob?: (commitIdHex: string) => Promise<Uint8Array | null>
   ): Promise<Uint8Array | null> {
-    const url = `automerge:${documentId}` as const;
+    const url = stringifyAutomergeUrl({ documentId });
     if (this.ark.isUnprotectedDoc(url)) return Promise.resolve(blob);
     return this.queue(async () => {
       const docId = this.ark.docIdFromAutomergeUrl(url);
       // its keys haven't been relayed yet: left pending, and retried then
-      if (!(await this.reader.hasDocument(docId))) return null;
+      if (!(await this.reader.hasDocument(docId))) {
+        log("no keys for %s yet", documentId);
+        return null;
+      }
       let encrypted;
       try {
         encrypted = this.ark.Encrypted.fromBytes(blob);
@@ -302,8 +332,16 @@ type Serial = <T>(f: () => Promise<T>) => Promise<T>;
 function serial(): Serial {
   let tail: Promise<unknown> = Promise.resolve();
   return (f) => {
-    const run = tail.then(f);
-    tail = run.catch(() => {});
+    const previous = tail;
+    const run = (async () => {
+      try {
+        await previous;
+      } catch {
+        // an earlier call's failure is its own caller's to handle
+      }
+      return f();
+    })();
+    tail = run;
     return run;
   };
 }
@@ -318,11 +356,18 @@ class MemoryStorage implements StorageAdapterInterface {
   async save(key: StorageKey, data: Uint8Array) {
     this.#data.set(JSON.stringify(key), { key, data });
   }
+  async saveBatch(entries: Array<[StorageKey, Uint8Array]>) {
+    entries.forEach(([key, data]) =>
+      this.#data.set(JSON.stringify(key), { key, data })
+    );
+  }
   async remove(key: StorageKey) {
     this.#data.delete(JSON.stringify(key));
   }
   async loadRange(prefix: StorageKey) {
-    return [...this.#data.values()].filter(({ key }) => startsWith(key, prefix));
+    return [...this.#data.values()].filter(({ key }) =>
+      startsWith(key, prefix)
+    );
   }
   async removeRange(prefix: StorageKey) {
     [...this.#data]
@@ -344,7 +389,8 @@ function concat(parts: Uint8Array[]): Uint8Array {
   return out;
 }
 
-const fromBase64 = (s: string) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+const fromBase64 = (s: string) =>
+  Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
 const toBase64Url = (bytes: Uint8Array) =>
   btoa(String.fromCharCode(...bytes))
     .replaceAll("+", "-")
@@ -352,7 +398,12 @@ const toBase64Url = (bytes: Uint8Array) =>
     .split("=")[0];
 const fromHex = (s: string) =>
   Uint8Array.from({ length: s.length / HEX_DIGITS_PER_BYTE }, (_, i) =>
-    parseInt(s.slice(i * HEX_DIGITS_PER_BYTE, (i + 1) * HEX_DIGITS_PER_BYTE), HEX)
+    parseInt(
+      s.slice(i * HEX_DIGITS_PER_BYTE, (i + 1) * HEX_DIGITS_PER_BYTE),
+      HEX
+    )
   );
 const toHex = (bytes: Uint8Array) =>
-  Array.from(bytes, (b) => b.toString(HEX).padStart(HEX_DIGITS_PER_BYTE, "0")).join("");
+  Array.from(bytes, (b) =>
+    b.toString(HEX).padStart(HEX_DIGITS_PER_BYTE, "0")
+  ).join("");

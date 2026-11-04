@@ -43,6 +43,10 @@
       "import": "./dist/keyhive-sync-server.js",
       "types": "./dist/keyhive-sync-server.d.ts"
     },
+    "./public-pair": {
+      "import": "./dist/public-pair.js",
+      "types": "./dist/public-pair.d.ts"
+    },
     "./service-worker": {
       "import": "./dist/service-worker.js",
       "types": "./dist/service-worker.d.ts"
