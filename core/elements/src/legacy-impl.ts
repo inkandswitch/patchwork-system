@@ -85,8 +85,10 @@ type HostElement = HTMLElement & {
 // How long a failed load waits before trying again, attempt by attempt. A
 // grant can land seconds before the doc it grants is fetchable, and the op
 // that carried it may be the last one for a while, so a keyhive op alone
-// can't be relied on to bring the view back. ~30s in all, then ops only.
-const LOAD_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
+// can't be relied on to bring the view back. After ~30s it settles on the
+// last delay, and keeps asking for as long as the view is up: a sender's
+// device can take minutes to push a doc it just shared.
+const LOAD_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 30000];
 
 const ERROR_STYLE_ID = "patchwork-view-error-style";
 
@@ -510,12 +512,14 @@ export class LegacyImpl {
     }
   }
 
-  // Try a failed load again after the next delay in LOAD_RETRY_DELAYS_MS, or
-  // leave it to keyhive ops once they've all been used.
+  // Try a failed load again after the next delay in LOAD_RETRY_DELAYS_MS,
+  // staying on the last one once they've all been used.
   #scheduleRetry(): void {
     if (this.#disposed || this.#retryTimer) return;
-    const delay = LOAD_RETRY_DELAYS_MS[this.#retryAttempt];
-    if (delay === undefined) return;
+    const delay =
+      LOAD_RETRY_DELAYS_MS[
+        Math.min(this.#retryAttempt, LOAD_RETRY_DELAYS_MS.length - 1)
+      ];
     this.#retryAttempt++;
     if (this.#docUrl) this.#askAgain(this.#docUrl);
     this.#retryTimer = setTimeout(() => {
