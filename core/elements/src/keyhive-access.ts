@@ -140,17 +140,18 @@ export async function gateOnAccess(
 
   // Watch before the first check, so a grant that lands while it's in flight
   // isn't lost between a stale "no" and the subscription.
-  let grantedMeanwhile = false;
+  let latestAccess: boolean | undefined;
   teardowns.add(
     watcherFor(hive).watch(url, (hasAccess) => {
-      grantedMeanwhile = hasAccess;
+      latestAccess = hasAccess;
       onChange(hasAccess);
     })
   );
 
   try {
-    return !!(await activeAccessForDoc(hive, url)) || grantedMeanwhile;
+    const access = await activeAccessForDoc(hive, url);
+    return latestAccess ?? !!access;
   } catch {
-    return grantedMeanwhile;
+    return latestAccess ?? false;
   }
 }
