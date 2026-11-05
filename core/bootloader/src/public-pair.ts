@@ -52,6 +52,9 @@ const log = debug("patchwork:public-pair");
 
 /** How long the fetcher's keyhive events gather before the reader ingests them. */
 const RELAY_AFTER_MS = 100;
+// How often a run of incoming keyhive events is reported. They arrive one at
+// a time while the fetcher ingests a sync, thousands on a first visit.
+const REPORT_RECEIVED_EVERY_MS = 250;
 /** How long after the reader last changed its archive is saved. */
 const SAVE_READER_AFTER_MS = 2_000;
 const READER_ARCHIVE_KEY = ["public-reader", "reader-archive"];
@@ -86,6 +89,15 @@ export type PublicReaderStatus = {
    * server holds to catch up on rather than what's new since last time.
    */
   firstVisit: boolean;
+  /**
+   * What it's doing. `waiting`: no keyhive events from the server yet.
+   * `fetching`: the fetcher is taking them in (`received` counts them).
+   * `reading`: the reader is ingesting a batch of them, which is seconds of
+   * wasm on a first visit. `ready`: everything received has been read.
+   */
+  phase: "waiting" | "fetching" | "reading" | "ready";
+  /** Keyhive events the fetcher has handed over since it started. */
+  received: number;
   /** Keyhive events relayed to the reader since it started. */
   relayed: number;
 };
@@ -124,8 +136,14 @@ export async function startPublicReader({
     await import("@automerge/automerge-repo-network-messagechannel");
 
   const { reader, resumed } = await openReader(ark, principals, storage);
+  let phase: PublicReaderStatus["phase"] = "waiting";
+  let received = 0;
   let relayed = 0;
-  const report = () => onStatus?.({ firstVisit: !resumed, relayed });
+  let reportedAt = 0;
+  const report = () => {
+    reportedAt = performance.now();
+    onStatus?.({ firstVisit: !resumed, phase, received, relayed });
+  };
   report();
   const queue = serial();
   const interceptor = new ReaderInterceptor(ark, reader, queue);
@@ -186,6 +204,8 @@ export async function startPublicReader({
     flush = undefined;
     const events = batch;
     batch = [];
+    phase = "reading";
+    report();
     try {
       const grew = await queue(async () => {
         const before = (await reader.stats()).totalOps;
@@ -198,6 +218,7 @@ export async function startPublicReader({
         grew ? "" : ", none new"
       );
       relayed += events.length;
+      phase = batch.length ? "fetching" : "ready";
       report();
       if (grew) {
         publicRepo.shareConfigChanged();
@@ -209,6 +230,11 @@ export async function startPublicReader({
   };
   fetcher.emitter.on("update", (event) => {
     batch.push(event.toBytes());
+    received++;
+    // the fetcher's ingest holds the worker, but a report posted from in here
+    // still reaches the tabs, so the count climbs while it runs
+    if (phase !== "reading") phase = "fetching";
+    if (performance.now() - reportedAt >= REPORT_RECEIVED_EVERY_MS) report();
     flush ??= setTimeout(() => void relay(), RELAY_AFTER_MS);
   });
 
