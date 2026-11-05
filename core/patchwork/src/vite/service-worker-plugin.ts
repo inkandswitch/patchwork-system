@@ -42,19 +42,32 @@ export const workers: {
   },
 ];
 
+// The id of vite's virtual preload helper module, exactly: it matches
+// "\0vite/preload-helper.js" and rejects "vite/preload-helper.js" (no \0).
+// https://regex101.com/?regex=%5E%5C0vite%5C%2Fpreload-helper%5C.js%24
 const PRELOAD_HELPER = /^\0vite\/preload-helper\.js$/;
 const PRELOAD_ERROR_DISPATCH = "window.dispatchEvent(";
+const PRELOAD_LINKS = "deps && deps.length > 0";
 
 /**
  * Vite wraps every dynamic `import()` in its preload helper, including the
- * ones in chunks a worker shares with the page. When the import fails, the
- * helper announces it with `window.dispatchEvent`, which throws a
- * ReferenceError in a worker and replaces the real failure with it. Dispatch
- * on `globalThis` instead, which is `window` on the page and the worker's own
- * scope in a worker, so the import's own error is the one that's rethrown.
+ * ones in chunks a worker shares with the page. That helper touches `window`
+ * and `document`, which a worker doesn't have:
  *
- * Vite has to keep writing that line for this to work, so the build fails if
- * it's gone rather than quietly leaving workers with the ReferenceError.
+ * - It preloads the import's dependencies by adding `<link>` tags to
+ *   `document`. `serviceworker()` drops the dependencies of imports in a
+ *   worker's own file, but a chunk shared with the page keeps them, so in a
+ *   worker the import throws a ReferenceError before it starts (the automerge
+ *   worker's sync-server lookup did). Skip the preloading when there's no
+ *   `document`; the import itself still loads everything it needs.
+ * - When the import fails, it announces it with `window.dispatchEvent`, which
+ *   throws a ReferenceError in a worker and replaces the real failure with
+ *   it. Dispatch on `globalThis` instead, which is `window` on the page and
+ *   the worker's own scope in a worker, so the import's own error is the one
+ *   that's rethrown.
+ *
+ * Vite has to keep writing those lines for this to work, so the build fails if
+ * either is gone rather than quietly leaving workers with the ReferenceError.
  */
 export function preloadErrorInWorkers(): Plugin {
   return {
@@ -69,11 +82,18 @@ export function preloadErrorInWorkers(): Plugin {
             `vite's preload helper no longer calls ${PRELOAD_ERROR_DISPATCH}), so a failed import in a worker can't be made to report its own error; update preloadErrorInWorkers() for this vite version`
           );
         }
+        if (!code.includes(PRELOAD_LINKS)) {
+          this.error(
+            `vite's preload helper no longer checks \`${PRELOAD_LINKS}\` before adding <link> tags, so a worker can't be made to skip them; update preloadErrorInWorkers() for this vite version`
+          );
+        }
         return {
-          code: code.replaceAll(
-            PRELOAD_ERROR_DISPATCH,
-            "globalThis.dispatchEvent("
-          ),
+          code: code
+            .replaceAll(PRELOAD_ERROR_DISPATCH, "globalThis.dispatchEvent(")
+            .replace(
+              PRELOAD_LINKS,
+              `typeof document !== "undefined" && ${PRELOAD_LINKS}`
+            ),
           map: null,
         };
       },
@@ -111,11 +131,13 @@ export function serviceworker(): Plugin {
       if (config.command === "serve") return;
       const files = hashedFiles(config);
       refs.length = 0;
-      for (const { specifier, fileName, hashed } of workers) {
-        const resolved = await this.resolve(specifier, self);
+      const resolved = await Promise.all(
+        workers.map(({ specifier }) => this.resolve(specifier, self))
+      );
+      workers.forEach(({ fileName, hashed }, i) => {
         const ref = this.emitFile({
           type: "chunk",
-          id: resolved!.id,
+          id: resolved[i]!.id,
           ...(hashed
             ? { name: fileName.slice(0, -".js".length) }
             : { fileName }),
@@ -124,14 +146,14 @@ export function serviceworker(): Plugin {
           files.add(`/${fileName}`, ref);
           refs.push(ref);
         }
-      }
+      });
       added?.();
     },
     generateBundle: {
       // Before vite's own generateBundle, which renders the preloads.
       order: "pre",
       handler() {
-        for (const ref of refs) workerFiles.add(this.getFileName(ref));
+        refs.forEach((ref) => workerFiles.add(this.getFileName(ref)));
       },
     },
   };
