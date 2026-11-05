@@ -75,6 +75,19 @@ export type PublicReaderNodeOptions = {
    * keyhive event the server has. Default: memory, for as long as this lasts.
    */
   storage?: StorageAdapterInterface;
+  /** Told how far the reader has got, as it starts and after each relay. */
+  onStatus?: (status: PublicReaderStatus) => void;
+};
+
+/** How far a public reader has got. */
+export type PublicReaderStatus = {
+  /**
+   * Whether it started without saved state, so has every keyhive event the
+   * server holds to catch up on rather than what's new since last time.
+   */
+  firstVisit: boolean;
+  /** Keyhive events relayed to the reader since it started. */
+  relayed: number;
 };
 
 export type PublicReader = {
@@ -103,13 +116,17 @@ export async function startPublicReader({
   syncServer,
   principals = PATCHWORK_PUBLIC_PAIR,
   storage = new MemoryStorage(),
+  onStatus,
 }: PublicReaderNodeOptions): Promise<PublicReader> {
   const ark = await import("@automerge/automerge-repo-keyhive");
   const { Repo } = await import("@automerge/automerge-repo/slim");
   const { MessageChannelNetworkAdapter } =
     await import("@automerge/automerge-repo-network-messagechannel");
 
-  const reader = await openReader(ark, principals, storage);
+  const { reader, resumed } = await openReader(ark, principals, storage);
+  let relayed = 0;
+  const report = () => onStatus?.({ firstVisit: !resumed, relayed });
+  report();
   const queue = serial();
   const interceptor = new ReaderInterceptor(ark, reader, queue);
 
@@ -180,6 +197,8 @@ export async function startPublicReader({
         events.length,
         grew ? "" : ", none new"
       );
+      relayed += events.length;
+      report();
       if (grew) {
         publicRepo.shareConfigChanged();
         saveReader();
@@ -388,7 +407,7 @@ async function openReader(
   ark: Ark,
   p: PublicPrincipals,
   storage: StorageAdapterInterface
-): Promise<Keyhive> {
+): Promise<{ reader: Keyhive; resumed: boolean }> {
   const key = ark.ContactCard.fromBytes(fromBase64(p.readerCard)).id.toBytes();
   const publicKey = await crypto.subtle.importKey(
     "raw",
@@ -412,11 +431,12 @@ async function openReader(
     try {
       await reader.ingestArchive(new ark.Archive(saved));
       log("the reader picked up from its saved archive");
+      return { reader, resumed: true };
     } catch (error) {
       log("couldn't load the reader's saved archive: %O", error);
     }
   }
-  return reader;
+  return { reader, resumed: false };
 }
 
 /** The fetcher's Ed25519 key pair, from its seed, extractable as ARK needs. */

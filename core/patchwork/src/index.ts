@@ -49,11 +49,13 @@ import {
 import * as plugins from "@inkandswitch/patchwork-plugins";
 import setupServiceWorker, {
   connectClassicSync,
+  onPublicReaderStatus,
   resolveHandoffsWith,
 } from "@inkandswitch/patchwork-bootloader";
 import debug from "debug";
 
 import type {
+  BootProgress,
   OpenOptions,
   Patchwork,
   PatchworkOptions,
@@ -123,11 +125,26 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
 
   log("booting", options);
 
+  const progress: BootProgress = { stage: "workers" };
+  const report = (change: Partial<BootProgress>) => {
+    Object.assign(progress, change);
+    try {
+      options.onProgress?.({ ...progress });
+    } catch (error) {
+      console.error("patchwork.setup: onProgress threw", error);
+    }
+  };
+  report({});
+
   if (!options.repo) await initWasm();
 
   const sw = await setupServiceWorker();
   if (!sw) throw new Error("Failed to set up service worker");
   log("workers ready");
+  const stopHearingReader = onPublicReaderStatus((publicReader) =>
+    report({ publicReader })
+  );
+  report({ stage: "identity" });
 
   let hive: AutomergeRepoKeyhive | undefined;
   let repo: Repo;
@@ -179,10 +196,21 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   // Started with the site bundle alone so resolveAccountHandle has something to
   // await on — the `account` datatype lives there. The user's own
   // module-settings URL is added lazily once it appears on the account doc.
+  const loaded = new Set<string>();
   const moduleWatcher = new ModuleWatcher(
     repo,
     nameSources(moduleSources),
-    onModuleLoaded,
+    (name, mod) => {
+      onModuleLoaded(name, mod);
+      loaded.add(name);
+      report({
+        packages: {
+          loaded: loaded.size,
+          total: Math.max(progress.packages?.total ?? 0, loaded.size),
+          latest: packageName(mod) ?? progress.packages?.latest,
+        },
+      });
+    },
     unregisterPlugins,
     // Discover an Automerge package's plugin descriptors off the main thread;
     // each plugin's load() re-imports the package (at heads) on this thread.
@@ -196,6 +224,17 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
       watchDocument(repo, url, onChange)
     )
   );
+
+  moduleWatcher.onModules = (modules) =>
+    report({
+      stage: progress.stage === "package-list" ? "packages" : progress.stage,
+      packages: {
+        ...progress.packages,
+        loaded: loaded.size,
+        total: modules.length,
+      },
+    });
+  report({ stage: "package-list" });
 
   const accountDocHandle = (await resolveAccountHandle(repo, {
     storageKey: options.accountKey ?? "patchworkAccountURL",
@@ -215,6 +254,11 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
       ),
     (err: unknown) => console.error("doneLoading rejected:", err)
   );
+
+  void toolsLoaded.then(() => {
+    stopHearingReader();
+    report({ stage: "opening" });
+  });
 
   let router: Router | undefined;
   if (routing !== false) {
@@ -339,6 +383,15 @@ function nameSources(sources: string[]): Record<string, string> {
   );
 }
 
+/** What to call a package on a loading screen: its first tool's name, say. */
+function packageName(mod: any): string | undefined {
+  const plugins: any[] = Array.isArray(mod?.plugins) ? mod.plugins : [];
+  const named =
+    plugins.find((p) => p?.type === "patchwork:tool" && p.name) ??
+    plugins.find((p) => p?.name);
+  return named?.name ?? plugins[0]?.id;
+}
+
 function onModuleLoaded(name: string, mod: any): void {
   if (!Array.isArray(mod.plugins)) {
     console.warn(`module ${name} has no plugins array`, Object.keys(mod));
@@ -425,6 +478,8 @@ export {
   showErrorScreen,
 } from "./loading.js";
 export type {
+  BootProgress,
+  BootStage,
   OpenOptions,
   Patchwork,
   PatchworkOptions,

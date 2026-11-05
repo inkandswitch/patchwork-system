@@ -8,6 +8,7 @@ import { promptForNewBuild } from "./new-build-prompt.js";
 import debug from "debug";
 import type { Repo } from "@automerge/automerge-repo/slim";
 import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { PublicReaderStatus } from "./public-pair.js";
 import { handleResolveRequest } from "./tab-resolver.js";
 import {
   forwardWorkerConsole,
@@ -169,6 +170,26 @@ const publicReaderEnabled =
   !!__SYNC_SERVER__.keyhive &&
   __SYNC_SERVER__.ark !== "0.6";
 
+/** The public reader's latest status, and who wants to hear the next. */
+let publicReaderStatus: PublicReaderStatus | undefined;
+const publicReaderStatusListeners = new Set<
+  (status: PublicReaderStatus) => void
+>();
+
+/**
+ * Hear how far the public reader has got (the latest straight away, if
+ * there's been one), for a loading screen. Returns a function that stops.
+ */
+export function onPublicReaderStatus(
+  listener: (status: PublicReaderStatus) => void
+): () => void {
+  publicReaderStatusListeners.add(listener);
+  if (publicReaderStatus) listener(publicReaderStatus);
+  return () => publicReaderStatusListeners.delete(listener);
+}
+
+export type { PublicReaderStatus };
+
 /** What connects a Repo to the public reader, run again for each new one. */
 const publicReaderClients = new Set<() => void>();
 let publicReaderSpawned = false;
@@ -179,6 +200,13 @@ const publicReaderWorker = sharedWorkerHandle(
   {
     debugging: workerDebugging,
     onMessage(event) {
+      if (event.data?.type === "status") {
+        publicReaderStatus = event.data.status as PublicReaderStatus;
+        for (const listener of publicReaderStatusListeners) {
+          listener(publicReaderStatus);
+        }
+        return;
+      }
       forwardWorkerConsole("public-reader-worker", event.data);
     },
     // A new instance knows none of the Repos the last one served.

@@ -27,7 +27,7 @@ import {
   PATCHWORK_PUBLIC_PAIR,
   publicPairId,
 } from "./public-pair-principals.js";
-import type { PublicReader } from "./public-pair.js";
+import type { PublicReader, PublicReaderStatus } from "./public-pair.js";
 
 declare const __SYNC_SERVER__: {
   url: string;
@@ -40,8 +40,25 @@ const syncServer =
     ? __SYNC_SERVER__
     : { url: "wss://subduction.sync.inkandswitch.com" };
 
+// Every tab is told how far the reader has got, for its loading screen: on
+// connecting, and whenever that changes.
+const tabs = new Set<MessagePort>();
+let status: PublicReaderStatus | undefined;
+
+function tellTabs() {
+  if (!status) return;
+  for (const port of tabs) port.postMessage({ type: "status", status });
+}
+
 const control = startWorkerControl("public-reader-worker", {
   lock: PUBLIC_READER_LOCK,
+  onConnect(port) {
+    tabs.add(port);
+    if (status) port.postMessage({ type: "status", status });
+  },
+  onClose(port) {
+    tabs.delete(port);
+  },
   onMessage(data) {
     if (data?.type === "client" && data.port instanceof MessagePort) {
       void serve(data.port);
@@ -85,6 +102,10 @@ async function start(): Promise<PublicReader> {
     url: syncServer.url,
     syncServer: await keyhiveSyncServer(syncServer, storage),
     storage,
+    onStatus(next) {
+      status = next;
+      tellTabs();
+    },
   });
   (self as any).reader = reader;
   log(`public reader ready after ${Math.round(performance.now() - began)}ms`);

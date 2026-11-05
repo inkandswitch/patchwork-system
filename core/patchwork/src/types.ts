@@ -128,6 +128,32 @@ export interface PatchworkOptions {
    * Defaults to `true`; `false` imports every package directly.
    */
   importModulesInWorker?: boolean;
+
+  /**
+   * Told what boot is doing, as it moves on, for a loading screen. Called
+   * with a fresh object each time.
+   */
+  onProgress?: (progress: BootProgress) => void;
+}
+
+/**
+ * Where boot has got to, in order: starting the service worker and shared
+ * workers, opening the user's identity and Repo, finding the package lists,
+ * loading the packages on them, and opening the first view.
+ */
+export type BootStage =
+  "workers" | "identity" | "package-list" | "packages" | "opening";
+
+export interface BootProgress {
+  stage: BootStage;
+  /**
+   * The public reader, which fetches documents made public to Patchwork
+   * (system packages are). On a first visit it catches up on every keyhive
+   * event the sync server holds before it can decrypt any of them.
+   */
+  publicReader?: { firstVisit: boolean; relayed: number };
+  /** How many of the listed packages have loaded, and the name of the last. */
+  packages?: { loaded: number; total: number; latest?: string };
 }
 
 /**
