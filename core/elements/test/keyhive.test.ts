@@ -431,4 +431,80 @@ describe("keyhive access (legacy mode)", () => {
     await settle(2200);
     expect(find).toHaveBeenCalledTimes(2);
   });
+
+  // An unavailable query answers `find` from its verdict without asking the
+  // server again, so the timer has to re-arm the sync before it looks.
+  it("asks the sync server again before each timed retry", async () => {
+    const fake = fakeHive(true);
+    const tag = `kh-legacy-${++seq}`;
+
+    const toolId = `kh-tool-${++seq}`;
+    const tool = { mounts: 0 };
+    const render = () => {
+      tool.mounts++;
+      return () => {};
+    };
+    tools.register(
+      {
+        id: toolId,
+        type: "patchwork:tool",
+        name: toolId,
+        supportedDatatypes: ["kh-type"],
+        load: async () => render,
+        module: render,
+      } as never,
+      `test://${toolId}`
+    );
+    registered.push(toolId);
+
+    const handle = realRepo.create({ "@patchwork": { type: "kh-type" } });
+    // like the real repo: once unavailable, `find` rejects straight away
+    // until something re-arms the sync, and a re-armed sync only finds the
+    // doc if the server has it by then
+    let state: "unavailable" | "loading" = "unavailable";
+    let serverHasIt = false;
+    const listeners = new Set<(p: { state: string }) => void>();
+    const setState = (next: typeof state) => {
+      state = next;
+      for (const listener of [...listeners]) listener({ state });
+    };
+    const resyncSubduction = vi.fn(() => {
+      setTimeout(() => setState("loading"), 0);
+    });
+    const verdictRepo = {
+      find: vi.fn(async () => {
+        if (state === "unavailable")
+          throw new Error("Document is unavailable");
+        if (!serverHasIt) {
+          setState("unavailable");
+          throw new Error("Document is unavailable");
+        }
+        return handle;
+      }),
+      findWithProgress: () => ({
+        peek: () => ({ state }),
+        subscribe: (listener: (p: { state: string }) => void) => {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      }),
+      resyncSubduction,
+    } as unknown as Repo;
+    registerPatchworkViewElement({ name: tag, repo: verdictRepo, hive: fake.hive });
+
+    const provider = document.createElement("repo-provider");
+    const view = document.createElement(tag);
+    view.setAttribute("doc-url", keyhiveUrl());
+    provider.append(view);
+    document.body.replaceChildren(provider);
+    await settle();
+    expect(view.querySelector(".pw-error")).toBeTruthy();
+
+    // the sender's device pushes it to the server; nothing tells us
+    serverHasIt = true;
+    await settle(1200);
+    expect(resyncSubduction).toHaveBeenCalledTimes(1);
+    expect(tool.mounts).toBe(1);
+    expect(view.querySelector(".pw-error")).toBeNull();
+  });
 });

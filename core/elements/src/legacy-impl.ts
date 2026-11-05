@@ -1,7 +1,9 @@
 import {
+  parseAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
   type DocHandleChangePayload,
+  type DocumentId,
   type Repo,
 } from "@automerge/automerge-repo/slim";
 import {
@@ -483,6 +485,31 @@ export class LegacyImpl {
     }
   }
 
+  // Have the repo ask the sync server for the doc again. Once a doc's query
+  // has settled on "unavailable", `find` answers from that verdict without
+  // asking anyone: the subduction source only re-arms when data is pushed, a
+  // connection changes, or a key arrives. So a timed re-find on its own finds
+  // nothing new. `resyncSubduction` marks the doc never-synced, and the round
+  // it opens starts a macrotask later, so it's asked for when a retry is
+  // scheduled: by the time the retry's `find` runs, the query is loading or
+  // has a fresh answer. A repo without a subduction source has no
+  // `resyncSubduction`, and a doc that isn't attached to it is a no-op.
+  //
+  // It goes by the url the view was given. Under a remapping provider the doc
+  // actually fetched may be another (a draft's clone), which this doesn't
+  // reach; that's no worse than before, when no retry re-armed anything.
+  #askAgain(url: AutomergeUrl): void {
+    const repo = this.#repo as Repo & {
+      resyncSubduction?: (documentId: DocumentId) => void;
+    };
+    if (typeof repo.resyncSubduction !== "function") return;
+    try {
+      repo.resyncSubduction(parseAutomergeUrl(url).documentId);
+    } catch (err) {
+      log("resync of %s failed: %o", url, err);
+    }
+  }
+
   // Try a failed load again after the next delay in LOAD_RETRY_DELAYS_MS, or
   // leave it to keyhive ops once they've all been used.
   #scheduleRetry(): void {
@@ -490,6 +517,7 @@ export class LegacyImpl {
     const delay = LOAD_RETRY_DELAYS_MS[this.#retryAttempt];
     if (delay === undefined) return;
     this.#retryAttempt++;
+    if (this.#docUrl) this.#askAgain(this.#docUrl);
     this.#retryTimer = setTimeout(() => {
       this.#retryTimer = null;
       void this.#retryLoad();
