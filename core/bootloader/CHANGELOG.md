@@ -1,5 +1,19 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.9.4
+
+### Patch Changes
+
+- 817aba8: `setup()` takes an `onProgress` callback for a loading screen. It's told the boot stage (`workers`, `identity`, `package-list`, `packages`, `opening`), how far the public reader has got (whether this is a first visit, which has every keyhive event on the server to catch up on, and how many it has relayed), and how many of the listed packages have loaded. The bootloader exports `onPublicReaderStatus` for the reader's part on its own, and a `ModuleWatcher` reports the modules on its settings lists to `onModules`.
+- d7b2a03: Queue fetcher updates that arrive during reader catch-up so the reader does not miss them.
+- 677a68c: The public reader now runs in its own SharedWorker (`/public-reader-worker.js`), one per origin, instead of on each tab's main thread and again in the automerge worker. Catching up on the server's keyhive took two 5–9s blocks of wasm on the page, long enough that the service worker stopped asking the tab for its own `automerge:` requests and handed them to the automerge worker, which then had to catch up all over again; boot regularly ran past setup's 30s deadline. Tabs now connect their Repo to the reader with `connectPublicReader`, and pass the automerge worker a port to it.
+
+  The reader's keyhive state is kept in IndexedDB (`<prefix>-public-reader-<ark>-<pair>`), so only the first visit replays it: a return visit boots in about a second.
+
+- 63dc3e8: The public reader catches up from the fetcher's saved keyhive history on start, before serving clients. The fetcher's state can be ahead of the reader's debounced archive save after an abrupt exit, or the reader's archive can be missing or rejected; either way the reader now recovers the keys the fetcher already holds instead of only seeing new events.
+- Updated dependencies [817aba8]
+  - @inkandswitch/patchwork-filesystem@0.2.17
+
 ## 0.9.3
 
 ### Patch Changes
