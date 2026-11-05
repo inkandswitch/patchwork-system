@@ -7,7 +7,7 @@
 
 A failed suggested-package import now replaces the loading pulse with the error and offers to try again. Before, the error appeared next to a pulse that never stopped, and the package was never offered again.
 
-When a doc fails to load, a keyhive op now retries the load in place. Before, it tore down the view and rebuilt it, so a busy connection kept blanking the error. The `#clearDocCache` step that ran before each retry is gone: it could never find the handle it was looking for. In `@inkandswitch/patchwork-providers`, `OverlayRepo` now releases the `repo:handle-descriptor` subscription of a failed resolution. It used to leak one per retry, out of reach of `dispose`.
+When a doc fails to load, a keyhive op now retries the load in place. Before, it tore down the view and rebuilt it, so a busy connection kept blanking the error. A failed load is also tried again on a timer, after 1, 2, 4, 8 and 15 seconds: the op that grants access can land before the doc can be fetched and be the last op for a while, which left a doc someone had just shared showing "unavailable" until a reload. The `#clearDocCache` step that ran before each retry is gone: it could never find the handle it was looking for. In `@inkandswitch/patchwork-providers`, `OverlayRepo` now releases the `repo:handle-descriptor` subscription of a failed resolution. It used to leak one per retry, out of reach of `dispose`.
 
 Keyhive access is now watched with one `ingest-remote` listener per hive instead of one per view. A burst of ops is checked once per doc, however many views show that doc. Views of legacy (non-keyhive) docs no longer listen at all.
 

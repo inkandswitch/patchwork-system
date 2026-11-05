@@ -80,6 +80,12 @@ type HostElement = HTMLElement & {
   hive?: AutomergeRepoKeyhive;
 };
 
+// How long a failed load waits before trying again, attempt by attempt. A
+// grant can land seconds before the doc it grants is fetchable, and the op
+// that carried it may be the last one for a while, so a keyhive op alone
+// can't be relied on to bring the view back. ~30s in all, then ops only.
+const LOAD_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
+
 const ERROR_STYLE_ID = "patchwork-view-error-style";
 
 // Distinct ids so each view's `:(` can point its `popovertarget` at its own
@@ -257,9 +263,12 @@ export class LegacyImpl {
   #teardown = new Serialized(() => this.#runTeardown());
   // `unable` because the identity has no access yet; a grant mounts the view.
   #unableNoAccess = false;
-  // `unable` because the doc failed to load; a keyhive op retries the load.
+  // `unable` because the doc failed to load; a keyhive op retries the load,
+  // and so does a timer, backing off through LOAD_RETRY_DELAYS_MS.
   #loadFailed = false;
   #retryingLoad = false;
+  #retryAttempt = 0;
+  #retryTimer: ReturnType<typeof setTimeout> | null = null;
   #toast: HTMLElement | null = null;
   #toastTimer: ReturnType<typeof setTimeout> | null = null;
   #toastPositioned = false;
@@ -419,6 +428,7 @@ export class LegacyImpl {
       this.#loadFailed = true;
       const e = err as Error;
       this.#displayError(e?.message ?? String(err), e?.stack, err);
+      this.#scheduleRetry();
       return;
     }
 
@@ -439,18 +449,41 @@ export class LegacyImpl {
   // collapse into the one in flight.
   async #retryLoad(): Promise<void> {
     if (this.#retryingLoad || !this.#docUrl) return;
+    this.#cancelRetry();
     this.#retryingLoad = true;
     const epoch = this.#initEpoch;
     try {
       const handle = await this.#repo.find<HasPatchworkMetadata>(this.#docUrl);
       if (epoch !== this.#initEpoch || !this.#loadFailed) return;
       this.#loadFailed = false;
+      this.#retryAttempt = 0;
       this.#mountHandle(handle);
-    } catch {
-      // Still unavailable. The error stays up; the next op retries.
+    } catch (err) {
+      // Still unavailable. The error stays up; the next op, or the timer,
+      // tries again.
+      log("retry of %s failed: %o", this.#docUrl, err);
+      if (epoch === this.#initEpoch && this.#loadFailed) this.#scheduleRetry();
     } finally {
       this.#retryingLoad = false;
     }
+  }
+
+  // Try a failed load again after the next delay in LOAD_RETRY_DELAYS_MS, or
+  // leave it to keyhive ops once they've all been used.
+  #scheduleRetry(): void {
+    if (this.#disposed || this.#retryTimer) return;
+    const delay = LOAD_RETRY_DELAYS_MS[this.#retryAttempt];
+    if (delay === undefined) return;
+    this.#retryAttempt++;
+    this.#retryTimer = setTimeout(() => {
+      this.#retryTimer = null;
+      void this.#retryLoad();
+    }, delay);
+  }
+
+  #cancelRetry(): void {
+    if (this.#retryTimer) clearTimeout(this.#retryTimer);
+    this.#retryTimer = null;
   }
 
   // Access to the doc changed. A grant mounts a view that had none, a
@@ -458,7 +491,10 @@ export class LegacyImpl {
   // (access is checked on every keyhive op, the same ops that sync the doc).
   #onAccessChange(hasAccess: boolean): void {
     if (this.#loadFailed) {
-      if (hasAccess) void this.#retryLoad();
+      if (!hasAccess) return;
+      // a fresh op starts the back-off again
+      this.#retryAttempt = 0;
+      void this.#retryLoad();
       return;
     }
     const granted =
@@ -501,6 +537,8 @@ export class LegacyImpl {
     this.#removeErrorListeners();
     this.#unableNoAccess = false;
     this.#loadFailed = false;
+    this.#cancelRetry();
+    this.#retryAttempt = 0;
     this.#handle = null;
     this.#tool = null;
     this.#requestedToolImports.clear();

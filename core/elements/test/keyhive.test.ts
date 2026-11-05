@@ -255,4 +255,55 @@ describe("keyhive access (legacy mode)", () => {
     expect(tool.mounts).toBe(1);
     expect(view.querySelector(".pw-error")).toBeNull();
   });
+
+  // The grant's op can be the last one for a while, and land before the doc
+  // is fetchable: the view has to try again on its own.
+  it("retries a failed load on a timer when no op comes", async () => {
+    const fake = fakeHive(true);
+    const tag = `kh-legacy-${++seq}`;
+    registerPatchworkViewElement({ name: tag, repo: flakyRepo, hive: fake.hive });
+
+    const toolId = `kh-tool-${++seq}`;
+    const tool = { mounts: 0 };
+    const render = () => {
+      tool.mounts++;
+      return () => {};
+    };
+    tools.register(
+      {
+        id: toolId,
+        type: "patchwork:tool",
+        name: toolId,
+        supportedDatatypes: ["kh-type"],
+        load: async () => render,
+        module: render,
+      } as never,
+      `test://${toolId}`
+    );
+    registered.push(toolId);
+
+    backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
+    available = false;
+    find.mockClear();
+
+    const provider = document.createElement("repo-provider");
+    const view = document.createElement(tag);
+    view.setAttribute("doc-url", keyhiveUrl());
+    provider.append(view);
+    document.body.replaceChildren(provider);
+    await settle();
+    expect(view.querySelector(".pw-error")).toBeTruthy();
+    expect(find).toHaveBeenCalledTimes(1);
+
+    // the doc syncs, and no keyhive op follows
+    available = true;
+    await settle(1200);
+    expect(find).toHaveBeenCalledTimes(2);
+    expect(tool.mounts).toBe(1);
+    expect(view.querySelector(".pw-error")).toBeNull();
+
+    // a mounted view stops retrying
+    await settle(2200);
+    expect(find).toHaveBeenCalledTimes(2);
+  });
 });
