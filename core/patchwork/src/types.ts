@@ -9,6 +9,7 @@ import type {
   AccountDoc,
 } from "@inkandswitch/patchwork-plugins";
 import type * as pluginsNS from "@inkandswitch/patchwork-plugins";
+import type { PublicReaderStatus } from "@inkandswitch/patchwork-bootloader";
 
 export type PluginsApi = typeof pluginsNS;
 
@@ -151,7 +152,7 @@ export interface BootProgress {
    * (system packages are). On a first visit it catches up on every keyhive
    * event the sync server holds before it can decrypt any of them.
    */
-  publicReader?: { firstVisit: boolean; relayed: number };
+  publicReader?: PublicReaderStatus;
   /** How many of the listed packages have loaded, and the name of the last. */
   packages?: { loaded: number; total: number; latest?: string };
 }
