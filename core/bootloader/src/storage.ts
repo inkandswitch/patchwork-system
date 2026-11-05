@@ -23,3 +23,12 @@ export const keyhiveStorageVersion: "0.6" | "0.8" =
   (typeof __SYNC_SERVER__ !== "undefined" && __SYNC_SERVER__.ark) || "0.8";
 
 export const keyhiveStorageName = `${storagePrefix}-keyhive-${keyhiveStorageVersion}`;
+
+/**
+ * The public reader's database (see public-pair.ts): the fetcher's keyhive
+ * state and the reader's archive, for the public pair `pairId` names. Never
+ * the user's: the reader's state is nobody's secret, and a different pair
+ * starts from its own archives.
+ */
+export const publicReaderStorageName = (pairId: string) =>
+  `${storagePrefix}-public-reader-${keyhiveStorageVersion}-${pairId}`;

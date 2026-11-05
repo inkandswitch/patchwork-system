@@ -18,10 +18,16 @@
 //
 // The reader Repo never writes: anything the user changes in a public doc
 // stays local. Pushwork makes repos public this way (`--public-access read`).
+//
+// Ingesting the server's keyhive is seconds of wasm, so in a browser the
+// reader runs once per origin, in its own SharedWorker (public-reader.ts), and
+// every tab's Repo and the resolver's connect to it over a port. Its keyhive
+// state is kept in IndexedDB, so only the first start replays it all.
 
 import {
   stringifyAutomergeUrl,
   type DocumentId,
+  type NetworkAdapterInterface,
   type PeerId,
   type Repo,
   type StorageAdapterInterface,
@@ -46,22 +52,29 @@ const log = debug("patchwork:public-pair");
 
 /** How long the fetcher's keyhive events gather before the reader ingests them. */
 const RELAY_AFTER_MS = 100;
+/** How long after the reader last changed its archive is saved. */
+const SAVE_READER_AFTER_MS = 2_000;
+const READER_ARCHIVE_KEY = ["public-reader", "reader-archive"];
+/** Where ARK keeps a keyhive's archives in its storage. */
+const FETCHER_ARCHIVES = ["keyhive-db", "/archives/"];
 const HEX = 16;
 const HEX_DIGITS_PER_BYTE = 2;
 
 type Ark = typeof import("@automerge/automerge-repo-keyhive");
 
-export type PublicReaderOptions = {
-  /** The user's Repo, which gets the reader as a peer. */
-  repo: Repo;
-  /** The user's hive: docs its keyhive knows are never offered to the reader. */
-  hive: AutomergeRepoKeyhive;
+export type PublicReaderNodeOptions = {
   /** The sync server's URL, which the reader connects to as the fetcher. */
   url: string;
-  /** The sync server's keyhive identity, as the user's hive was given it. */
+  /** The sync server's keyhive identity. */
   syncServer: SyncServerIdentity;
   /** Whose public to read. Default: Patchwork's. */
   principals?: PublicPrincipals;
+  /**
+   * Where the fetcher's keyhive state and the reader's archive are kept, so a
+   * start picks up from where the last one got to rather than replaying every
+   * keyhive event the server has. Default: memory, for as long as this lasts.
+   */
+  storage?: StorageAdapterInterface;
 };
 
 export type PublicReader = {
@@ -71,41 +84,47 @@ export type PublicReader = {
   hive: AutomergeRepoKeyhive;
   /** The keyhive opened as the reader, which decrypts. */
   reader: Keyhive;
+  /**
+   * Answer a user's Repo on `control`, the other end of which is given to
+   * {@link connectToPublicReader}. Returns a function that hangs up.
+   */
+  serve(control: MessagePort): () => void;
 };
 
 /**
- * Give `repo` a peer that reads documents made public to Patchwork: the user's
- * Repo asks it for any doc the user's keyhive doesn't know, and it fetches and
- * decrypts that doc through the public pair.
+ * Start a node that reads documents made public to Patchwork: it fetches and
+ * decrypts a doc through the public pair when a connected user's Repo offers
+ * it one (see {@link connectToPublicReader}). In a page it runs in the public
+ * reader's SharedWorker (public-reader.ts), since ingesting keyhive is
+ * seconds of wasm that would otherwise hold up the tab.
  */
-export async function attachPublicReader({
-  repo,
-  hive,
+export async function startPublicReader({
   url,
   syncServer,
   principals = PATCHWORK_PUBLIC_PAIR,
-}: PublicReaderOptions): Promise<PublicReader> {
+  storage = new MemoryStorage(),
+}: PublicReaderNodeOptions): Promise<PublicReader> {
   const ark = await import("@automerge/automerge-repo-keyhive");
   const { Repo } = await import("@automerge/automerge-repo/slim");
   const { MessageChannelNetworkAdapter } =
     await import("@automerge/automerge-repo-network-messagechannel");
 
-  const reader = await openReader(ark, principals);
+  const reader = await openReader(ark, principals, storage);
   const queue = serial();
   const interceptor = new ReaderInterceptor(ark, reader, queue);
 
-  // The fetcher's keyhive state lives only as long as this Repo: every start
-  // begins from its archive and syncs what it relays from the server again.
-  const keyhiveStorage = new MemoryStorage();
-  await keyhiveStorage.save(
-    ["keyhive-db", "/archives/", "fetcher"],
-    fromBase64(principals.fetcherArchive)
-  );
+  // The fetcher starts from its shipped archive the first time, and from its
+  // own saved state after that, which ARK compacts the shipped one into.
+  if ((await storage.loadRange(FETCHER_ARCHIVES)).length === 0) {
+    await storage.save(
+      [...FETCHER_ARCHIVES, "fetcher"],
+      fromBase64(principals.fetcherArchive)
+    );
+  }
 
-  const channel = new MessageChannel();
   const { hive: fetcher, repo: publicRepo } =
     await ark.initializeAutomergeRepoKeyhive({
-      storage: keyhiveStorage,
+      storage,
       keyPair: await fetcherKeyPair(ark, principals.fetcherSeed),
       peerIdSuffix: `${storagePrefix}-public`,
       syncServer,
@@ -114,17 +133,31 @@ export async function attachPublicReader({
       createRepo: (config) =>
         new Repo({ ...config, subductionBlobInterceptor: interceptor }),
       repo: {
+        // Never written to: the reader can't encrypt, so nothing it holds
+        // can be saved (and the user's Repo keeps what it's sent).
         storage: new MemoryStorage(),
-        network: [new MessageChannelNetworkAdapter(channel.port2)],
         subductionWebsocketEndpoints: [url],
-        // It holds only docs the user's Repo was offered, so it offers
-        // them all back as soon as it has them.
+        // It holds only docs a user's Repo was offered, so it offers them
+        // all back as soon as it has them.
         shareConfig: {
           announce: async () => true,
           access: async () => true,
         },
       },
     });
+
+  // Saved a while after the reader last changed, so a start has it.
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  const saveReader = () => {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      queue(async () => {
+        const archive = (await reader.toArchive()).toBytes();
+        await storage.save(READER_ARCHIVE_KEY, archive);
+        log("saved the reader's archive (%d bytes)", archive.length);
+      }).catch((error) => log("saving the reader's archive failed: %O", error));
+    }, SAVE_READER_AFTER_MS);
+  };
 
   // Everything the fetcher learns goes to the reader, which is what makes a
   // doc's keys reachable to it. A sync brings thousands of events, so they're
@@ -147,7 +180,10 @@ export async function attachPublicReader({
         events.length,
         grew ? "" : ", none new"
       );
-      if (grew) publicRepo.shareConfigChanged();
+      if (grew) {
+        publicRepo.shareConfigChanged();
+        saveReader();
+      }
     } catch (error) {
       log("relaying %d keyhive events failed: %O", events.length, error);
     }
@@ -157,35 +193,166 @@ export async function attachPublicReader({
     flush ??= setTimeout(() => void relay(), RELAY_AFTER_MS);
   });
 
-  // The user's Repo holds its requests back while its own source is still
-  // trying the server, which can be for as long as it keeps retrying. So a
-  // doc it offers is fetched straight away, and offered back once it's here.
-  offerUnknownDocs(ark, repo, hive, publicRepo.peerId, (documentId) =>
-    publicRepo.findWithProgress(documentId)
-  );
-  repo.networkSubsystem.addNetworkAdapter(
-    new MessageChannelNetworkAdapter(channel.port1)
-  );
-  log("public reader attached as %s", publicRepo.peerId);
-  return { repo: publicRepo, hive: fetcher, reader };
+  const serve = (control: MessagePort) => {
+    let adapter: NetworkAdapterInterface | undefined;
+    let closed = false;
+    const drop = () => {
+      if (adapter) publicRepo.networkSubsystem.removeNetworkAdapter(adapter);
+      adapter = undefined;
+    };
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      drop();
+      control.close();
+    };
+    control.addEventListener("message", ({ data }) => {
+      if (closed) return;
+      if (data?.type === "network" && data.port instanceof MessagePort) {
+        drop();
+        adapter = new MessageChannelNetworkAdapter(data.port);
+        publicRepo.networkSubsystem.addNetworkAdapter(adapter);
+      } else if (
+        data?.type === "fetch" &&
+        typeof data.documentId === "string"
+      ) {
+        publicRepo.findWithProgress(data.documentId as DocumentId);
+      } else if (data?.type === "bye") {
+        close();
+      }
+    });
+    // A tab that goes doesn't say bye.
+    control.addEventListener("close", close);
+    control.start();
+    control.postMessage({
+      type: "reader",
+      peerId: publicRepo.peerId,
+    } satisfies ReaderHello);
+    return close;
+  };
+
+  log("public reader started as %s", publicRepo.peerId);
+  return { repo: publicRepo, hive: fetcher, reader, serve };
+}
+
+/** The public reader → a user's Repo: which peer it is. */
+type ReaderHello = { type: "reader"; peerId: PeerId };
+
+export type PublicReaderLink = {
+  /** The user's Repo, which gets the reader as a peer. */
+  repo: Repo;
+  /** The user's hive: docs its keyhive knows are never offered to the reader. */
+  hive: AutomergeRepoKeyhive;
+  /** A port to a {@link PublicReader}'s `serve`. */
+  control: MessagePort;
+};
+
+/** What each user's Repo knows of the reader it's connected to now. */
+type Offering = {
+  /** The reader's peer id, less its per-instance part. */
+  reader?: string;
+  fetch?: (documentId: DocumentId) => void;
+};
+const offerings = new WeakMap<Repo, Offering>();
+
+/**
+ * Give `repo` the public reader on `control` as a peer: it asks the reader for
+ * exactly the docs its own keyhive doesn't know, and the reader fetches and
+ * decrypts each through the public pair, so a find for a public doc is
+ * answered over automerge sync like any other. Connecting again (to a new
+ * reader, when the last one went) replaces the last connection. Returns a
+ * function that hangs up.
+ */
+export async function connectToPublicReader({
+  repo,
+  hive,
+  control,
+}: PublicReaderLink): Promise<() => void> {
+  const ark = await import("@automerge/automerge-repo-keyhive");
+  const { MessageChannelNetworkAdapter } =
+    await import("@automerge/automerge-repo-network-messagechannel");
+
+  let offering = offerings.get(repo);
+  if (!offering) {
+    offering = {};
+    offerings.set(repo, offering);
+    offerUnknownDocs(ark, repo, hive, offering);
+  }
+  const current = offering;
+
+  let adapter: NetworkAdapterInterface | undefined;
+  let closed = false;
+  const drop = () => {
+    if (adapter) repo.networkSubsystem.removeNetworkAdapter(adapter);
+    adapter = undefined;
+  };
+  // Until the reader says who it is, nothing connects: the user's Repo
+  // couldn't tell it from any other peer, and would share the user's docs.
+  control.addEventListener("message", ({ data }) => {
+    const hello = data as ReaderHello | undefined;
+    if (closed || hello?.type !== "reader" || typeof hello.peerId !== "string")
+      return;
+    // ARK's peer ids end in a random part per instance; the rest names the reader
+    current.reader = hello.peerId.slice(0, hello.peerId.lastIndexOf("-"));
+    current.fetch = (documentId) =>
+      control.postMessage({ type: "fetch", documentId });
+    drop();
+    const { port1, port2 } = new MessageChannel();
+    control.postMessage({ type: "network", port: port2 }, [port2]);
+    adapter = new MessageChannelNetworkAdapter(port1);
+    repo.networkSubsystem.addNetworkAdapter(adapter);
+    log("connected to the public reader %s", hello.peerId);
+  });
+  control.start();
+
+  return () => {
+    if (closed) return;
+    closed = true;
+    drop();
+    try {
+      control.postMessage({ type: "bye" });
+    } catch {
+      // already gone
+    }
+    control.close();
+  };
+}
+
+export type PublicReaderOptions = PublicReaderNodeOptions &
+  Omit<PublicReaderLink, "control">;
+
+/**
+ * Start a public reader on this thread and connect `repo` to it, for where
+ * there's no SharedWorker to run it in (node, tests).
+ */
+export async function attachPublicReader({
+  repo,
+  hive,
+  ...options
+}: PublicReaderOptions): Promise<PublicReader> {
+  const node = await startPublicReader(options);
+  const { port1, port2 } = new MessageChannel();
+  node.serve(port2);
+  await connectToPublicReader({ repo, hive, control: port1 });
+  return node;
 }
 
 /**
- * Have `repo` offer the reader (`readerPeer`) only the docs its own keyhive
- * doesn't know, ones made public to Patchwork or ones the user can't read at
- * all, and `fetch` each as it's offered. The user's own docs never reach the
- * reader. Every other peer is shared with as before.
+ * Have `repo` offer the reader only the docs its own keyhive doesn't know,
+ * ones made public to Patchwork or ones the user can't read at all, and have
+ * the reader fetch each as it's offered: the user's Repo holds its requests
+ * back while its own source is still trying the server, which can be for as
+ * long as it keeps retrying. The user's own docs never reach the reader.
+ * Every other peer is shared with as before.
  */
 function offerUnknownDocs(
   ark: Ark,
   repo: Repo,
   hive: AutomergeRepoKeyhive,
-  readerPeer: PeerId,
-  fetch: (documentId: DocumentId) => void
+  offering: Offering
 ) {
-  // ARK's peer ids end in a random part per instance; the rest names the reader
-  const prefix = readerPeer.slice(0, readerPeer.lastIndexOf("-"));
-  const isReader = (peerId: PeerId) => peerId.startsWith(prefix);
+  const isReader = (peerId: PeerId) =>
+    offering.reader !== undefined && peerId.startsWith(offering.reader);
   const offered = async (documentId?: DocumentId) => {
     if (!documentId) return false;
     const url = stringifyAutomergeUrl({ documentId });
@@ -196,7 +363,7 @@ function offerUnknownDocs(
       );
       if (known) return false;
       log("offering %s to the public reader", documentId);
-      fetch(documentId);
+      offering.fetch?.(documentId);
       return true;
     } catch (error) {
       log("couldn't tell whether keyhive knows %s: %O", documentId, error);
@@ -217,7 +384,11 @@ function offerUnknownDocs(
  * signer's verifying key, so this is the reader's key paired with a throwaway
  * private key: anything it signs fails to verify.
  */
-async function openReader(ark: Ark, p: PublicPrincipals): Promise<Keyhive> {
+async function openReader(
+  ark: Ark,
+  p: PublicPrincipals,
+  storage: StorageAdapterInterface
+): Promise<Keyhive> {
   const key = ark.ContactCard.fromBytes(fromBase64(p.readerCard)).id.toBytes();
   const publicKey = await crypto.subtle.importKey(
     "raw",
@@ -232,11 +403,20 @@ async function openReader(ark: Ark, p: PublicPrincipals): Promise<Keyhive> {
     ["sign", "verify"]
   )) as CryptoKeyPair;
   const signer = await ark.Signer.webCryptoSigner({ publicKey, privateKey });
-  return new ark.Archive(fromBase64(p.readerArchive)).tryToKeyhive(
-    ark.CiphertextStore.newInMemory(),
-    signer,
-    () => {}
-  );
+  const reader = await new ark.Archive(
+    fromBase64(p.readerArchive)
+  ).tryToKeyhive(ark.CiphertextStore.newInMemory(), signer, () => {});
+  // On top of the shipped archive, which is what has its prekey secrets.
+  const saved = await storage.load(READER_ARCHIVE_KEY);
+  if (saved) {
+    try {
+      await reader.ingestArchive(new ark.Archive(saved));
+      log("the reader picked up from its saved archive");
+    } catch (error) {
+      log("couldn't load the reader's saved archive: %O", error);
+    }
+  }
+  return reader;
 }
 
 /** The fetcher's Ed25519 key pair, from its seed, extractable as ARK needs. */

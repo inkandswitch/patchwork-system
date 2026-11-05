@@ -19,7 +19,6 @@ import {
   type ArkVersion,
 } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 import type { SignerIdentity } from "./types.js";
-import type { PublicReaderOptions } from "@inkandswitch/patchwork-bootloader/public-pair";
 import debug from "debug";
 
 const log = debug("patchwork:setup:repo");
@@ -47,21 +46,6 @@ export function initWasm(): Promise<void> {
     ]).then(() => undefined);
   }
   return wasmReady;
-}
-
-/**
- * Give the Repo a peer that reads docs made public to Patchwork. It starts
- * after the Repo does and nothing waits on it: a find for a public doc is
- * answered once it's there.
- */
-async function attachPublicReader(options: PublicReaderOptions) {
-  try {
-    const { attachPublicReader } =
-      await import("@inkandswitch/patchwork-bootloader/public-pair");
-    await attachPublicReader(options);
-  } catch (error) {
-    console.error("couldn't start the public reader", error);
-  }
 }
 
 /**
@@ -119,15 +103,14 @@ export async function createRepo(): Promise<TabRepo> {
     });
     log("keyhive setup complete");
     // Docs made public to Patchwork (pushwork's `--public-access read`) are
-    // read through its public pair, which only ARK 0.8's keyhive has.
-    if (syncServer.ark !== "0.6") {
-      void attachPublicReader({
-        repo,
-        hive,
-        url: syncServer.url,
-        syncServer: identity,
-      });
-    }
+    // read through its public pair, in a SharedWorker of its own. Imported
+    // lazily: the bootloader's entry touches `window` as it loads, and this
+    // module is loaded without one in tests.
+    void import("@inkandswitch/patchwork-bootloader")
+      .then(({ connectPublicReader }) => connectPublicReader(repo, hive))
+      .catch((error) =>
+        console.error("couldn't connect to the public reader", error)
+      );
     return { repo, hive };
   }
 

@@ -35,6 +35,16 @@ export const workers: {
     fileName: "automerge-protocol-handler.js",
     hashed: true,
   },
+  // The public reader's SharedWorker, and what its script imports, likewise.
+  {
+    specifier: "@inkandswitch/patchwork-bootloader/public-reader-worker",
+    fileName: "public-reader-worker.js",
+  },
+  {
+    specifier: "@inkandswitch/patchwork-bootloader/public-reader",
+    fileName: "public-reader.js",
+    hashed: true,
+  },
   {
     specifier: "@inkandswitch/patchwork-bootloader/module-loader-worker",
     fileName: "module-loader-worker.js",
