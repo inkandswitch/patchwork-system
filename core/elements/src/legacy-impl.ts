@@ -1133,8 +1133,8 @@ export class LegacyImpl {
     // No longer in flight, so the doc's suggestion can be offered again
     // rather than every later render showing a spinner for an import that's
     // over.
-    this.#requestedToolImports.delete(url);
     if (epoch !== this.#initEpoch) return;
+    this.#requestedToolImports.delete(url);
     if (this.#state !== State.unable) return;
     this.#dismissToast(true);
     // Replace whatever was standing in while the import ran (the loading
