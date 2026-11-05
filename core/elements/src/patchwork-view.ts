@@ -1,6 +1,6 @@
 import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { activeAccessForDoc } from "./keyhive-access.js";
+import { gateOnAccess } from "./keyhive-access.js";
 import {
   getRegistry,
   isKeyhiveDoc,
@@ -15,6 +15,11 @@ import {
 } from "@inkandswitch/patchwork-providers";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 import { LegacyImpl } from "./legacy-impl.js";
+import {
+  dispatchFromNearestConnected,
+  Serialized,
+  Teardowns,
+} from "./lifecycle.js";
 import debug from "debug";
 
 const log = debug("patchwork:elements:patchwork-view");
@@ -124,11 +129,8 @@ export function registerPatchworkViewElement(
       #loaded: LoadedComponent | null = null;
       #state: State = State.none;
       #initEpoch = 0;
-      #teardowns = new Set<() => unknown | Promise<void>>();
-      #teardownPromise: Promise<void> | null = null;
-      #keyhiveRetrySetup = false;
-      #handlingKeyhiveSync = false;
-      #pendingKeyhiveSync = false;
+      #teardowns = new Teardowns();
+      #teardown = new Serialized(() => this.#runTeardown());
       // True when `unable` because access hasn't synced yet.
       // Receiving a keyhive op can recover this.
       #unableNoAccess = false;
@@ -203,13 +205,13 @@ export function registerPatchworkViewElement(
         // reconnects while the disconnect's teardown is still in flight;
         // syncing now would no-op against the not-yet-reset state and the
         // view would stay blank forever. Wait the teardown out.
-        if (this.#teardownPromise) {
-          void this.#teardownPromise.then(() => {
-            if (this.isConnected) this.#sync();
-          });
-        } else {
-          this.#sync();
-        }
+        if (this.#teardown.pending) void this.#afterTeardown();
+        else this.#sync();
+      }
+
+      async #afterTeardown() {
+        await this.#teardown.pending;
+        this.#sync();
       }
 
       disconnectedCallback() {
@@ -218,7 +220,12 @@ export function registerPatchworkViewElement(
         // shim, then dispose once the teardown has run.
         const overlayRepo = this.#overlayRepo;
         this.#overlayRepo = null;
-        void this.#teardown().then(() => overlayRepo?.dispose());
+        void this.#disposeAfterTeardown(overlayRepo);
+      }
+
+      async #disposeAfterTeardown(overlayRepo: OverlayRepo | null) {
+        await this.#teardown.run();
+        overlayRepo?.dispose();
       }
 
       connectedMoveCallback() {
@@ -256,7 +263,15 @@ export function registerPatchworkViewElement(
         // Either transitioning between forms or initial setup after an
         // attribute landed on an idle element. Tear down whatever is
         // there (no-op when idle) and re-sync against the attributes.
-        void this.#teardown().then(() => this.#sync());
+        void this.#restart();
+      }
+
+      // Tear down and mount again against the current attributes. Every
+      // remount goes through `#sync`, which won't mount a detached element, so
+      // a view removed while the teardown was in flight stays down.
+      async #restart() {
+        await this.#teardown.run();
+        this.#sync();
       }
 
       #wantsComponent() {
@@ -271,6 +286,12 @@ export function registerPatchworkViewElement(
       }
 
       #sync() {
+        // Attributes change on detached elements too (a framework sets them
+        // before inserting), and async remounts can land after a disconnect.
+        // Only a connected element mounts; `connectedCallback` syncs on
+        // (re)insertion, and nothing would ever tear down a detached mount.
+        if (!this.isConnected) return;
+
         if (this.#wantsLegacy()) {
           this.#renderLegacy();
           return;
@@ -314,62 +335,29 @@ export function registerPatchworkViewElement(
         const epoch = ++this.#initEpoch;
         this.#state = State.initializing;
 
-        if (params.hive && this.url) {
-          // Legacy (padded-zero) doc: skip keyhive gate
-          const keyhiveDoc = isKeyhiveDoc(this.url);
-
-          if (keyhiveDoc) {
-            const access = await activeAccessForDoc(params.hive, this.url);
-            if (epoch !== this.#initEpoch) return;
-            const accessLevel = access ? access.toString() : "None";
-
-            if (accessLevel === "None") {
-              this.#state = State.unable;
-              this.#unableNoAccess = true;
-
-              if (!this.#keyhiveRetrySetup) {
-                this.#keyhiveRetrySetup = true;
-                const onKeyhiveSync = () => this.#handleKeyhiveSync();
-                (params.hive.networkAdapter as any).on(
-                  "ingest-remote",
-                  onKeyhiveSync
-                );
-                this.#teardowns.add(() => {
-                  (params.hive!.networkAdapter as any).off(
-                    "ingest-remote",
-                    onKeyhiveSync
-                  );
-                });
-              }
-              return;
-            }
+        const url = this.url;
+        if (url) {
+          const hasAccess = await gateOnAccess(
+            params.hive,
+            url,
+            this.#teardowns,
+            (granted) => this.#onAccessChange(granted)
+          );
+          if (epoch !== this.#initEpoch) return;
+          if (!hasAccess) {
+            this.#state = State.unable;
+            this.#unableNoAccess = true;
+            return;
           }
 
-          if (!this.#keyhiveRetrySetup) {
-            this.#keyhiveRetrySetup = true;
-            const onKeyhiveSync = () => this.#handleKeyhiveSync();
-            (params.hive.networkAdapter as any).on(
-              "ingest-remote",
-              onKeyhiveSync
-            );
-            this.#teardowns.add(() => {
-              (params.hive!.networkAdapter as any).off(
-                "ingest-remote",
-                onKeyhiveSync
-              );
-            });
-          }
-
-          if (keyhiveDoc) {
-            // Access is confirmed, but the doc's content may not have synced
-            // yet.
-            const progress = params.repo.findWithProgress(
-              this.url as AutomergeUrl
-            );
+          // Access is confirmed, but the doc's content may not have synced
+          // yet.
+          if (params.hive && isKeyhiveDoc(url)) {
+            const progress = params.repo.findWithProgress(url);
             const initial = progress.peek();
             if (initial.state === "failed") {
               console.error(
-                `patchwork-view: failed to load ${this.url}`,
+                `patchwork-view: failed to load ${url}`,
                 initial.error
               );
               this.#state = State.error;
@@ -380,10 +368,10 @@ export function registerPatchworkViewElement(
               const unsubscribe = progress.subscribe((queryState) => {
                 if (epoch !== this.#initEpoch) return;
                 if (queryState.state === "ready") {
-                  void this.#teardown().then(() => this.#sync());
+                  void this.#restart();
                 } else if (queryState.state === "failed") {
                   console.error(
-                    `patchwork-view: failed to load ${this.url}`,
+                    `patchwork-view: failed to load ${url}`,
                     queryState.error
                   );
                   this.#state = State.error;
@@ -415,8 +403,7 @@ export function registerPatchworkViewElement(
           // Hot reload: a newer importUrl re-mounts.
           if (this.#state == "error" || this.#state == "rendered") {
             if (loaded.importUrl !== this.#loaded?.importUrl) {
-              await this.#teardown();
-              this.#sync();
+              await this.#restart();
             }
           }
         });
@@ -431,18 +418,6 @@ export function registerPatchworkViewElement(
         this.#queueRender();
       };
 
-      // Serialized: overlapping calls (both observed attributes changing in
-      // one tick, disconnect racing an attribute change) share the one
-      // in-flight run instead of double-running the same cleanups.
-      #teardown(): Promise<void> {
-        if (!this.#teardownPromise) {
-          this.#teardownPromise = this.#runTeardown().finally(() => {
-            this.#teardownPromise = null;
-          });
-        }
-        return this.#teardownPromise;
-      }
-
       async #runTeardown() {
         if (this.#legacyImpl) {
           const impl = this.#legacyImpl;
@@ -456,20 +431,16 @@ export function registerPatchworkViewElement(
           const mountedComponentId = this.#loaded?.id;
 
           this.#initEpoch++;
-
-          const teardowns = [...this.#teardowns];
-          this.#teardowns.clear();
-          for (const fn of teardowns) {
-            await fn?.();
-          }
+          await this.#teardowns.run();
 
           this.#loaded = null;
-          this.#keyhiveRetrySetup = false;
           this.#unableNoAccess = false;
           this.#state = State.none;
 
           if (wasMounted && mountedComponentId) {
-            this.#dispatchUnmount(
+            dispatchFromNearestConnected(
+              this,
+              this.#capturedParent,
               new UnmountedEvent({ componentId: mountedComponentId })
             );
           }
@@ -479,64 +450,32 @@ export function registerPatchworkViewElement(
         this.#overlayRepo = null;
       }
 
-      // Bubbling is a no-op when detached; fall back to the closest
-      // still-connected ancestor.
-      #dispatchUnmount(event: UnmountedEvent) {
-        if (this.isConnected) {
-          this.dispatchEvent(event);
-          return;
-        }
-        let node: Element | null = this.#capturedParent;
-        while (node && !node.isConnected) node = node.parentElement;
-        if (node) node.dispatchEvent(event);
-      }
-
-      async #handleKeyhiveSync() {
-        if (!this.url || !params.hive) return;
-
-        if (this.#handlingKeyhiveSync) {
-          this.#pendingKeyhiveSync = true;
-          return;
-        }
-        this.#handlingKeyhiveSync = true;
-        this.#pendingKeyhiveSync = false;
-
-        try {
-          let hasAccess = false;
-          let accessCheckSucceeded = false;
-          try {
-            if (!isKeyhiveDoc(this.url)) return;
-            const access = await activeAccessForDoc(params.hive, this.url);
-            hasAccess = !!access;
-            accessCheckSucceeded = true;
-          } catch {
-            return;
-          }
-
-          const isDisplayed = this.#state === State.rendered;
-          const isUnable = this.#state === State.unable;
-
-          if (hasAccess && isUnable && this.#unableNoAccess) {
-            // Was unable because access hadn't synced, but it just did. Re-sync.
-            await this.#teardown();
-            this.#sync();
-          } else if (!hasAccess && isDisplayed && accessCheckSucceeded) {
-            await this.#teardown();
-            this.#sync();
-          }
-        } finally {
-          this.#handlingKeyhiveSync = false;
-          if (this.#pendingKeyhiveSync) {
-            this.#handleKeyhiveSync();
-          }
-        }
+      // Access to the mounted doc changed: mount once it's granted, unmount
+      // once it's revoked.
+      #onAccessChange(hasAccess: boolean) {
+        const granted =
+          hasAccess && this.#state === State.unable && this.#unableNoAccess;
+        const revoked = !hasAccess && this.#state === State.rendered;
+        if (granted || revoked) void this.#restart();
       }
 
       #queueRender() {
         if (this.#state == "none") return;
         if (this.#state == "rendering") return;
         this.#state = "rendering";
-        queueMicrotask(() => this.#renderComponent());
+        const epoch = this.#initEpoch;
+        queueMicrotask(() => {
+          if (this.#mayRender(epoch)) this.#renderComponent();
+        });
+      }
+
+      // A render queued before a teardown began must not land while it runs:
+      // its cleanup would join a set the teardown has already drained, and
+      // nothing would ever call it. Teardown bumps the epoch first thing, but
+      // registry listeners can queue a fresh render (with the new epoch)
+      // until their own cleanup runs, hence the in-flight check too.
+      #mayRender(epoch: number) {
+        return epoch === this.#initEpoch && !this.#teardown.pending;
       }
 
       #renderComponent() {
