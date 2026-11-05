@@ -176,6 +176,26 @@ export async function startPublicReader({
     }, SAVE_READER_AFTER_MS);
   };
 
+  // The fetcher's saved state can be ahead of the reader's: the last run may
+  // have gone after the fetcher persisted an update but before the reader's
+  // debounced save, or the reader's archive may be missing or rejected. Only
+  // what's new is relayed, so the reader catches up from the fetcher's whole
+  // history here, before any client is served.
+  try {
+    const caughtUp = await queue(async () => {
+      const before = (await reader.stats()).totalOps;
+      await reader.ingestArchive(await fetcher.keyhive.toArchive());
+      return (await reader.stats()).totalOps !== before;
+    });
+    if (caughtUp) {
+      log("the reader caught up from the fetcher's saved state");
+      publicRepo.shareConfigChanged();
+      saveReader();
+    }
+  } catch (error) {
+    log("catching the reader up from the fetcher failed: %O", error);
+  }
+
   // Everything the fetcher learns goes to the reader, which is what makes a
   // doc's keys reachable to it. A sync brings thousands of events, so they're
   // ingested in batches, off the event that brought them. Blobs that arrived
