@@ -136,6 +136,8 @@ export class ModuleWatcher {
 
   onLoad: (name: string, mod: any) => void;
   onUnload?: (name: string) => void;
+  /** Told every module the settings list, whenever it (re)reads them. */
+  onModules?: (modules: string[]) => void;
   /**
    * How an Automerge package doc (pinned to heads) is turned into the
    * `{ plugins }` shape `onLoad` consumes. Defaults to importing the package
@@ -515,6 +517,7 @@ export class ModuleWatcher {
     for (const { doc } of this.settingsDocs()) {
       for (const m of doc?.modules ?? []) urls.add(m);
     }
+    this.onModules?.([...urls]);
     const previousActive = this.#activeModules;
     this.#activeModules = urls;
     for (const previous of previousActive) {
