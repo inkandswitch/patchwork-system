@@ -1,5 +1,4 @@
 import {
-  parseAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
   type DocHandleChangePayload,
@@ -23,8 +22,14 @@ import {
 } from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { activeAccessForDoc } from "./keyhive-access.js";
+import { gateOnAccess } from "./keyhive-access.js";
 import { MountedEvent, UnmountedEvent } from "./events.js";
+import { importSource, presentableImportUrl } from "./import-url.js";
+import {
+  dispatchFromNearestConnected,
+  Serialized,
+  Teardowns,
+} from "./lifecycle.js";
 
 const log = debug("patchwork:elements:legacy");
 
@@ -235,6 +240,10 @@ export class LegacyImpl {
   #element: HostElement;
   #content: HostElement;
   #repo: Repo;
+  #hive: AutomergeRepoKeyhive | undefined;
+  // Set on disconnect. The host makes a fresh impl for each connection, so a
+  // disposed impl never mounts again, whatever async work is still in flight.
+  #disposed = false;
   #docUrl: AutomergeUrl | null = null;
   #toolId: string | null = null;
   #handle: DocHandle<HasPatchworkMetadata> | null = null;
@@ -244,12 +253,13 @@ export class LegacyImpl {
   #initEpoch = 0;
   #capturedParent: Element | null = null;
   #fallbackId: string | undefined;
-  #teardowns = new Set<() => unknown | Promise<void>>();
-  #teardownPromise: Promise<void> | null = null;
-  #keyhiveRetrySetup = false;
-  #handlingKeyhiveSync = false;
-  #pendingKeyhiveSync = false;
+  #teardowns = new Teardowns();
+  #teardown = new Serialized(() => this.#runTeardown());
+  // `unable` because the identity has no access yet; a grant mounts the view.
   #unableNoAccess = false;
+  // `unable` because the doc failed to load; a keyhive op retries the load.
+  #loadFailed = false;
+  #retryingLoad = false;
   #toast: HTMLElement | null = null;
   #toastTimer: ReturnType<typeof setTimeout> | null = null;
   #toastPositioned = false;
@@ -259,6 +269,7 @@ export class LegacyImpl {
   constructor(element: HTMLElement, params: LegacyImplParams) {
     this.#element = element as HostElement;
     this.#repo = params.repo;
+    this.#hive = params.hive;
     this.#element.hive = params.hive;
 
     // `height: 100%` makes the wrapper fill the host so tools that size/measure
@@ -282,7 +293,8 @@ export class LegacyImpl {
   }
 
   async disconnectedCallback(): Promise<void> {
-    await this.#teardown();
+    this.#disposed = true;
+    await this.#teardown.run();
     this.#content.remove();
   }
 
@@ -298,78 +310,47 @@ export class LegacyImpl {
     if (old === val) return;
     if (name === ATTRS.toolId) {
       this.#toolId = val;
-      void this.#teardown().then(() => this.#init());
+      void this.#restart();
     }
     if (name === ATTRS.docUrl) {
       this.#docUrl = val as AutomergeUrl;
-      void this.#teardown().then(() => this.#init());
+      void this.#restart();
     }
   }
 
   #onDocChange = (payload: DocHandleChangePayload<HasPatchworkMetadata>) => {
     const { before, after } = payload.patchInfo;
-    if (getType(before) != getType(after)) {
-      void this.#teardown().then(() => this.#init());
-    }
+    if (getType(before) != getType(after)) void this.#restart();
   };
+
+  // Tear down and mount again. Every remount goes through `#init`, which a
+  // disposed impl refuses, so one disconnected mid-teardown stays down.
+  async #restart(): Promise<void> {
+    await this.#teardown.run();
+    await this.#init();
+  }
 
   #init = async () => {
     const toolRegistry = getRegistry<ToolDescription>("patchwork:tool");
+    if (this.#disposed) return;
     if (this.#state != State.none) return;
     if (!this.#docUrl) return;
 
     const epoch = ++this.#initEpoch;
     this.#state = State.initializing;
 
-    if (this.#element.hive && this.#docUrl) {
-      // Legacy (padded-zero) doc: skip keyhive gate
-      if (isKeyhiveDoc(this.#docUrl)) {
-        const access = await activeAccessForDoc(
-          this.#element.hive,
-          this.#docUrl
-        );
-        if (epoch !== this.#initEpoch) return;
-        const accessLevel = access ? access.toString() : "None";
-
-        if (accessLevel === "None") {
-          this.#state = State.unable;
-          this.#unableNoAccess = true;
-
-          if (!this.#keyhiveRetrySetup) {
-            this.#keyhiveRetrySetup = true;
-            const onKeyhiveSync = () => this.#handleKeyhiveSync();
-            (this.#element.hive.networkAdapter as any).on(
-              "ingest-remote",
-              onKeyhiveSync
-            );
-            this.#teardowns.add(() => {
-              (this.#element.hive!.networkAdapter as any).off(
-                "ingest-remote",
-                onKeyhiveSync
-              );
-            });
-          }
-          return;
-        }
-      }
-
-      if (!this.#keyhiveRetrySetup) {
-        this.#keyhiveRetrySetup = true;
-        const onKeyhiveSync = () => this.#handleKeyhiveSync();
-        (this.#element.hive.networkAdapter as any).on(
-          "ingest-remote",
-          onKeyhiveSync
-        );
-        this.#teardowns.add(() => {
-          (this.#element.hive!.networkAdapter as any).off(
-            "ingest-remote",
-            onKeyhiveSync
-          );
-        });
-      }
-    }
-
+    const hasAccess = await gateOnAccess(
+      this.#hive,
+      this.#docUrl,
+      this.#teardowns,
+      (granted) => this.#onAccessChange(granted)
+    );
     if (epoch !== this.#initEpoch) return;
+    if (!hasAccess) {
+      this.#state = State.unable;
+      this.#unableNoAccess = true;
+      return;
+    }
 
     const removeAddedListener = toolRegistry.on(
       "registered",
@@ -408,8 +389,7 @@ export class LegacyImpl {
             (this.#state == "fallback" && isFallbackTool)
           ) {
             if (loadedTool.importUrl !== this.#tool?.importUrl) {
-              await this.#teardown();
-              void this.#init();
+              await this.#restart();
             }
           }
         }
@@ -427,29 +407,67 @@ export class LegacyImpl {
 
     let handle: DocHandle<HasPatchworkMetadata>;
     try {
-      handle = await repo.find<HasPatchworkMetadata>(this.#docUrl!);
+      handle = await repo.find<HasPatchworkMetadata>(this.#docUrl);
     } catch (err) {
       if (epoch !== this.#initEpoch) return;
       // Every caller voids `#init`'s promise, so rethrowing would only
       // produce an unhandled rejection and wedge `#state` in `initializing`.
-      // Show the error and park in `unable` so a keyhive sync (the usual
-      // reason a find fails: the doc hasn't synced yet) can retry.
+      // Show the error and park in `unable`: the usual reason a find fails
+      // is that the doc hasn't synced yet, and a keyhive op retries it.
       console.error(`failed to load ${this.#docUrl}`, err);
       this.#state = State.unable;
-      this.#unableNoAccess = true;
+      this.#loadFailed = true;
       const e = err as Error;
       this.#displayError(e?.message ?? String(err), e?.stack, err);
       return;
     }
 
     if (epoch !== this.#initEpoch) return;
-
-    this.#handle = handle;
-    this.#handle.on("change", this.#onDocChange);
-    this.#teardowns.add(() => this.#handle!.off("change", this.#onDocChange));
-
-    this.#queueRender();
+    this.#mountHandle(handle);
   };
+
+  #mountHandle(handle: DocHandle<HasPatchworkMetadata>): void {
+    this.#handle = handle;
+    handle.on("change", this.#onDocChange);
+    this.#teardowns.add(() => handle.off("change", this.#onDocChange));
+    this.#queueRender();
+  }
+
+  // Load the doc again after a failed find, leaving the error up while it
+  // runs: a teardown would blank the view and fade the error back in on every
+  // keyhive op, which arrive far faster than the fade. Overlapping retries
+  // collapse into the one in flight.
+  async #retryLoad(): Promise<void> {
+    if (this.#retryingLoad || !this.#docUrl) return;
+    this.#retryingLoad = true;
+    const epoch = this.#initEpoch;
+    try {
+      const handle = await this.#repo.find<HasPatchworkMetadata>(this.#docUrl);
+      if (epoch !== this.#initEpoch || !this.#loadFailed) return;
+      this.#loadFailed = false;
+      this.#mountHandle(handle);
+    } catch {
+      // Still unavailable. The error stays up; the next op retries.
+    } finally {
+      this.#retryingLoad = false;
+    }
+  }
+
+  // Access to the doc changed. A grant mounts a view that had none, a
+  // revocation unmounts a mounted one, and either retries a failed load
+  // (access is checked on every keyhive op, the same ops that sync the doc).
+  #onAccessChange(hasAccess: boolean): void {
+    if (this.#loadFailed) {
+      if (hasAccess) void this.#retryLoad();
+      return;
+    }
+    const granted =
+      hasAccess && this.#state === State.unable && this.#unableNoAccess;
+    const revoked =
+      !hasAccess &&
+      (this.#state === State.rendered || this.#state === State.fallback);
+    if (granted || revoked) void this.#restart();
+  }
 
   // A registration can shift the fallback only when we don't have one yet or
   // the new tool supports the doc's type (a specific match sorts ahead of a
@@ -461,18 +479,6 @@ export class LegacyImpl {
     if (supported === "*" || supported.includes("*")) return true;
     const type = this.#handle ? getType(this.#handle.doc()) : undefined;
     return type != null && supported.includes(type);
-  }
-
-  // Serialized: overlapping calls (doc-url and tool-id both changing in one
-  // tick) share the one in-flight run instead of double-running the same
-  // cleanups.
-  #teardown(): Promise<void> {
-    if (!this.#teardownPromise) {
-      this.#teardownPromise = this.#runTeardown().finally(() => {
-        this.#teardownPromise = null;
-      });
-    }
-    return this.#teardownPromise;
   }
 
   async #runTeardown(): Promise<void> {
@@ -489,17 +495,12 @@ export class LegacyImpl {
     const mountedToolId = this.#tool?.id;
 
     this.#initEpoch++;
-
-    const teardowns = [...this.#teardowns];
-    this.#teardowns.clear();
-    for (const fn of teardowns) {
-      await fn?.();
-    }
+    await this.#teardowns.run();
 
     this.#dismissToast(true);
     this.#removeErrorListeners();
-    this.#keyhiveRetrySetup = false;
     this.#unableNoAccess = false;
+    this.#loadFailed = false;
     this.#handle = null;
     this.#tool = null;
     this.#requestedToolImports.clear();
@@ -507,87 +508,11 @@ export class LegacyImpl {
     this.#state = State.none;
 
     if (wasMounted && mountedUrl && mountedToolId) {
-      this.#dispatchUnmount(
+      dispatchFromNearestConnected(
+        this.#element,
+        this.#capturedParent,
         new UnmountedEvent({ url: mountedUrl, toolId: mountedToolId })
       );
-    }
-  }
-
-  // Detached elements have no parent path, so `bubbles: true` is a
-  // no-op; fall back to the closest still-connected ancestor.
-  #dispatchUnmount(event: UnmountedEvent): void {
-    if (this.#element.isConnected) {
-      this.#element.dispatchEvent(event);
-      return;
-    }
-    let node: Element | null = this.#capturedParent;
-    while (node && !node.isConnected) node = node.parentElement;
-    if (node) node.dispatchEvent(event);
-  }
-
-  async #clearDocCache(): Promise<void> {
-    if (!this.#docUrl || !this.#element.repo) return;
-
-    const retryingDocs = ((globalThis as any).__patchwork_retrying_docs ??=
-      new Set<string>());
-    if (retryingDocs.has(this.#docUrl)) return;
-
-    retryingDocs.add(this.#docUrl);
-    try {
-      const { documentId } = parseAutomergeUrl(this.#docUrl);
-      const handle = (this.#element.repo.handles as any)[documentId];
-      if (handle && handle.state === "unavailable") {
-        this.#element.repo.delete(this.#docUrl);
-      }
-    } catch {}
-
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    retryingDocs.delete(this.#docUrl);
-  }
-
-  async #handleKeyhiveSync(): Promise<void> {
-    if (!this.#docUrl || !this.#element.hive) return;
-
-    if (this.#handlingKeyhiveSync) {
-      this.#pendingKeyhiveSync = true;
-      return;
-    }
-    this.#handlingKeyhiveSync = true;
-    this.#pendingKeyhiveSync = false;
-
-    try {
-      let hasAccess = false;
-      let accessCheckSucceeded = false;
-      try {
-        if (!isKeyhiveDoc(this.#docUrl)) return;
-        const access = await activeAccessForDoc(
-          this.#element.hive,
-          this.#docUrl
-        );
-        hasAccess = !!access;
-        accessCheckSucceeded = true;
-      } catch {
-        return;
-      }
-
-      const isDisplayed =
-        this.#state === State.rendered || this.#state === State.fallback;
-      const isUnable = this.#state === State.unable;
-
-      if (hasAccess && isUnable && this.#unableNoAccess) {
-        await this.#clearDocCache();
-        await this.#teardown();
-        void this.#init();
-      } else if (!hasAccess && isDisplayed && accessCheckSucceeded) {
-        await this.#clearDocCache();
-        await this.#teardown();
-        void this.#init();
-      }
-    } finally {
-      this.#handlingKeyhiveSync = false;
-      if (this.#pendingKeyhiveSync) {
-        this.#handleKeyhiveSync();
-      }
     }
   }
 
@@ -595,7 +520,23 @@ export class LegacyImpl {
     if (this.#state == "none") return;
     if (this.#state == "rendering") return;
     this.#state = "rendering";
-    queueMicrotask(() => this.#render());
+    const epoch = this.#initEpoch;
+    queueMicrotask(() => {
+      if (this.#mayRender(epoch)) this.#render();
+    });
+  }
+
+  // A render queued before a teardown began must not land while it runs: the
+  // tool's cleanup would join a set the teardown has already drained, and
+  // nothing would ever call it. Teardown bumps the epoch first thing, but
+  // registry listeners can queue a fresh render (with the new epoch) until
+  // their own cleanup runs, hence the in-flight check too.
+  #mayRender(epoch: number): boolean {
+    return (
+      !this.#disposed &&
+      epoch === this.#initEpoch &&
+      !this.#teardown.pending
+    );
   }
 
   #render(): void {
@@ -733,6 +674,7 @@ export class LegacyImpl {
 
   #displayLoading = (_toolId: string) => {
     const div = document.createElement("div");
+    div.className = "pw-loading";
     div.style.display = "flex";
     div.style.alignItems = "center";
     div.style.justifyContent = "center";
@@ -903,14 +845,17 @@ export class LegacyImpl {
   }
 
   /**
-   * The module the current doc suggests importing (its `suggestedImportUrl`),
+   * The module the current doc suggests importing (its `suggestedImportUrl`,
+   * in the form {@link presentableImportUrl} makes safe to show and import),
    * if there is one we haven't already been refused. `loading` means it's been
    * accepted and the import is in flight, so callers show a spinner instead of
    * offering it again.
    */
   #suggestedImport(): { url: string; loading: boolean } | null {
     if (!this.#docUrl || !this.#handle) return null;
-    const url = getSuggestedImportUrl(this.#handle.doc());
+    const url = presentableImportUrl(
+      getSuggestedImportUrl(this.#handle.doc())
+    );
     if (!url) return null;
     return { url, loading: this.#requestedToolImports.has(url) };
   }
@@ -941,7 +886,8 @@ export class LegacyImpl {
    */
   #loadSuggestedImport(url: string): void {
     const ok = window.confirm(
-      `This will execute JavaScript stored at ${url}.\n\n` +
+      `This will run JavaScript from ${importSource(url)}:\n\n` +
+        `${url}\n\n` +
         `Only do this if you trust the source of this tool.\n\n` +
         `Load it?`
     );
@@ -1140,19 +1086,28 @@ export class LegacyImpl {
 
   /**
    * The import registered nothing, so the view it was going to fill has nothing
-   * coming: say so rather than sit empty once the progress toast times out.
+   * coming: say so, and offer to try again, rather than sit empty once the
+   * progress toast times out.
    * Only called where nothing could have been registered, so no render is in
    * flight, and only acts while this view still has nothing mounted.
    */
   #reportImportFailed(epoch: number, url: string, error?: unknown): void {
+    // No longer in flight, so the doc's suggestion can be offered again
+    // rather than every later render showing a spinner for an import that's
+    // over.
+    this.#requestedToolImports.delete(url);
     if (epoch !== this.#initEpoch) return;
     if (this.#state !== State.unable) return;
     this.#dismissToast(true);
+    // Replace whatever was standing in while the import ran (the loading
+    // pulse) rather than stacking the error under it.
+    this.#resetDisplay();
     const err = error as Error | undefined;
     this.#displayError(
       `I couldn't load the package at ${url}.`,
       err?.stack ?? err?.message,
-      error
+      error,
+      { label: "Try again", run: () => this.#loadSuggestedImport(url) }
     );
   }
 
