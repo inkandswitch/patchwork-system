@@ -1,5 +1,5 @@
 ---
-"@inkandswitch/patchwork-elements": patch
+"@inkandswitch/patchwork-elements": minor
 "@inkandswitch/patchwork-providers": patch
 ---
 
