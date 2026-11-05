@@ -51,6 +51,14 @@
       "import": "./dist/service-worker.js",
       "types": "./dist/service-worker.d.ts"
     },
+    "./public-reader-worker": {
+      "import": "./dist/public-reader-worker.js",
+      "types": "./dist/public-reader-worker.d.ts"
+    },
+    "./public-reader": {
+      "import": "./dist/public-reader.js",
+      "types": "./dist/public-reader.d.ts"
+    },
     "./automerge-protocol-handler-worker": {
       "import": "./dist/automerge-protocol-handler-worker.js",
       "types": "./dist/automerge-protocol-handler-worker.d.ts"

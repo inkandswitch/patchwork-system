@@ -9,7 +9,10 @@ import { resolveSyncServers, PRELOAD_WASM_ASSETS } from "./sync-servers.js";
  * The service worker isn't here: the browser checks it for updates past its
  * cache.
  */
-export const REVALIDATED_PATHS = ["/automerge-protocol-handler-worker.js"];
+export const REVALIDATED_PATHS = [
+  "/automerge-protocol-handler-worker.js",
+  "/public-reader-worker.js",
+];
 
 export const REVALIDATED_CACHE_CONTROL =
   "public, max-age=0, stale-while-revalidate=31536000";

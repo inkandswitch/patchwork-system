@@ -51,6 +51,14 @@ const syncServer =
 
 const control = startWorkerControl("automerge-protocol-handler-worker", {
   onRestart: drainForRestart,
+  // A tab introducing us to the public reader (see setup.ts).
+  onMessage(data) {
+    if (data?.type === "public-reader" && data.port instanceof MessagePort) {
+      readerPort?.close();
+      readerPort = data.port;
+      linkPublicReader();
+    }
+  },
   // Held only so the tabs and the service worker can tell whether this
   // instance is still around; nothing here waits for it.
   lock: AUTOMERGE_WORKER_LOCK,
@@ -161,23 +169,40 @@ async function buildKeyhiveRepo(): Promise<{
   });
 
   // Packages made public to Patchwork are read through its public pair, which
-  // only ARK 0.8's keyhive has. Nothing waits on it starting.
+  // only ARK 0.8's keyhive has. Nothing waits on it.
   if (syncServer.ark !== "0.6") {
-    import("./public-pair.js")
-      .then(({ attachPublicReader }) =>
-        attachPublicReader({
-          repo,
-          hive,
-          url: syncServer.url,
-          syncServer: identity,
-        })
-      )
-      .catch((error) =>
-        console.error("couldn't start the public reader", error)
-      );
+    keyhiveNode = { repo, hive };
+    linkPublicReader();
   }
 
   return { repo, hive };
+}
+
+// ── The public reader ──────────────────────────────────────────────────
+// It runs in its own SharedWorker (public-reader.ts). A SharedWorker can't
+// start another, so a tab hands us a port to it, and another whenever either
+// of us is replaced: the latest one wins.
+
+let keyhiveNode: { repo: Repo; hive: AutomergeRepoKeyhive } | undefined;
+let readerPort: MessagePort | undefined;
+let readerLink: Promise<(() => void) | undefined> = Promise.resolve(undefined);
+
+function linkPublicReader() {
+  if (!keyhiveNode || !readerPort) return;
+  const { repo, hive } = keyhiveNode;
+  const control = readerPort;
+  readerPort = undefined;
+  readerLink = readerLink.then(async (hangUp) => {
+    hangUp?.();
+    try {
+      const { connectToPublicReader } = await import("./public-pair.js");
+      return await connectToPublicReader({ repo, hive, control });
+    } catch (error) {
+      console.error("couldn't connect to the public reader", error);
+      control.close();
+      return undefined;
+    }
+  });
 }
 
 // ── Answering handoffs ─────────────────────────────────────────────────
