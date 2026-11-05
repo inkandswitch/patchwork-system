@@ -267,6 +267,7 @@ export class LegacyImpl {
   // and so does a timer, backing off through LOAD_RETRY_DELAYS_MS.
   #loadFailed = false;
   #retryingLoad = false;
+  #pendingRetryEpoch: number | null = null;
   #retryAttempt = 0;
   #retryTimer: ReturnType<typeof setTimeout> | null = null;
   #toast: HTMLElement | null = null;
@@ -446,9 +447,14 @@ export class LegacyImpl {
   // Load the doc again after a failed find, leaving the error up while it
   // runs: a teardown would blank the view and fade the error back in on every
   // keyhive op, which arrive far faster than the fade. Overlapping retries
-  // collapse into the one in flight.
+  // collapse into the one in flight, with one follow-up for an op received
+  // while it runs.
   async #retryLoad(): Promise<void> {
-    if (this.#retryingLoad || !this.#docUrl) return;
+    if (!this.#docUrl) return;
+    if (this.#retryingLoad) {
+      this.#pendingRetryEpoch = this.#initEpoch;
+      return;
+    }
     this.#cancelRetry();
     this.#retryingLoad = true;
     const epoch = this.#initEpoch;
@@ -465,6 +471,15 @@ export class LegacyImpl {
       if (epoch === this.#initEpoch && this.#loadFailed) this.#scheduleRetry();
     } finally {
       this.#retryingLoad = false;
+      const pendingRetryEpoch = this.#pendingRetryEpoch;
+      this.#pendingRetryEpoch = null;
+      if (
+        pendingRetryEpoch === this.#initEpoch &&
+        !this.#disposed &&
+        this.#loadFailed
+      ) {
+        void this.#retryLoad();
+      }
     }
   }
 
@@ -531,6 +546,7 @@ export class LegacyImpl {
     const mountedToolId = this.#tool?.id;
 
     this.#initEpoch++;
+    this.#pendingRetryEpoch = null;
     await this.#teardowns.run();
 
     this.#dismissToast(true);
