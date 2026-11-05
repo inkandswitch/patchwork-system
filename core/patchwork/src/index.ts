@@ -196,22 +196,34 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   // Started with the site bundle alone so resolveAccountHandle has something to
   // await on — the `account` datatype lives there. The user's own
   // module-settings URL is added lazily once it appears on the account doc.
+  // Keyed by the settings entry rather than the heads-pinned import url, so
+  // reloading a package doesn't count it twice, and counted against the
+  // current list, so unloaded or removed packages drop out of the count.
   const loaded = new Set<string>();
+  let listed: Set<string> | undefined;
+  const loadedCount = () => {
+    const current = listed;
+    if (!current) return loaded.size;
+    return [...loaded].filter((key) => current.has(key)).length;
+  };
   const moduleWatcher = new ModuleWatcher(
     repo,
     nameSources(moduleSources),
-    (name, mod) => {
+    (name, mod, moduleKey) => {
       onModuleLoaded(name, mod);
-      loaded.add(name);
+      loaded.add(moduleKey);
       report({
         packages: {
-          loaded: loaded.size,
-          total: Math.max(progress.packages?.total ?? 0, loaded.size),
+          loaded: loadedCount(),
+          total: Math.max(progress.packages?.total ?? 0, loadedCount()),
           latest: packageName(mod) ?? progress.packages?.latest,
         },
       });
     },
-    unregisterPlugins,
+    (name) => {
+      loaded.delete(name);
+      unregisterPlugins(name);
+    },
     // Discover an Automerge package's plugin descriptors off the main thread;
     // each plugin's load() re-imports the package (at heads) on this thread.
     options.importModulesInWorker === false
@@ -225,15 +237,17 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     )
   );
 
-  moduleWatcher.onModules = (modules) =>
+  moduleWatcher.onModules = (modules) => {
+    listed = new Set(modules);
     report({
       stage: progress.stage === "package-list" ? "packages" : progress.stage,
       packages: {
         ...progress.packages,
-        loaded: loaded.size,
+        loaded: loadedCount(),
         total: modules.length,
       },
     });
+  };
   report({ stage: "package-list" });
 
   const accountDocHandle = (await resolveAccountHandle(repo, {
