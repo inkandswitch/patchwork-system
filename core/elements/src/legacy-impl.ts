@@ -506,7 +506,10 @@ export class LegacyImpl {
   // (access is checked on every keyhive op, the same ops that sync the doc).
   #onAccessChange(hasAccess: boolean): void {
     if (this.#loadFailed) {
-      if (!hasAccess) return;
+      if (!hasAccess) {
+        void this.#restart();
+        return;
+      }
       // a fresh op starts the back-off again
       this.#retryAttempt = 0;
       void this.#retryLoad();
