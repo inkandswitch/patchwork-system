@@ -63,6 +63,7 @@ import type {
   SyncStateDocMessage,
 } from "./types.js";
 import { createRepo, initWasm } from "./repo.js";
+import { relayNewDocs } from "./server-relay.js";
 import { watchDocument } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
@@ -170,6 +171,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   window.AutomergeRepo =
     AutomergeRepo as typeof import("@automerge/automerge-repo/slim");
   if (hive) window.hive = hive;
+  if (hive) relayNewDocs(repo, hive);
 
   (hive?.networkAdapter as any)?.syncKeyhive?.();
 
