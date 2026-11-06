@@ -12,7 +12,7 @@ import type {
 } from "./registry/types.js";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { isKeyhiveDoc } from "./keyhive.js";
+import { addSyncServerRelay } from "./keyhive.js";
 
 // Datatype implementation interface
 export type DatatypeImplementation<D = unknown> = {
@@ -58,10 +58,9 @@ export const createDocOfDatatype2 = async <D>(
   hive?: AutomergeRepoKeyhive
 ): Promise<DocHandle<D & HasPatchworkMetadata>> => {
   const handle = await repo.create2<D & HasPatchworkMetadata>();
-  // Add sync server with relay access
-  if (hive && isKeyhiveDoc(handle.url)) {
-    await hive.addSyncServerRelayToDoc(handle.url);
-  }
+  // the server keeps only docs it's a relay of; setup's create2 has likely
+  // done this already, which this skips
+  if (hive) await addSyncServerRelay(hive, handle.url);
   handle.change((doc: D & HasPatchworkMetadata) => {
     datatype.module.init(doc, repo);
     // Record the datatype's import URL so a viewer with no built-in tool can

@@ -6,7 +6,7 @@ import {
 } from "@automerge/automerge-repo/slim";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { isKeyhiveDoc } from "./keyhive.js";
+import { addSyncServerRelay } from "./keyhive.js";
 
 /**
  * Site-facing view of the account document. Scalar tool-id fields are written
@@ -93,9 +93,9 @@ async function createAccountDocument<D>(
   createAccount: AccountCreator<D> | undefined
 ): Promise<DocHandle<D & HasPatchworkMetadata>> {
   const handle = await repo.create2<D & HasPatchworkMetadata>();
-  if (hive && isKeyhiveDoc(handle.url)) {
-    await hive.addSyncServerRelayToDoc(handle.url);
-  }
+  // the server keeps only docs it's a relay of; setup's create2 has likely
+  // done this already, which this skips
+  if (hive) await addSyncServerRelay(hive, handle.url);
   handle.change((doc: D & HasPatchworkMetadata) => {
     doc["@patchwork"] = { type: "account" };
   });
