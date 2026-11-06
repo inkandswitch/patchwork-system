@@ -6,10 +6,7 @@ import {
   SUBDUCTION_WASM,
 } from "@inkandswitch/patchwork-bootloader/emitted";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
-import type {
-  AutomergeRepoKeyhive,
-  SyncServerSelection,
-} from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 // eslint-disable-next-line
 // @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
 import initSubduction from "@automerge/automerge-subduction/slim";
@@ -17,6 +14,10 @@ import {
   keyhiveStorageName,
   storagePrefix,
 } from "@inkandswitch/patchwork-bootloader/storage";
+import {
+  keyhiveSyncServer,
+  type ArkVersion,
+} from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 import type { SignerIdentity } from "./types.js";
 import debug from "debug";
 
@@ -24,8 +25,9 @@ const log = debug("patchwork:setup:repo");
 
 declare const __SYNC_SERVER__: {
   url: string;
-  keyhive?: SyncServerSelection;
+  keyhive?: boolean;
   useIdFactory?: boolean;
+  ark?: ArkVersion;
 };
 const syncServer =
   typeof __SYNC_SERVER__ !== "undefined"
@@ -75,6 +77,8 @@ export async function createRepo(): Promise<TabRepo> {
     const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
       await import("@automerge/automerge-repo-keyhive");
     initKeyhiveWasm();
+    const keyhiveStorage = new IndexedDBStorageAdapter(keyhiveStorageName);
+    const identity = await keyhiveSyncServer(syncServer, keyhiveStorage);
     const { hive, repo } = await initializeAutomergeRepoKeyhive({
       // ARK injects an `idFactory` deriving document ids from keyhive. A site
       // can opt out of it with `keyhive: { useIdFactory: false }`.
@@ -84,12 +88,11 @@ export async function createRepo(): Promise<TabRepo> {
             ? repoConfig
             : { ...repoConfig, idFactory }
         ),
-      storage: new IndexedDBStorageAdapter(keyhiveStorageName),
+      storage: keyhiveStorage,
       peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
       automaticArchiveIngestion: true,
       cachingMode: "periodic",
-      // ARK selects the relay via `syncServer`, defaulting to "subduction".
-      syncServer: syncServer.keyhive,
+      syncServer: identity,
       repo: {
         storage: new IndexedDBStorageAdapter(),
         subductionWebsocketEndpoints: [syncServer.url],
@@ -99,6 +102,15 @@ export async function createRepo(): Promise<TabRepo> {
       },
     });
     log("keyhive setup complete");
+    // Docs made public to Patchwork (pushwork's `--public-access read`) are
+    // read through its public pair, in a SharedWorker of its own. Imported
+    // lazily: the bootloader's entry touches `window` as it loads, and this
+    // module is loaded without one in tests.
+    void import("@inkandswitch/patchwork-bootloader")
+      .then(({ connectPublicReader }) => connectPublicReader(repo, hive))
+      .catch((error) =>
+        console.error("couldn't connect to the public reader", error)
+      );
     return { repo, hive };
   }
 

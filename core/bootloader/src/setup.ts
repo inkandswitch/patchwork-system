@@ -6,6 +6,9 @@ import type {
 import { buildId, isNewerBuild } from "./build-id.js";
 import { promptForNewBuild } from "./new-build-prompt.js";
 import debug from "debug";
+import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
+import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { PublicReaderStatus } from "./public-pair.js";
 import { handleResolveRequest } from "./tab-resolver.js";
 import {
   forwardWorkerConsole,
@@ -110,6 +113,8 @@ function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
 let automergeProtocolHandlerWorkerPath =
   "/automerge-protocol-handler-worker.js";
 
+let automergeWorkerSpawned = false;
+
 const automergeProtocolHandlerWorker = sharedWorkerHandle(
   "patchwork-automerge-protocol-handler",
   () => automergeProtocolHandlerWorkerPath,
@@ -117,6 +122,13 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
     debugging: workerDebugging,
     onMessage(event) {
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
+    },
+    // A replacement knows nothing of the public reader.
+    onSpawn() {
+      if (automergeWorkerSpawned && publicReaderEnabled) {
+        queueMicrotask(introduceResolver);
+      }
+      automergeWorkerSpawned = true;
     },
     onRestarting(message) {
       // The worker restarts because a newer tab connected. If that build is
@@ -141,6 +153,135 @@ export function restartAutomergeProtocolHandlerWorker(
   reason = "restartAutomergeProtocolHandlerWorker() called"
 ): void {
   automergeProtocolHandlerWorker.restart(reason);
+}
+
+// ── The public reader ──────────────────────────────────────────────────
+// A SharedWorker reading documents made public to Patchwork (see
+// public-reader.ts), which this tab's Repo and the resolver's connect to.
+// Only a page can start a SharedWorker, and one can't start another, so the
+// tabs keep it alive and introduce the resolver to it, again whenever either
+// is replaced.
+
+declare const __SYNC_SERVER__: { keyhive?: boolean; ark?: "0.6" | "0.8" };
+
+/** Only ARK 0.8's keyhive has a public pair. */
+const publicReaderEnabled =
+  typeof __SYNC_SERVER__ !== "undefined" &&
+  !!__SYNC_SERVER__.keyhive &&
+  __SYNC_SERVER__.ark !== "0.6";
+
+/** The public reader's latest status, and who wants to hear the next. */
+let publicReaderStatus: PublicReaderStatus | undefined;
+const publicReaderStatusListeners = new Set<
+  (status: PublicReaderStatus) => void
+>();
+
+/**
+ * Hear how far the public reader has got (the latest straight away, if
+ * there's been one), for a loading screen. Returns a function that stops.
+ */
+export function onPublicReaderStatus(
+  listener: (status: PublicReaderStatus) => void
+): () => void {
+  publicReaderStatusListeners.add(listener);
+  if (publicReaderStatus) listener(publicReaderStatus);
+  return () => publicReaderStatusListeners.delete(listener);
+}
+
+export type { PublicReaderStatus };
+
+/** What connects a Repo to the public reader, run again for each new one. */
+const publicReaderClients = new Set<() => void>();
+let publicReaderSpawned = false;
+
+const publicReaderWorker = sharedWorkerHandle(
+  "patchwork-public-reader",
+  () => "/public-reader-worker.js",
+  {
+    debugging: workerDebugging,
+    onMessage(event) {
+      if (event.data?.type === "status") {
+        publicReaderStatus = event.data.status as PublicReaderStatus;
+        for (const listener of publicReaderStatusListeners) {
+          listener(publicReaderStatus);
+        }
+        return;
+      }
+      forwardWorkerConsole("public-reader-worker", event.data);
+    },
+    // A new instance knows none of the Repos the last one served.
+    onSpawn(worker) {
+      worker.port.postMessage({
+        type: "debug-namespaces",
+        namespaces: localStorage.getItem("debug") ?? "",
+      });
+      if (publicReaderSpawned) {
+        queueMicrotask(() =>
+          publicReaderClients.forEach((connect) => connect())
+        );
+      }
+      publicReaderSpawned = true;
+    },
+  }
+);
+
+function addPublicReaderClient(connect: () => void) {
+  publicReaderClients.add(connect);
+  publicReaderWorker.get();
+  connect();
+}
+
+/** A port the public reader answers on, as a new client. */
+function publicReaderPort(): MessagePort {
+  const { port1, port2 } = new MessageChannel();
+  publicReaderWorker.post({ type: "client", port: port2 }, [port2]);
+  return port1;
+}
+
+function introduceResolver() {
+  const port = publicReaderPort();
+  automergeProtocolHandlerWorker.post({ type: "public-reader", port }, [port]);
+}
+
+/**
+ * Whether patchwork's public reader can read `url` (whether it's public), as
+ * seen from `repo`'s connection to it. False when there's no reader.
+ */
+export async function publicReaderCanRead(
+  repo: Repo,
+  url: AutomergeUrl
+): Promise<boolean> {
+  if (!publicReaderEnabled) return false;
+  const { publicReaderCanRead: ask } = await import("./public-pair.js");
+  return ask(repo, url);
+}
+
+/**
+ * Give `repo` a peer that reads docs made public to Patchwork, in the public
+ * reader's SharedWorker. Nothing waits on it: a find for a public doc is
+ * answered once the reader has it.
+ */
+export function connectPublicReader(
+  repo: Repo,
+  hive: AutomergeRepoKeyhive
+): void {
+  if (!publicReaderEnabled) return;
+  let hangUp: Promise<(() => void) | undefined> | undefined;
+  addPublicReaderClient(() => {
+    const control = publicReaderPort();
+    const previous = hangUp;
+    hangUp = (async () => {
+      (await previous)?.();
+      try {
+        const { connectToPublicReader } = await import("./public-pair.js");
+        return await connectToPublicReader({ repo, hive, control });
+      } catch (error) {
+        console.error("couldn't connect to the public reader", error);
+        control.close();
+        return undefined;
+      }
+    })();
+  });
 }
 
 // ── Boot ───────────────────────────────────────────────────────────────
@@ -182,6 +323,8 @@ export default async function setupServiceWorker(
 
   // Start it now so it boots wasm while the service worker installs.
   const shared = automergeProtocolHandlerWorker.get();
+  // And the public reader, which has keyhive to catch up on.
+  if (publicReaderEnabled) addPublicReaderClient(introduceResolver);
 
   const reg = await navigator.serviceWorker.register(
     options?.path ?? "/service-worker.js",

@@ -5,7 +5,7 @@
     "url": "git+https://github.com/inkandswitch/patchwork-system.git",
     "directory": "core/bootloader"
   },
-  "version": "0.8.8",
+  "version": "0.9.6",
   "author": "chee",
   "type": "module",
   "license": "MIT",
@@ -39,9 +39,25 @@
       "import": "./dist/storage.js",
       "types": "./dist/storage.d.ts"
     },
+    "./keyhive-sync-server": {
+      "import": "./dist/keyhive-sync-server.js",
+      "types": "./dist/keyhive-sync-server.d.ts"
+    },
+    "./public-pair": {
+      "import": "./dist/public-pair.js",
+      "types": "./dist/public-pair.d.ts"
+    },
     "./service-worker": {
       "import": "./dist/service-worker.js",
       "types": "./dist/service-worker.d.ts"
+    },
+    "./public-reader-worker": {
+      "import": "./dist/public-reader-worker.js",
+      "types": "./dist/public-reader-worker.d.ts"
+    },
+    "./public-reader": {
+      "import": "./dist/public-reader.js",
+      "types": "./dist/public-reader.d.ts"
     },
     "./automerge-protocol-handler-worker": {
       "import": "./dist/automerge-protocol-handler-worker.js",

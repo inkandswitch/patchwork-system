@@ -22,13 +22,11 @@ import {
 } from "@automerge/automerge-repo/slim";
 
 import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
-import type {
-  AutomergeRepoKeyhive,
-  SyncServerSelection,
-} from "@automerge/automerge-repo-keyhive";
+import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 import { loadOrCreateSigner } from "./signer.js";
 import { keyhiveStorageName, storagePrefix } from "./storage.js";
+import { keyhiveSyncServer, type ArkVersion } from "./keyhive-sync-server.js";
 import { startWorkerControl } from "./worker-control.js";
 import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
 import { createResolver } from "./resolver.js";
@@ -41,8 +39,9 @@ import {
 
 declare const __SYNC_SERVER__: {
   url: string;
-  keyhive?: SyncServerSelection;
+  keyhive?: boolean;
   useIdFactory?: boolean;
+  ark?: ArkVersion;
 };
 
 const syncServer =
@@ -52,6 +51,14 @@ const syncServer =
 
 const control = startWorkerControl("automerge-protocol-handler-worker", {
   onRestart: drainForRestart,
+  // A tab introducing us to the public reader (see setup.ts).
+  onMessage(data) {
+    if (data?.type === "public-reader" && data.port instanceof MessagePort) {
+      readerPort?.close();
+      readerPort = data.port;
+      linkPublicReader();
+    }
+  },
   // Held only so the tabs and the service worker can tell whether this
   // instance is still around; nothing here waits for it.
   lock: AUTOMERGE_WORKER_LOCK,
@@ -106,7 +113,7 @@ async function buildRepo(): Promise<Repo> {
   await initWasm();
 
   const { repo, hive } = syncServer.keyhive
-    ? await buildKeyhiveRepo(syncServer.keyhive)
+    ? await buildKeyhiveRepo()
     : { repo: await buildPlainRepo() };
 
   builtRepo = repo;
@@ -127,12 +134,15 @@ async function buildPlainRepo(): Promise<Repo> {
   });
 }
 
-async function buildKeyhiveRepo(
-  keyhiveSyncServer: SyncServerSelection
-): Promise<{ repo: Repo; hive: AutomergeRepoKeyhive }> {
+async function buildKeyhiveRepo(): Promise<{
+  repo: Repo;
+  hive: AutomergeRepoKeyhive;
+}> {
   const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
     await import("@automerge/automerge-repo-keyhive");
   initKeyhiveWasm();
+  const keyhiveStorage = new IndexedDBStorageAdapter(keyhiveStorageName);
+  const identity = await keyhiveSyncServer(syncServer, keyhiveStorage);
   const { hive, repo } = await initializeAutomergeRepoKeyhive({
     // ARK injects an `idFactory` deriving document ids from keyhive. A site
     // can opt out of it with `keyhive: { useIdFactory: false }`.
@@ -140,14 +150,12 @@ async function buildKeyhiveRepo(
       new Repo(
         syncServer.useIdFactory === false ? config : { ...config, idFactory }
       ),
-    storage: new IndexedDBStorageAdapter(keyhiveStorageName),
+    storage: keyhiveStorage,
     peerIdSuffix:
       `${storagePrefix}-resolver` + Math.random().toString(36).slice(2),
     automaticArchiveIngestion: true,
     cachingMode: "periodic",
-    // ARK selects the relay via `syncServer`, which pairs the contact card with
-    // the matching peer id. Omitting it defaults to "subduction".
-    syncServer: keyhiveSyncServer,
+    syncServer: identity,
     repo: {
       storage: new IndexedDBStorageAdapter(),
       subductionWebsocketEndpoints: [syncServer.url],
@@ -160,7 +168,41 @@ async function buildKeyhiveRepo(
     (hive.networkAdapter as any).syncKeyhive();
   });
 
+  // Packages made public to Patchwork are read through its public pair, which
+  // only ARK 0.8's keyhive has. Nothing waits on it.
+  if (syncServer.ark !== "0.6") {
+    keyhiveNode = { repo, hive };
+    linkPublicReader();
+  }
+
   return { repo, hive };
+}
+
+// ── The public reader ──────────────────────────────────────────────────
+// It runs in its own SharedWorker (public-reader.ts). A SharedWorker can't
+// start another, so a tab hands us a port to it, and another whenever either
+// of us is replaced: the latest one wins.
+
+let keyhiveNode: { repo: Repo; hive: AutomergeRepoKeyhive } | undefined;
+let readerPort: MessagePort | undefined;
+let readerLink: Promise<(() => void) | undefined> = Promise.resolve(undefined);
+
+function linkPublicReader() {
+  if (!keyhiveNode || !readerPort) return;
+  const { repo, hive } = keyhiveNode;
+  const control = readerPort;
+  readerPort = undefined;
+  readerLink = readerLink.then(async (hangUp) => {
+    hangUp?.();
+    try {
+      const { connectToPublicReader } = await import("./public-pair.js");
+      return await connectToPublicReader({ repo, hive, control });
+    } catch (error) {
+      console.error("couldn't connect to the public reader", error);
+      control.close();
+      return undefined;
+    }
+  });
 }
 
 // ── Answering handoffs ─────────────────────────────────────────────────

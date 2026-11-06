@@ -19,6 +19,11 @@ patchwork-view {
   contain: layout;
 }
 
+/* Strict on purpose: we don't trust every tool author to animate accessibly.
+   TODO(chee): I think it would be a good idea to add an opt-out here, an
+   attribute a tool puts on its root to say it does its own reduced-motion work
+   (fades instead of movement, spinners that still spin), so this rule skips
+   that element and everything inside it. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *:before,

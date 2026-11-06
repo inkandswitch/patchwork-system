@@ -43,8 +43,16 @@ export async function resolveExternal(
  * automerge/keyhive/subduction's wasm binaries, by the file name the dev
  * server serves them under (see emitted.ts). Resolved from this package's
  * node_modules for the same reason as {@link resolveExternal}.
+ *
+ * `stack` is a file inside a package whose dependencies are the keyhive and
+ * subduction this build bundles instead of ours (a build on the previous ARK
+ * does that). Their binaries have to come from there too, since each one only
+ * loads into the JS it was built with. Automerge's always comes from here.
  */
-export function wasmAssets(): { fileName: string; path: string }[] {
+export function wasmAssets(
+  stack: string = self
+): { fileName: string; path: string }[] {
+  const fromStack = createRequire(stack);
   return [
     {
       fileName: "automerge.wasm",
@@ -52,11 +60,11 @@ export function wasmAssets(): { fileName: string; path: string }[] {
     },
     {
       fileName: "keyhive_wasm.wasm",
-      path: require.resolve("@keyhive/keyhive/wasm"),
+      path: fromStack.resolve("@keyhive/keyhive/wasm"),
     },
     {
       fileName: "subduction.wasm",
-      path: require.resolve("@automerge/automerge-subduction/wasm"),
+      path: fromStack.resolve("@automerge/automerge-subduction/wasm"),
     },
   ];
 }
@@ -64,13 +72,15 @@ export function wasmAssets(): { fileName: string; path: string }[] {
 /**
  * Emits automerge/keyhive/subduction's wasm binaries as build assets, under
  * content-hashed names (the build's `assetFileNames`). Returns each one's
- * reference id by its file name, for `this.getFileName`.
+ * reference id by its file name, for `this.getFileName`. `stack` is as for
+ * {@link wasmAssets}.
  */
 export function emitWasmAssets(
-  this: import("rollup").PluginContext
+  this: import("rollup").PluginContext,
+  stack?: string
 ): Map<string, string> {
   return new Map(
-    wasmAssets().map(({ fileName, path }) => [
+    wasmAssets(stack).map(({ fileName, path }) => [
       fileName,
       this.emitFile({
         type: "asset",

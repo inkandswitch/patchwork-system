@@ -1,5 +1,121 @@
 # @inkandswitch/patchwork
 
+## 0.9.7
+
+### Patch Changes
+
+- 65f27be: A doc made public ("anyone with the link") opens for someone it isn't shared with. On ARK 0.8 a public doc is granted to patchwork's public reader, not to whoever opens it, and their own keyhive never hears of it (the server only sends an identity the ops that concern it), so patchwork-view's access gate held it back and the pane stayed blank. The gate now asks the public reader, whose fetcher is one of every public doc's members, whether it can read the doc, and checks again each time the reader has read more of keyhive, so a doc made public after it was opened opens too. `setPublicAccess` and `publicAccessChanged` in patchwork-elements (and `hasActiveAccess`, the gate's own check, for anything that wants to say why a view is empty), and `publicReaderCanRead` in the bootloader, are how setup wires that up.
+- Updated dependencies [65f27be]
+  - @inkandswitch/patchwork-elements@6.2.0
+  - @inkandswitch/patchwork-bootloader@0.9.6
+
+## 0.9.6
+
+### Patch Changes
+
+- 07556dc: `setup()` takes an `onProgress` callback for a loading screen. It's told the boot stage (`workers`, `identity`, `package-list`, `packages`, `opening`), how far the public reader has got (whether this is a first visit, which has every keyhive event on the server to catch up on, and how many it has relayed), and how many of the listed packages have loaded. The bootloader exports `onPublicReaderStatus` for the reader's part on its own, and a `ModuleWatcher` reports the modules on its settings lists to `onModules`.
+- 0553e44: The public reader's status, and so `setup()`'s `onProgress`, now says what the reader is doing on the way to a first-visit catch-up, which takes 10–20s and used to report nothing until it was over. `phase` is `waiting` until the first keyhive event arrives from the sync server, `fetching` while the fetcher takes them in (`received` counts them, reported every 250ms even while the fetcher's ingest holds the worker), `reading` while the reader ingests the batch, and `ready` once everything received has been read. `relayed` is as before. `BootProgress.publicReader` is now the bootloader's `PublicReaderStatus`.
+- 321de7d: The public reader now runs in its own SharedWorker (`/public-reader-worker.js`), one per origin, instead of on each tab's main thread and again in the automerge worker. Catching up on the server's keyhive took two 5–9s blocks of wasm on the page, long enough that the service worker stopped asking the tab for its own `automerge:` requests and handed them to the automerge worker, which then had to catch up all over again; boot regularly ran past setup's 30s deadline. Tabs now connect their Repo to the reader with `connectPublicReader`, and pass the automerge worker a port to it.
+
+  The reader's keyhive state is kept in IndexedDB (`<prefix>-public-reader-<ark>-<pair>`), so only the first visit replays it: a return visit boots in about a second.
+
+- Updated dependencies [07556dc]
+- Updated dependencies [d018e31]
+- Updated dependencies [0553e44]
+- Updated dependencies [321de7d]
+- Updated dependencies [bbd12d2]
+- Updated dependencies [a50027d]
+- Updated dependencies [f564435]
+- Updated dependencies [0e9f082]
+  - @inkandswitch/patchwork-bootloader@0.9.5
+  - @inkandswitch/patchwork-filesystem@0.2.18
+  - @inkandswitch/patchwork-elements@6.1.0
+  - @inkandswitch/patchwork-providers@0.5.4
+
+## 0.9.5
+
+### Patch Changes
+
+- 817aba8: `setup()` takes an `onProgress` callback for a loading screen. It's told the boot stage (`workers`, `identity`, `package-list`, `packages`, `opening`), how far the public reader has got (whether this is a first visit, which has every keyhive event on the server to catch up on, and how many it has relayed), and how many of the listed packages have loaded. The bootloader exports `onPublicReaderStatus` for the reader's part on its own, and a `ModuleWatcher` reports the modules on its settings lists to `onModules`.
+- 677a68c: The public reader now runs in its own SharedWorker (`/public-reader-worker.js`), one per origin, instead of on each tab's main thread and again in the automerge worker. Catching up on the server's keyhive took two 5–9s blocks of wasm on the page, long enough that the service worker stopped asking the tab for its own `automerge:` requests and handed them to the automerge worker, which then had to catch up all over again; boot regularly ran past setup's 30s deadline. Tabs now connect their Repo to the reader with `connectPublicReader`, and pass the automerge worker a port to it.
+
+  The reader's keyhive state is kept in IndexedDB (`<prefix>-public-reader-<ark>-<pair>`), so only the first visit replays it: a return visit boots in about a second.
+
+- Updated dependencies [817aba8]
+- Updated dependencies [d7b2a03]
+- Updated dependencies [677a68c]
+- Updated dependencies [63dc3e8]
+  - @inkandswitch/patchwork-bootloader@0.9.4
+  - @inkandswitch/patchwork-filesystem@0.2.17
+
+## 0.9.4
+
+### Patch Changes
+
+- 266434d: Dynamic imports in chunks the automerge worker shares with the page no longer throw "document is not defined". Vite's preload helper adds `<link>` tags to preload an import's dependencies, and the worker has no `document`, so the resolver's Repo failed to start on keyhive builds and package files served through it (such as `automerge:` system packages) didn't load. The helper now skips that preloading where there's no `document`.
+
+## 0.9.3
+
+### Patch Changes
+
+- cd1ae46: A keyhive build on ARK 0.8 now reads documents made public to Patchwork, such as pushwork repos made with `--public-access read`. Keyhive 0.6 has no public user, so a repo is made public by granting read to Patchwork's public reader and relay to its public fetcher, two principals whose secrets ship with Patchwork. The tab's Repo and the automerge worker's Repo each get a second Repo as a peer. That Repo connects to the sync server as the fetcher, hands the keyhive events it syncs to a keyhive opened as the reader, and decrypts with it. The user's Repo offers it only docs the user's own keyhive doesn't know, so the user's documents never reach it, and it never writes. The new `@inkandswitch/patchwork-bootloader/public-pair` export has `attachPublicReader` and `PATCHWORK_PUBLIC_PAIR`.
+- Updated dependencies [cd1ae46]
+  - @inkandswitch/patchwork-bootloader@0.9.3
+
+## 0.9.2
+
+### Patch Changes
+
+- 155a541: `@inkandswitch/patchwork` installs again. 0.9.1 depended on `@inkandswitch/patchwork-ark-0.6`, which was never published. The previous keyhive stack that package held is now in patchwork's own dependencies, as npm aliases under `@ark-0.6/` (`"@ark-0.6/automerge-repo": "npm:@automerge/automerge-repo@2.6.0-subduction.48"`, and so on), so it sits next to the current versions and nothing extra is published. `keyhive: { ark: "0.6" }` works as before.
+
+  On `"0.6"`, the vite plugin now also points `@automerge/automerge` at patchwork's own copy. automerge-repo 2.6.0-subduction.48 pins automerge 3.3.2, and outside this repo that meant a second automerge wasm module whose docs the rest of the build couldn't read.
+
+  `@inkandswitch/patchwork`: `arkAliases(mode)` no longer takes the stack's package.json; it reads patchwork's `@ark-0.6/*` dependencies. `arkStack(options)` now returns ARK 0.6's package.json, for resolving its wasm from.
+
+- Updated dependencies [155a541]
+  - @inkandswitch/patchwork-bootloader@0.9.2
+
+## 0.9.1
+
+### Patch Changes
+
+- e70d1b7: A keyhive build can be made against the previous keyhive stack, for sync servers that haven't moved to ARK 0.8. `keyhive: { ark: "0.6" | "0.8" }` picks it. When it's left out, a build whose `syncServers.subduction` is on subduction.sync.inkandswitch.com gets `"0.6"`, since that server still runs it, and any other server gets `"0.8"`. So `keyhive: true` works against prod again, and pointing `syncServers.subduction` at staging.subduction.sync.inkandswitch.com gets 0.8.
+
+  `"0.6"` swaps in the whole stack the old ARK was built with: `@automerge/automerge-repo-keyhive` 0.6.0-alpha.1, `@keyhive/keyhive` 0.3.0-alpha.1, `@automerge/automerge-repo` and its adapters and `@automerge/vanillajs` 2.6.0-subduction.48, and `@automerge/automerge-subduction` 0.16.1. These come from the new `@inkandswitch/patchwork-ark-0.6` package, which `@inkandswitch/patchwork` depends on, so a site doesn't install anything. The vite plugin aliases every import of those packages to that copy, in the build, the dev server's pre-bundling and the workers alike, and emits the matching keyhive and subduction wasm. Automerge itself stays at the current version. Builds without keyhive, and keyhive builds on `"0.8"`, are unchanged.
+
+  On 0.6 the build reaches the server by the name ARK 0.6 ships for it rather than fetching its contact card, and keeps keyhive state in the `<prefix>-keyhive-0.6` database it used before the move to 0.8. Existing installs on prod get their old keyhive state back.
+
+  `@inkandswitch/patchwork-bootloader`: new `keyhiveSyncServer(syncServer, storage)` and `ArkVersion` from `/keyhive-sync-server`, which pick the `syncServer` to hand `initializeAutomergeRepoKeyhive` for either ARK. `keyhiveStorageVersion` follows the build's ARK. `wasmAssets()` and `emitWasmAssets()` take an optional file to resolve keyhive's and subduction's binaries from.
+
+  `@inkandswitch/patchwork`: the vite plugin also exports `ark`, `arkAliases` and `arkStack`, and the `ArkVersion` type. The source patch for automerge-repo is now chosen by the version being bundled, and `dist/patches` carries one for 2.6.0-subduction.48 as well as 2.6.0-subduction.49.
+
+  `@inkandswitch/patchwork-elements`: the keyhive access gates use ARK 0.6's `bestAccessForDoc` when it's there, so public documents open again on 0.6. On 0.8 they use `accessForDoc` as before.
+
+- Updated dependencies [e70d1b7]
+  - @inkandswitch/patchwork-bootloader@0.9.1
+  - @inkandswitch/patchwork-elements@6.0.5
+  - @inkandswitch/patchwork-ark-0.6@0.0.1
+
+## 0.9.0
+
+### Minor Changes
+
+- 1684121: Move to `@automerge/automerge-repo-keyhive` 0.8.0-alpha.1 and `@keyhive/keyhive` 0.6.0. The other exact pins move with them so the consumer's tree keeps a single copy of automerge-repo: `@automerge/automerge-repo` and its adapters, `@automerge/react` and `@automerge/vanillajs` to 2.6.0-subduction.49, and `@automerge/automerge-subduction` to 0.20.1. The shipped automerge-repo patch makes the same changes as before, rebased onto 2.6.0-subduction.49. A site applying the patch from `@inkandswitch/patchwork/dist/patches` should take the new one.
+
+  ARK no longer ships named sync servers, so a keyhive build finds its server's identity at startup. The tab and the automerge protocol handler worker fetch the server's contact card from `/keyhive/contact-card` on the `syncServers.subduction` host, and keep the last card fetched so a start without a network can use it. The server has to serve that endpoint. `keyhive.syncServer` and the `PatchworkKeyhiveSyncServer` type are gone; point `syncServers.subduction` at the server instead. `keyhive: true` and `keyhive: { useIdFactory }` are unchanged.
+
+  New in `@inkandswitch/patchwork-bootloader`: `loadSyncServerIdentity(url, storage)` from `@inkandswitch/patchwork-bootloader/keyhive-sync-server`, for a site that builds its own keyhive Repo.
+
+  The new keyhive can't read state written by 0.3, so keyhive state moves to a new `<prefix>-keyhive-0.8` database and the old one is left untouched. Existing installs start with fresh keyhive state on upgrade.
+
+  The keyhive access gates in `patchwork-elements` use ARK's `accessForDoc`, which replaces `bestAccessForDoc`. ARK no longer has public access, so a document opens only for its members.
+
+### Patch Changes
+
+- Updated dependencies [1684121]
+  - @inkandswitch/patchwork-bootloader@0.9.0
+  - @inkandswitch/patchwork-elements@6.0.4
+
 ## 0.8.9
 
 ### Patch Changes

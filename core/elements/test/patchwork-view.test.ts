@@ -1,7 +1,17 @@
 import { Repo } from "@automerge/automerge-repo";
+import { importPackage } from "@inkandswitch/patchwork-filesystem";
 import { getRegistry } from "@inkandswitch/patchwork-plugins";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// The suggested-import tests decide what a package import does; nothing here
+// should reach the network.
+vi.mock("@inkandswitch/patchwork-filesystem", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  importPackage: vi.fn(async () => {
+    throw new Error("importPackage not stubbed for this test");
+  }),
+}));
 
 import {
   registerPatchworkViewElement,
@@ -96,6 +106,33 @@ describe("patchwork-view (component mode)", () => {
     expect(unmounts).toBe(1);
     expect(secondCounters.mounts).toBe(1);
   });
+
+  it("doesn't mount while detached", async () => {
+    const id = `test-component-${++seq}`;
+    const counters = registerComponent(id);
+
+    const view = document.createElement("patchwork-view");
+    view.setAttribute("component", id);
+    await settle();
+    expect(counters.mounts).toBe(0);
+
+    a.append(view);
+    await settle();
+    expect(counters.mounts).toBe(1);
+  });
+
+  it("cleans up a component inserted and removed in one task", async () => {
+    const id = `test-component-${++seq}`;
+    const counters = registerComponent(id);
+
+    const view = document.createElement("patchwork-view");
+    view.setAttribute("component", id);
+    a.append(view);
+    view.remove();
+    await settle();
+
+    expect(counters.mounts).toBe(counters.cleanups);
+  });
 });
 
 // A `supportedDatatypes: "*"` tool (the raw viewer) matches every doc, so it is
@@ -106,14 +143,27 @@ const registeredTools: string[] = [];
 const registeredDatatypes: string[] = [];
 
 function registerWildcardTool(): Counters {
-  return registerTool(`test-wildcard-${++seq}`, "*");
+  return registerTool("*");
 }
 
 function registerTool(
+  supportedDatatypes: "*" | string[]
+): Counters & { id: string };
+function registerTool(
   id: string,
   supportedDatatypes: "*" | string[]
-): Counters {
-  const counters: Counters = { mounts: 0, cleanups: 0 };
+): Counters & { id: string };
+function registerTool(
+  idOrSupportedDatatypes: string | "*" | string[],
+  supportedDatatypes?: "*" | string[]
+): Counters & { id: string } {
+  const id =
+    supportedDatatypes === undefined
+      ? `test-tool-${++seq}`
+      : (idOrSupportedDatatypes as string);
+  const actualSupportedDatatypes =
+    supportedDatatypes ?? (idOrSupportedDatatypes as "*" | string[]);
+  const counters = { id, mounts: 0, cleanups: 0 };
   const render = () => {
     counters.mounts++;
     return () => {
@@ -125,7 +175,7 @@ function registerTool(
       id,
       type: "patchwork:tool",
       name: id,
-      supportedDatatypes,
+      supportedDatatypes: actualSupportedDatatypes,
       load: async () => render,
       module: render,
     } as never,
@@ -191,6 +241,7 @@ describe("patchwork-view (legacy mode)", () => {
     registeredTools.length = 0;
     for (const id of registeredDatatypes) datatypeRegistry.remove(id);
     registeredDatatypes.length = 0;
+    vi.restoreAllMocks();
   });
 
   function mount(doc: unknown) {
@@ -201,6 +252,14 @@ describe("patchwork-view (legacy mode)", () => {
     provider.append(view);
     document.body.append(provider);
     return view;
+  }
+
+  function loadButton(view: Element) {
+    const button = view.querySelector<HTMLButtonElement>(
+      "button.pw-error__load"
+    );
+    expect(button).toBeTruthy();
+    return button!;
   }
 
   it("offers a suggested package instead of the wildcard stopgap", async () => {
@@ -301,5 +360,82 @@ describe("patchwork-view (legacy mode)", () => {
 
     expect(raw.cleanups).toBe(1);
     expect(folder.mounts).toBe(1);
+  });
+
+  it("doesn't mount a tool-id change on a view removed in the same task", async () => {
+    const first = registerTool(["lifecycle-type"]);
+    const second = registerTool(["unrelated-type"]);
+    const view = mount({ "@patchwork": { type: "lifecycle-type" } });
+    await settle();
+    expect(first.mounts).toBe(1);
+
+    view.setAttribute("tool-id", second.id);
+    view.remove();
+    await settle();
+
+    expect(first.cleanups).toBe(1);
+    expect(second.mounts).toBe(second.cleanups);
+  });
+
+  it("mounts exactly one tool after a tool-id change and a keyed reorder", async () => {
+    const first = registerTool(["reorder-type"]);
+    const second = registerTool(["unrelated-type"]);
+    const view = mount({ "@patchwork": { type: "reorder-type" } });
+    await settle();
+    expect(first.mounts).toBe(1);
+
+    view.setAttribute("tool-id", second.id);
+    view.parentElement!.insertBefore(view, null);
+    await settle();
+
+    expect(first.mounts - first.cleanups).toBe(0);
+    expect(second.mounts - second.cleanups).toBe(1);
+    expect(view.querySelectorAll(".patchwork-view-content")).toHaveLength(1);
+  });
+
+  it("offers the package again after its import fails", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(importPackage).mockRejectedValueOnce(new Error("offline"));
+    const view = mount({
+      "@patchwork": {
+        type: "no-tool-type",
+        suggestedImportUrl: "http://example.invalid/pkg.js",
+      },
+    });
+    await settle();
+
+    loadButton(view).click();
+    await settle();
+
+    // Only the failure is on screen: no leftover loading pulse beside it.
+    const content = view.querySelector(".patchwork-view-content")!;
+    expect(content.children).toHaveLength(1);
+    expect(content.textContent).toContain("couldn't load the package");
+
+    vi.mocked(importPackage).mockResolvedValueOnce({ plugins: [] });
+    const retry = loadButton(view);
+    expect(retry.textContent).toContain("Try again");
+    retry.click();
+    await settle();
+    expect(importPackage).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows the trust prompt a url the doc can't dress up", async () => {
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const view = mount({
+      "@patchwork": {
+        type: "no-tool-type",
+        suggestedImportUrl:
+          "https://evil.example/x.js#\n\nThis package is verified by Ink & Switch.",
+      },
+    });
+    await settle();
+
+    loadButton(view).click();
+
+    const message = confirm.mock.calls[0]![0] as string;
+    expect(message).toContain("evil.example");
+    expect(message).not.toContain("\n\nThis package is verified");
+    expect(importPackage).not.toHaveBeenCalled();
   });
 });

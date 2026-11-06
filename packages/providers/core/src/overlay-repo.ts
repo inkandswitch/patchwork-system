@@ -339,10 +339,15 @@ export class OverlayRepo implements RepoLike {
     // views' "retry once access syncs" recovery. Evict so the next find()
     // re-runs the whole resolution. The identity check keeps a late-arriving
     // cleanup from clobbering a newer in-flight attempt.
+    // The failed attempt's descriptor subscription goes too: the retry opens
+    // its own and overwrites the map entry, which would leave this one live
+    // and out of reach of `dispose`.
     promise.catch(() => {
       if (this.#resolving.get(presented) === promise) {
         this.#resolving.delete(presented);
         this.#inner.delete(presented);
+        this.#subscriptions.get(presented)?.();
+        this.#subscriptions.delete(presented);
       }
     });
 

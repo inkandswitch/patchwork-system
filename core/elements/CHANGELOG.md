@@ -1,5 +1,74 @@
 # @inkandswitch/patchwork-elements
 
+## 6.2.0
+
+### Minor Changes
+
+- 65f27be: A doc made public ("anyone with the link") opens for someone it isn't shared with. On ARK 0.8 a public doc is granted to patchwork's public reader, not to whoever opens it, and their own keyhive never hears of it (the server only sends an identity the ops that concern it), so patchwork-view's access gate held it back and the pane stayed blank. The gate now asks the public reader, whose fetcher is one of every public doc's members, whether it can read the doc, and checks again each time the reader has read more of keyhive, so a doc made public after it was opened opens too. `setPublicAccess` and `publicAccessChanged` in patchwork-elements (and `hasActiveAccess`, the gate's own check, for anything that wants to say why a view is empty), and `publicReaderCanRead` in the bootloader, are how setup wires that up.
+
+## 6.1.0
+
+### Minor Changes
+
+- d018e31: `<patchwork-view>` no longer mounts a tool or component after it has been removed. Before this change, a `tool-id` or `url` change, a hot reload or a keyhive access change that finished after a disconnect could start the view again on the detached element, and nothing ever tore it down. The leftover tool held a disposed handle, and its registry and keyhive listeners stayed registered forever. A keyed reorder could leave two copies mounted. Attributes set on a detached element no longer mount it either; it mounts on insertion. A render queued just before a teardown no longer lands during that teardown, which used to drop the tool's cleanup.
+
+  A failed suggested-package import now replaces the loading pulse with the error and offers to try again. Before, the error appeared next to a pulse that never stopped, and the package was never offered again.
+
+  When a doc fails to load, a keyhive op now retries the load in place. Before, it tore down the view and rebuilt it, so a busy connection kept blanking the error. A failed load is also tried again on a timer, after 1, 2, 4, 8 and 15 seconds: the op that grants access can land before the doc can be fetched and be the last op for a while, which left a doc someone had just shared showing "unavailable" until a reload. The `#clearDocCache` step that ran before each retry is gone: it could never find the handle it was looking for. In `@inkandswitch/patchwork-providers`, `OverlayRepo` now releases the `repo:handle-descriptor` subscription of a failed resolution. It used to leak one per retry, out of reach of `dispose`.
+
+  Keyhive access is now watched with one `ingest-remote` listener per hive instead of one per view. A burst of ops is checked once per doc, however many views show that doc. Views of legacy (non-keyhive) docs no longer listen at all.
+
+  The "load this package?" prompt now shows the parsed URL and the host it comes from. Before, it showed the raw string the document supplied, so a document could pad it with line breaks and fake reassurance. An `automerge:` suggestion that contains whitespace or invisible characters isn't offered.
+
+  `@automerge/automerge-repo-keyhive` is now listed as an optional peer dependency. The published types reference it through the `hive` option.
+
+  The `<patchwork-view>` JSX intrinsic has moved out of the main entry point. Before, importing the package added both the React and Solid typings, which broke type-checking for consumers without one of them installed (unless `skipLibCheck` was on). Opt in to the one you use:
+
+  ```ts
+  import type {} from "@inkandswitch/patchwork-elements/react";
+  // or
+  import type {} from "@inkandswitch/patchwork-elements/solid";
+  ```
+
+  The attribute type itself is exported from the main entry as `PatchworkViewAttrs`.
+
+### Patch Changes
+
+- bbd12d2: Recheck access after a revocation interrupts a pending document retry.
+- a50027d: Queue a keyhive retry received during a document lookup so a later sync event isn't lost.
+- f564435: A failed doc load no longer stops retrying on its own after about 30 seconds. It keeps trying every 30 seconds for as long as the view is up, so a doc whose sender takes a few minutes to sync it still opens without a reload.
+- 0e9f082: A timed retry of a failed doc load now asks the sync server for the doc again. Before, the retry called `find` on a query that had already settled on "unavailable", which answers from that verdict without asking anyone, so a doc that reached the server after the first look stayed unavailable until a keyhive op, a reconnect or a reload. The view now calls `repo.resyncSubduction` when it schedules each retry, where the repo has one.
+
+## 6.0.5
+
+### Patch Changes
+
+- e70d1b7: A keyhive build can be made against the previous keyhive stack, for sync servers that haven't moved to ARK 0.8. `keyhive: { ark: "0.6" | "0.8" }` picks it. When it's left out, a build whose `syncServers.subduction` is on subduction.sync.inkandswitch.com gets `"0.6"`, since that server still runs it, and any other server gets `"0.8"`. So `keyhive: true` works against prod again, and pointing `syncServers.subduction` at staging.subduction.sync.inkandswitch.com gets 0.8.
+
+  `"0.6"` swaps in the whole stack the old ARK was built with: `@automerge/automerge-repo-keyhive` 0.6.0-alpha.1, `@keyhive/keyhive` 0.3.0-alpha.1, `@automerge/automerge-repo` and its adapters and `@automerge/vanillajs` 2.6.0-subduction.48, and `@automerge/automerge-subduction` 0.16.1. These come from the new `@inkandswitch/patchwork-ark-0.6` package, which `@inkandswitch/patchwork` depends on, so a site doesn't install anything. The vite plugin aliases every import of those packages to that copy, in the build, the dev server's pre-bundling and the workers alike, and emits the matching keyhive and subduction wasm. Automerge itself stays at the current version. Builds without keyhive, and keyhive builds on `"0.8"`, are unchanged.
+
+  On 0.6 the build reaches the server by the name ARK 0.6 ships for it rather than fetching its contact card, and keeps keyhive state in the `<prefix>-keyhive-0.6` database it used before the move to 0.8. Existing installs on prod get their old keyhive state back.
+
+  `@inkandswitch/patchwork-bootloader`: new `keyhiveSyncServer(syncServer, storage)` and `ArkVersion` from `/keyhive-sync-server`, which pick the `syncServer` to hand `initializeAutomergeRepoKeyhive` for either ARK. `keyhiveStorageVersion` follows the build's ARK. `wasmAssets()` and `emitWasmAssets()` take an optional file to resolve keyhive's and subduction's binaries from.
+
+  `@inkandswitch/patchwork`: the vite plugin also exports `ark`, `arkAliases` and `arkStack`, and the `ArkVersion` type. The source patch for automerge-repo is now chosen by the version being bundled, and `dist/patches` carries one for 2.6.0-subduction.48 as well as 2.6.0-subduction.49.
+
+  `@inkandswitch/patchwork-elements`: the keyhive access gates use ARK 0.6's `bestAccessForDoc` when it's there, so public documents open again on 0.6. On 0.8 they use `accessForDoc` as before.
+
+## 6.0.4
+
+### Patch Changes
+
+- 1684121: Move to `@automerge/automerge-repo-keyhive` 0.8.0-alpha.1 and `@keyhive/keyhive` 0.6.0. The other exact pins move with them so the consumer's tree keeps a single copy of automerge-repo: `@automerge/automerge-repo` and its adapters, `@automerge/react` and `@automerge/vanillajs` to 2.6.0-subduction.49, and `@automerge/automerge-subduction` to 0.20.1. The shipped automerge-repo patch makes the same changes as before, rebased onto 2.6.0-subduction.49. A site applying the patch from `@inkandswitch/patchwork/dist/patches` should take the new one.
+
+  ARK no longer ships named sync servers, so a keyhive build finds its server's identity at startup. The tab and the automerge protocol handler worker fetch the server's contact card from `/keyhive/contact-card` on the `syncServers.subduction` host, and keep the last card fetched so a start without a network can use it. The server has to serve that endpoint. `keyhive.syncServer` and the `PatchworkKeyhiveSyncServer` type are gone; point `syncServers.subduction` at the server instead. `keyhive: true` and `keyhive: { useIdFactory }` are unchanged.
+
+  New in `@inkandswitch/patchwork-bootloader`: `loadSyncServerIdentity(url, storage)` from `@inkandswitch/patchwork-bootloader/keyhive-sync-server`, for a site that builds its own keyhive Repo.
+
+  The new keyhive can't read state written by 0.3, so keyhive state moves to a new `<prefix>-keyhive-0.8` database and the old one is left untouched. Existing installs start with fresh keyhive state on upgrade.
+
+  The keyhive access gates in `patchwork-elements` use ARK's `accessForDoc`, which replaces `bestAccessForDoc`. ARK no longer has public access, so a document opens only for its members.
+
 ## 6.0.3
 
 ### Patch Changes

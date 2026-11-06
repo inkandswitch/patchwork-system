@@ -134,8 +134,16 @@ export class ModuleWatcher {
   #activeModules = new Set<string>();
   #disposed = false;
 
-  onLoad: (name: string, mod: any) => void;
+  /**
+   * Told the url the module was imported from (pinned to heads, for an
+   * Automerge package), the module itself, and the module's stable identity:
+   * the settings-doc entry it was loaded for, which {@link onUnload} is told
+   * when it goes away.
+   */
+  onLoad: (name: string, mod: any, moduleKey: string) => void;
   onUnload?: (name: string) => void;
+  /** Told every module the settings list, whenever it (re)reads them. */
+  onModules?: (modules: string[]) => void;
   /**
    * How an Automerge package doc (pinned to heads) is turned into the
    * `{ plugins }` shape `onLoad` consumes. Defaults to importing the package
@@ -155,7 +163,7 @@ export class ModuleWatcher {
   constructor(
     repo: Repo,
     urls: Record<string, string>,
-    callback: (name: string, mod: any) => void,
+    callback: (name: string, mod: any, moduleKey: string) => void,
     onUnload?: (name: string) => void,
     importAutomergePackage: (urlAtHeads: string) => Promise<any> = (url) =>
       importPackageFromFolderDocUrl(url as AutomergeUrl),
@@ -321,7 +329,7 @@ export class ModuleWatcher {
       if (!current()) return;
       if (mod) {
         this.#lastAnnounced.set(moduleKey, versionKey);
-        return this.onLoad(importUrl, mod);
+        return this.onLoad(importUrl, mod, moduleKey);
       }
       const delay = RETRY_DELAYS_MS[attemptIndex];
       if (delay === undefined) return;
@@ -515,6 +523,7 @@ export class ModuleWatcher {
     for (const { doc } of this.settingsDocs()) {
       for (const m of doc?.modules ?? []) urls.add(m);
     }
+    this.onModules?.([...urls]);
     const previousActive = this.#activeModules;
     this.#activeModules = urls;
     for (const previous of previousActive) {

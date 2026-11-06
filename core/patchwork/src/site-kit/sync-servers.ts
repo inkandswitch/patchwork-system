@@ -1,5 +1,5 @@
 import type { PatchworkSiteOptions } from "./options.js";
-import type { SyncServerSelection } from "@automerge/automerge-repo-keyhive";
+import type { ArkVersion } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 
 // Mirrors core/bootloader/src/sync-config.ts's DEFAULT_CLASSIC_SYNC_SERVER
 // and automerge-protocol-handler-worker.ts's SUBDUCTION_SYNC_URL selection —
@@ -9,32 +9,29 @@ import type { SyncServerSelection } from "@automerge/automerge-repo-keyhive";
 export const DEFAULT_SYNC_SERVERS = {
   classic: "wss://sync3.automerge.org",
   subduction: "wss://subduction.sync.inkandswitch.com",
-  keyhive: "wss://keyhive.sync.automerge.org",
 };
+
+/** Sync servers still running ARK 0.6, by host. */
+const ARK_06_HOSTS = ["subduction.sync.inkandswitch.com"];
 
 export function resolvePrimarySyncServer(options: PatchworkSiteOptions): {
   url: string;
-  keyhive?: SyncServerSelection;
+  keyhive?: boolean;
   useIdFactory?: boolean;
+  ark?: ArkVersion;
 } {
-  const subduction = (options.syncServers || undefined)?.subduction;
-  if (!options.keyhive) {
-    return { url: subduction ?? DEFAULT_SYNC_SERVERS.subduction };
-  }
+  const url =
+    (options.syncServers || undefined)?.subduction ??
+    DEFAULT_SYNC_SERVERS.subduction;
+  if (!options.keyhive) return { url };
   const keyhive = options.keyhive === true ? {} : options.keyhive;
-  const useIdFactory = keyhive.useIdFactory ?? true;
-  const syncServer = keyhive.syncServer ?? "subduction";
-  if (typeof syncServer === "string") {
-    return {
-      keyhive: syncServer,
-      url: subduction ?? DEFAULT_SYNC_SERVERS[syncServer],
-      useIdFactory,
-    };
-  }
-  // A custom relay carries the only URL it can be reached on, so it wins over
-  // `syncServers.subduction`.
-  const { url, ...identity } = syncServer;
-  return { keyhive: identity, url, useIdFactory };
+  return {
+    url,
+    keyhive: true,
+    useIdFactory: keyhive.useIdFactory ?? true,
+    ark:
+      keyhive.ark ?? (ARK_06_HOSTS.includes(new URL(url).host) ? "0.6" : "0.8"),
+  };
 }
 
 function wsToHttpOrigin(wsUrl: string): string {
