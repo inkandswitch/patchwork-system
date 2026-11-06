@@ -26,6 +26,7 @@
 
 import {
   stringifyAutomergeUrl,
+  type AutomergeUrl,
   type DocumentId,
   type NetworkAdapterInterface,
   type PeerId,
@@ -259,6 +260,18 @@ export async function startPublicReader({
     log("catching the reader up from the fetcher failed: %O", error);
   }
 
+  // Whether the reader can read a doc: whether it's public. The fetcher hears
+  // of every public doc's members (it's one of them, as relay), where a user's
+  // own keyhive, not being one, hears nothing of it.
+  const readerId = ark.ContactCard.fromBytes(fromBase64(principals.readerCard)).id;
+  const canRead = async (url: AutomergeUrl): Promise<boolean> => {
+    try {
+      return !!(await fetcher.accessForDoc(readerId, url));
+    } catch {
+      return false;
+    }
+  };
+
   const serve = (control: MessagePort) => {
     let adapter: NetworkAdapterInterface | undefined;
     let closed = false;
@@ -283,6 +296,16 @@ export async function startPublicReader({
         typeof data.documentId === "string"
       ) {
         publicRepo.findWithProgress(data.documentId as DocumentId);
+      } else if (
+        data?.type === "can-read" &&
+        typeof data.url === "string" &&
+        data.reply instanceof MessagePort
+      ) {
+        const reply = data.reply as MessagePort;
+        void canRead(data.url as AutomergeUrl).then((yes) => {
+          reply.postMessage(yes);
+          reply.close();
+        });
       } else if (data?.type === "bye") {
         close();
       }
@@ -318,7 +341,23 @@ type Offering = {
   /** The reader's peer id, less its per-instance part. */
   reader?: string;
   fetch?: (documentId: DocumentId) => void;
+  canRead?: (url: AutomergeUrl) => Promise<boolean>;
 };
+
+// how long a tab waits on the reader to say whether it can read a doc
+const CAN_READ_TIMEOUT_MS = 10_000;
+
+/**
+ * Whether the public reader `repo` is connected to can read `url`, which is
+ * whether it's public. False when it can't, or there's no reader to ask.
+ */
+export function publicReaderCanRead(
+  repo: Repo,
+  url: AutomergeUrl
+): Promise<boolean> {
+  const ask = offerings.get(repo)?.canRead;
+  return ask ? ask(url) : Promise.resolve(false);
+}
 const offerings = new WeakMap<Repo, Offering>();
 
 /**
@@ -362,6 +401,20 @@ export async function connectToPublicReader({
     current.reader = hello.peerId.slice(0, hello.peerId.lastIndexOf("-"));
     current.fetch = (documentId) =>
       control.postMessage({ type: "fetch", documentId });
+    current.canRead = (url) =>
+      new Promise<boolean>((resolve) => {
+        const { port1, port2 } = new MessageChannel();
+        const timer = setTimeout(() => {
+          port1.close();
+          resolve(false);
+        }, CAN_READ_TIMEOUT_MS);
+        port1.onmessage = ({ data }) => {
+          clearTimeout(timer);
+          port1.close();
+          resolve(data === true);
+        };
+        control.postMessage({ type: "can-read", url, reply: port2 }, [port2]);
+      });
     drop();
     const { port1, port2 } = new MessageChannel();
     control.postMessage({ type: "network", port: port2 }, [port2]);

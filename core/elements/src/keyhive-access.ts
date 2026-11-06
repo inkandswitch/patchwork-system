@@ -5,25 +5,48 @@ import type { Teardowns } from "./lifecycle.js";
 
 type Access = Awaited<ReturnType<AutomergeRepoKeyhive["accessForDoc"]>>;
 
+/** Whether a doc is readable through patchwork's public reader. */
+export type PublicAccess = (docUrl: AutomergeUrl) => Promise<boolean>;
+
+let publicAccess: PublicAccess | undefined;
+
 /**
- * The active identity's access to `docUrl`, or undefined if it has none.
+ * How to ask whether a doc is public. On ARK 0.8 a doc made public ("anyone
+ * with the link") is granted to patchwork's public reader, not to whoever
+ * opens it, and their own keyhive doesn't even hear about it: the server only
+ * sends an identity the ops that concern it. So the reader, which fetches and
+ * decrypts public docs for everyone, is asked. Setup gives this one.
+ */
+export function setPublicAccess(check: PublicAccess | undefined): void {
+  publicAccess = check;
+  publicAccessChanged();
+}
+
+/** The public reader learned something: check every watched doc again. */
+export function publicAccessChanged(): void {
+  for (const watcher of allWatchers) watcher.recheck();
+}
+
+/**
+ * Whether the active identity may open `docUrl`: it's been granted access,
+ * or the doc is public.
  *
  * A site built on ARK 0.6 (`keyhive.ark`) still has public access, and there
  * `accessForDoc` counts only what was granted to the identity directly. Its
  * `bestAccessForDoc` adds the public grant, so a public doc opens for
- * everyone. 0.8 has no public access and only `accessForDoc`.
+ * everyone. 0.8 has no public access of its own: {@link setPublicAccess}.
  */
-export function activeAccessForDoc(
+export async function hasActiveAccess(
   hive: AutomergeRepoKeyhive,
   docUrl: AutomergeUrl
-): Promise<Access> {
+): Promise<boolean> {
   const id = hive.active.individual.id;
   const { bestAccessForDoc } = hive as {
     bestAccessForDoc?: (id: unknown, docUrl: AutomergeUrl) => Promise<Access>;
   };
-  return bestAccessForDoc
-    ? bestAccessForDoc.call(hive, id, docUrl)
-    : hive.accessForDoc(id, docUrl);
+  if (bestAccessForDoc) return !!(await bestAccessForDoc.call(hive, id, docUrl));
+  if (await hive.accessForDoc(id, docUrl)) return true;
+  return publicAccess ? publicAccess(docUrl).catch(() => false) : false;
 }
 
 /** Called with the active identity's access after keyhive ingests remote ops. */
@@ -75,6 +98,11 @@ class AccessWatcher {
     };
   }
 
+  /** Check every watched doc again, as if ops had come in. */
+  recheck(): void {
+    if (this.#listeners.size) this.#onIngest();
+  }
+
   #onIngest = () => {
     this.#dirty = true;
     if (this.#draining) return;
@@ -99,7 +127,7 @@ class AccessWatcher {
   async #check(url: AutomergeUrl): Promise<void> {
     let hasAccess: boolean;
     try {
-      hasAccess = !!(await activeAccessForDoc(this.#hive, url));
+      hasAccess = await hasActiveAccess(this.#hive, url);
     } catch {
       // Leave every view as it is; the next op checks again.
       return;
@@ -114,10 +142,15 @@ class AccessWatcher {
 }
 
 const watchers = new WeakMap<AutomergeRepoKeyhive, AccessWatcher>();
+// every watcher, for publicAccessChanged; there's one per hive, so a handful
+const allWatchers = new Set<AccessWatcher>();
 
 function watcherFor(hive: AutomergeRepoKeyhive): AccessWatcher {
   let watcher = watchers.get(hive);
-  if (!watcher) watchers.set(hive, (watcher = new AccessWatcher(hive)));
+  if (!watcher) {
+    watchers.set(hive, (watcher = new AccessWatcher(hive)));
+    allWatchers.add(watcher);
+  }
   return watcher;
 }
 
@@ -149,8 +182,8 @@ export async function gateOnAccess(
   );
 
   try {
-    const access = await activeAccessForDoc(hive, url);
-    return latestAccess ?? !!access;
+    const access = await hasActiveAccess(hive, url);
+    return latestAccess ?? access;
   } catch {
     return latestAccess ?? false;
   }

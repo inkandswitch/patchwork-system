@@ -6,7 +6,7 @@ import type {
 import { buildId, isNewerBuild } from "./build-id.js";
 import { promptForNewBuild } from "./new-build-prompt.js";
 import debug from "debug";
-import type { Repo } from "@automerge/automerge-repo/slim";
+import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
 import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import type { PublicReaderStatus } from "./public-pair.js";
 import { handleResolveRequest } from "./tab-resolver.js";
@@ -241,6 +241,19 @@ function publicReaderPort(): MessagePort {
 function introduceResolver() {
   const port = publicReaderPort();
   automergeProtocolHandlerWorker.post({ type: "public-reader", port }, [port]);
+}
+
+/**
+ * Whether patchwork's public reader can read `url` (whether it's public), as
+ * seen from `repo`'s connection to it. False when there's no reader.
+ */
+export async function publicReaderCanRead(
+  repo: Repo,
+  url: AutomergeUrl
+): Promise<boolean> {
+  if (!publicReaderEnabled) return false;
+  const { publicReaderCanRead: ask } = await import("./public-pair.js");
+  return ask(repo, url);
 }
 
 /**

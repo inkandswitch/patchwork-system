@@ -63,6 +63,7 @@ import type {
   SyncStateDocMessage,
 } from "./types.js";
 import { createRepo, initWasm } from "./repo.js";
+import { gatePublicDocsOnReader } from "./public-access.js";
 import { watchDocument } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
@@ -191,6 +192,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     repoProvider.appendChild(rootElement);
   }
 
+  if (hive) gatePublicDocsOnReader(repo);
   registerPatchworkViewElement({ hive, repo });
 
   // Started with the site bundle alone so resolveAccountHandle has something to
