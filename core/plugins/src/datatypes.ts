@@ -10,6 +10,7 @@ import type {
   LoadedPlugin,
   PluginDescription,
 } from "./registry/types.js";
+import { getRegistry } from "./registry/index.js";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import { isKeyhiveDoc } from "./keyhive.js";
@@ -26,6 +27,34 @@ export interface DatatypeDescription extends PluginDescription {
   type: "patchwork:datatype";
   icon: string;
   unlisted?: boolean;
+  /**
+   * The datatype ids this datatype is also a kind of, like a UTI's
+   * `UTTypeConformsTo`. A doc of this type opens in tools that support any of
+   * them (transitively). List only the direct parents. Conforming is a promise
+   * that the doc also has each parent's shape, so the parents' tools can work
+   * on it.
+   */
+  conformsTo?: string[];
+}
+
+/**
+ * Every datatype `type` conforms to through `conformsTo`, transitively and
+ * nearest first, not including `type` itself. Only registered datatypes
+ * contribute, so the result can grow as packages register.
+ */
+export function getSupertypes(type: string): string[] {
+  const registry = getRegistry<DatatypeDescription>("patchwork:datatype");
+  // Breadth-first, so nearer supertypes come first; `seen` also stops cycles.
+  const queue = [type];
+  const seen = new Set(queue);
+  for (let i = 0; i < queue.length; i++) {
+    for (const parent of registry.get(queue[i])?.conformsTo ?? []) {
+      if (seen.has(parent)) continue;
+      seen.add(parent);
+      queue.push(parent);
+    }
+  }
+  return queue.slice(1);
 }
 
 // Loadable Datatype description using the generic LoadablePlugin

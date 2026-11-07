@@ -20,6 +20,7 @@ import {
 
 const registry = getRegistry<ComponentDescription>("patchwork:component");
 const toolRegistry = getRegistry("patchwork:tool");
+const datatypeRegistry = getRegistry("patchwork:datatype");
 
 type Counters = { mounts: number; cleanups: number };
 
@@ -139,6 +140,7 @@ describe("patchwork-view (component mode)", () => {
 // tests take it in turns: `afterEach` unregisters, or the previous test's
 // wildcard would be the one a later fallback picks.
 const registeredTools: string[] = [];
+const registeredDatatypes: string[] = [];
 
 function registerWildcardTool(): Counters {
   return registerTool("*");
@@ -146,9 +148,49 @@ function registerWildcardTool(): Counters {
 
 function registerTool(
   supportedDatatypes: "*" | string[]
+): Counters & { id: string };
+function registerTool(
+  id: string,
+  supportedDatatypes: "*" | string[]
+): Counters & { id: string };
+function registerTool(
+  idOrSupportedDatatypes: string | "*" | string[],
+  supportedDatatypes?: "*" | string[]
 ): Counters & { id: string } {
-  const id = `test-tool-${++seq}`;
+  const id =
+    supportedDatatypes === undefined
+      ? `test-tool-${++seq}`
+      : (idOrSupportedDatatypes as string);
+  const actualSupportedDatatypes =
+    supportedDatatypes ?? (idOrSupportedDatatypes as "*" | string[]);
   const counters = { id, mounts: 0, cleanups: 0 };
+  const render = () => {
+    counters.mounts++;
+    return () => {
+      counters.cleanups++;
+    };
+  };
+  toolRegistry.register(
+    {
+      id,
+      type: "patchwork:tool",
+      name: id,
+      supportedDatatypes: actualSupportedDatatypes,
+      load: async () => render,
+      module: render,
+    } as never,
+    `test://${id}`
+  );
+  registeredTools.push(id);
+  return counters;
+}
+
+function registerLazyTool(
+  id: string,
+  supportedDatatypes: "*" | string[],
+  importUrl: string
+): Counters {
+  const counters: Counters = { mounts: 0, cleanups: 0 };
   const render = () => {
     counters.mounts++;
     return () => {
@@ -162,12 +204,25 @@ function registerTool(
       name: id,
       supportedDatatypes,
       load: async () => render,
-      module: render,
     } as never,
-    `test://${id}`
+    importUrl
   );
   registeredTools.push(id);
   return counters;
+}
+
+function registerDatatype(id: string, conformsTo?: string[]) {
+  datatypeRegistry.register(
+    {
+      id,
+      type: "patchwork:datatype",
+      name: id,
+      icon: "",
+      conformsTo,
+    } as never,
+    `test://${id}`
+  );
+  registeredDatatypes.push(id);
 }
 
 describe("patchwork-view (legacy mode)", () => {
@@ -184,6 +239,8 @@ describe("patchwork-view (legacy mode)", () => {
   afterEach(() => {
     for (const id of registeredTools) toolRegistry.remove(id);
     registeredTools.length = 0;
+    for (const id of registeredDatatypes) datatypeRegistry.remove(id);
+    registeredDatatypes.length = 0;
     vi.restoreAllMocks();
   });
 
@@ -198,7 +255,9 @@ describe("patchwork-view (legacy mode)", () => {
   }
 
   function loadButton(view: Element) {
-    const button = view.querySelector<HTMLButtonElement>("button.pw-error__load");
+    const button = view.querySelector<HTMLButtonElement>(
+      "button.pw-error__load"
+    );
     expect(button).toBeTruthy();
     return button!;
   }
@@ -227,6 +286,80 @@ describe("patchwork-view (legacy mode)", () => {
     await settle();
 
     expect(raw.mounts).toBe(1);
+  });
+
+  it("opens a doc in a tool for its supertype ahead of the wildcard", async () => {
+    const raw = registerWildcardTool();
+    const folder = registerTool(`test-folder-tool-${++seq}`, ["test-folder"]);
+    registerDatatype("test-sketchbox", ["test-folder", "test-tldraw"]);
+
+    mount({ "@patchwork": { type: "test-sketchbox" } });
+    await settle();
+
+    expect(folder.mounts).toBe(1);
+    expect(raw.mounts).toBe(0);
+  });
+
+  it("breaks ties between equally near supertypes by tool id", async () => {
+    const tldraw = registerTool(`test-a-tldraw-${++seq}`, ["test-tldraw"]);
+    const folder = registerTool(`test-z-folder-${++seq}`, ["test-folder"]);
+    registerDatatype("test-equal-supertype-sketchbox", [
+      "test-folder",
+      "test-tldraw",
+    ]);
+
+    mount({ "@patchwork": { type: "test-equal-supertype-sketchbox" } });
+    await settle();
+
+    expect(tldraw.mounts).toBe(1);
+    expect(folder.mounts).toBe(0);
+  });
+
+  it("prefers the nearest supertype's tool", async () => {
+    const far = registerTool(`test-a-far-${++seq}`, ["test-file"]);
+    const near = registerTool(`test-z-near-${++seq}`, ["test-text"]);
+    registerDatatype("test-javascript", ["test-text"]);
+    registerDatatype("test-text", ["test-file"]);
+
+    mount({ "@patchwork": { type: "test-javascript" } });
+    await settle();
+
+    expect(near.mounts).toBe(1);
+    expect(far.mounts).toBe(0);
+  });
+
+  it("swaps the wildcard for a supertype's tool when the datatype registers", async () => {
+    const raw = registerWildcardTool();
+    const folder = registerTool(`test-folder-tool-${++seq}`, ["test-folder"]);
+
+    mount({ "@patchwork": { type: "test-late-sketchbox" } });
+    await settle();
+    expect(raw.mounts).toBe(1);
+
+    registerDatatype("test-late-sketchbox", ["test-folder"]);
+    await settle();
+
+    expect(raw.cleanups).toBe(1);
+    expect(folder.mounts).toBe(1);
+  });
+
+  it("swaps to a lazy supertype tool from the same package", async () => {
+    const raw = registerWildcardTool();
+    const folder = registerLazyTool(
+      `test-lazy-folder-tool-${++seq}`,
+      ["test-lazy-folder"],
+      "test://same-package"
+    );
+
+    mount({ "@patchwork": { type: "test-late-lazy-sketchbox" } });
+    await settle();
+    expect(raw.mounts).toBe(1);
+
+    registerDatatype("test-late-lazy-sketchbox", ["test-lazy-folder"]);
+    await settle();
+
+    expect(raw.cleanups).toBe(1);
+    expect(folder.mounts).toBe(1);
   });
 
   it("doesn't mount a tool-id change on a view removed in the same task", async () => {

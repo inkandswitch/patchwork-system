@@ -15,9 +15,11 @@ import {
 import {
   getFallbackTool,
   getRegistry,
+  getSupertypes,
   isKeyhiveDoc,
   isLoadablePlugin,
   registerPlugins,
+  type DatatypeDescription,
   type LoadedTool,
   type ToolDescription,
   type ToolElement,
@@ -37,8 +39,9 @@ const log = debug("patchwork:elements:legacy");
 
 /**
  * Whether `tool` supports `type` only through a `*` wildcard rather than by
- * naming the datatype explicitly. A wildcard-only match means the tool is a
- * generic fallback (e.g. a raw viewer), not a tool built for this datatype.
+ * naming the datatype or one of its supertypes. A wildcard-only match means the
+ * tool is a generic fallback (e.g. a raw viewer), not a tool built for this
+ * datatype.
  */
 function isWildcardOnlyMatch(
   tool: LoadedTool,
@@ -46,7 +49,9 @@ function isWildcardOnlyMatch(
 ): boolean {
   const datatypes = tool.supportedDatatypes;
   const list = datatypes === "*" ? ["*"] : datatypes;
-  return list.includes("*") && (type === undefined || !list.includes(type));
+  if (!list.includes("*")) return false;
+  if (type === undefined) return true;
+  return ![type, ...getSupertypes(type)].some((t) => list.includes(t));
 }
 
 const State = {
@@ -402,7 +407,10 @@ export class LegacyImpl {
               isChosenTool) ||
             (this.#state == "fallback" && isFallbackTool)
           ) {
-            if (loadedTool.importUrl !== this.#tool?.importUrl) {
+            if (
+              loadedTool.id !== this.#tool?.id ||
+              loadedTool.importUrl !== this.#tool?.importUrl
+            ) {
               await this.#restart();
             }
           }
@@ -410,9 +418,35 @@ export class LegacyImpl {
       }
     );
 
+    // Registering the doc's datatype, or one of its supertypes, can bring in a
+    // `conformsTo` that makes an already-registered tool a closer fit.
+    const removeDatatypeListener = getRegistry<DatatypeDescription>(
+      "patchwork:datatype"
+    ).on("registered", (added) => {
+      if (!this.#handle || this.#toolId) return;
+      const type = getType(this.#handle.doc());
+      if (!type) return;
+      if (added.id != type && !getSupertypes(type).includes(added.id)) return;
+      const fallback = getFallbackTool(this.#handle.doc());
+      if (!fallback) return;
+      if (fallback.id == this.#fallbackId && this.#state != State.unable) {
+        return;
+      }
+      this.#fallbackId = fallback.id;
+      if (!fallback.module) {
+        // The "loaded" listener mounts it once it's in.
+        if (isLoadablePlugin(fallback)) toolRegistry.load(fallback.id);
+      } else if (this.#state == State.unable) {
+        this.#queueRender();
+      } else if (this.#state == State.fallback) {
+        void this.#restart();
+      }
+    });
+
     this.#teardowns.add(() => {
       removeAddedListener();
       removeLoadedListener();
+      removeDatatypeListener();
     });
 
     const repo = this.#repo;
@@ -556,15 +590,16 @@ export class LegacyImpl {
   }
 
   // A registration can shift the fallback only when we don't have one yet or
-  // the new tool supports the doc's type (a specific match sorts ahead of a
-  // wildcard, so a supporting tool can displace the current pick).
+  // the new tool supports the doc's type or a supertype (a closer match sorts
+  // ahead, so a supporting tool can displace the current pick).
   #couldChangeFallback(added: ToolDescription): boolean {
     if (!this.#fallbackId) return true;
     const supported = added.supportedDatatypes;
     if (!supported) return false;
     if (supported === "*" || supported.includes("*")) return true;
     const type = this.#handle ? getType(this.#handle.doc()) : undefined;
-    return type != null && supported.includes(type);
+    if (type == null) return false;
+    return [type, ...getSupertypes(type)].some((t) => supported.includes(t));
   }
 
   async #runTeardown(): Promise<void> {
@@ -622,9 +657,7 @@ export class LegacyImpl {
   // their own cleanup runs, hence the in-flight check too.
   #mayRender(epoch: number): boolean {
     return (
-      !this.#disposed &&
-      epoch === this.#initEpoch &&
-      !this.#teardown.pending
+      !this.#disposed && epoch === this.#initEpoch && !this.#teardown.pending
     );
   }
 
@@ -942,9 +975,7 @@ export class LegacyImpl {
    */
   #suggestedImport(): { url: string; loading: boolean } | null {
     if (!this.#docUrl || !this.#handle) return null;
-    const url = presentableImportUrl(
-      getSuggestedImportUrl(this.#handle.doc())
-    );
+    const url = presentableImportUrl(getSuggestedImportUrl(this.#handle.doc()));
     if (!url) return null;
     return { url, loading: this.#requestedToolImports.has(url) };
   }
