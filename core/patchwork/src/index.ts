@@ -107,7 +107,10 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
   };
   report({});
 
-  const done = doSetup(options, progress, report, status.done);
+  const done = doSetup(options, progress, report, () => {
+    report({ stuck: false });
+    status.done();
+  });
   void done.then(
     () => log("patchwork setup complete"),
     // The site shows its own error for a boot that failed.

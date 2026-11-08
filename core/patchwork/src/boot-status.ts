@@ -94,7 +94,9 @@ export function showBootStatus(options: {
     }
     element.dataset.stage = progress.stage;
     element.toggleAttribute("data-stuck", !!progress.stuck);
+    const hadFocus = element.contains(document.activeElement);
     element.replaceChildren(...lines);
+    if (hadFocus) element.querySelector("button")?.focus();
   };
 
   const show = () => {

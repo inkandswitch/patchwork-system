@@ -174,7 +174,10 @@ export function sharedWorkerHandle(
     if (state.phase === "running" || state.phase === "winding-down")
       return state.instance.worker;
     const held = heldOf();
-    if (state.phase === "waiting") clearTimeout(state.timer);
+    if (state.phase === "waiting") {
+      silent ||= state.silent;
+      clearTimeout(state.timer);
+    }
     return launch(held, reason, silent);
   };
 
