@@ -131,6 +131,14 @@ self.addEventListener("message", async (event) => {
     return;
   }
 
+  // A page loaded past us by a hard reload isn't ours until we claim it, and
+  // we only claim on activate, which has already happened.
+  if (data?.type === "claim") {
+    lifecycle("info", "claiming clients (asked by a page)");
+    (event as unknown as ExtendableEvent).waitUntil(self.clients.claim());
+    return;
+  }
+
   if (data?.type !== "cachename" || cachename === data.cachename) return;
 
   console.info(`moving from cache ${cachename} to ${data.cachename}`);
