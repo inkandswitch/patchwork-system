@@ -168,6 +168,22 @@ describe("scratch backings", () => {
     await vi.waitFor(() => expect(view.leases(scratchDoc.url)).toBe(0));
   });
 
+  it("lets a lease go on dispose while its lookup is still pending", async () => {
+    const scratchDoc = fork();
+    const view = mount();
+    const find = vi
+      .spyOn(scratch, "find")
+      .mockReturnValueOnce(new Promise(() => {}));
+    teardowns.push(() => find.mockRestore());
+    view.answer({ url: note.url, scratchUrl: scratchDoc.url });
+    const found = view.overlay.find<Note>(note.url);
+    await vi.waitFor(() => expect(view.leases(scratchDoc.url)).toBe(1));
+
+    view.overlay.dispose();
+    await expect(found).rejects.toThrow(/disposed/);
+    await vi.waitFor(() => expect(view.leases(scratchDoc.url)).toBe(0));
+  });
+
   it("holds no lease for a backing in the realm repo", async () => {
     const clone = repo.clone(note);
     const view = mount();
@@ -215,5 +231,41 @@ describe("scratch backings", () => {
 
     view.answer({ url: note.url, cloneUrl: clone.url, scratchUrl: computed.url });
     await vi.waitFor(() => expect(handle.doc().title).toBe("laid"));
+  });
+
+  it("shows a pinned url at heads only the scratch document has from the scratch one", async () => {
+    const scratchDoc = fork();
+    scratchDoc.change((d) => {
+      d.title = "laid";
+    });
+    const view = mount();
+    view.answer({ url: note.url, scratchUrl: scratchDoc.url });
+    const live = await view.overlay.find<Note>(note.url);
+
+    const pinned = stringifyAutomergeUrl({
+      documentId: note.documentId,
+      heads: live.heads(),
+    });
+    const old = await view.overlay.find<Note>(pinned);
+    expect(old.url).toBe(pinned);
+    expect(old.doc().title).toBe("laid");
+    expect(view.leases(scratchDoc.url)).toBe(2);
+  });
+
+  it("resolves a view() of a scratch backing back through the overlay", async () => {
+    const scratchDoc = fork();
+    scratchDoc.change((d) => {
+      d.title = "laid";
+    });
+    const view = mount();
+    view.answer({ url: note.url, scratchUrl: scratchDoc.url });
+    const live = await view.overlay.find<Note>(note.url);
+
+    const snapshot = live.view(live.heads());
+    expect(snapshot.url).toBe(
+      stringifyAutomergeUrl({ documentId: note.documentId, heads: live.heads() })
+    );
+    const roundTrip = await view.overlay.find<Note>(snapshot.url);
+    expect(roundTrip.doc().title).toBe("laid");
   });
 });
