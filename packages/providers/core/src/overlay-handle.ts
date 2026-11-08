@@ -425,15 +425,18 @@ export class OverlayHandle<T> {
     backing: DocHandle<unknown>,
     heads: UrlHeads | undefined
   ): DocHandle<unknown> {
-    if (backing === (this.#handle as DocHandle<unknown>)) {
-      return this.#self as unknown as DocHandle<unknown>;
-    }
     const root = this.#root;
     const recipe: Recipe = {
       heads,
       segments: relativeSegments(backing.url, root.#handle.url),
     };
     const url = presentedUrlOf(root.#originalUrl, recipe);
+    if (
+      backing === (this.#handle as DocHandle<unknown>) &&
+      url === this.#originalUrl
+    ) {
+      return this.#self as unknown as DocHandle<unknown>;
+    }
     if (url === root.#originalUrl) {
       return root.#self as unknown as DocHandle<unknown>;
     }

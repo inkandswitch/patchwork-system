@@ -153,8 +153,9 @@ export interface BootProgress {
   /** How many of the listed packages have loaded, and the name of the last. */
   packages?: { loaded: number; total: number; latest?: string };
   /**
-   * Boot has been at `stage` for longer than `timeout`. It carries on, and
-   * may still finish.
+   * Boot as a whole has taken longer than `timeout` (counted from `setup()`,
+   * not from entering `stage`) and hasn't finished; once set it stays `true`
+   * as later stages are reported. It carries on, and may still finish.
    */
   stuck?: boolean;
 }

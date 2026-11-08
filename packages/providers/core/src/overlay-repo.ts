@@ -498,11 +498,11 @@ export class OverlayRepo implements RepoLike {
         this.#rejecters.delete(presented);
         this.#inner.delete(presented);
         this.#failures.set(presented, failure ?? failedState(error));
-        this.#notifyProgress(presented);
         this.#subscriptions.get(presented)?.();
         this.#subscriptions.delete(presented);
         if (failedInner && !this.#disposed)
           this.#watchForRecovery(presented, failedInner);
+        this.#notifyProgress(presented);
       }
     });
 
