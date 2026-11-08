@@ -1,5 +1,5 @@
 ---
-"@inkandswitch/patchwork": patch
+"@inkandswitch/patchwork": minor
 ---
 
 Boot says what it's doing. A site that doesn't pass `onProgress` gets a small box in the corner, shown once boot has taken a second, naming the step boot is on, how many packages have loaded, and what the public reader is doing; it goes away when the root view mounts (or, with `routing: false`, when `setup()` resolves). A site that passes `onProgress` draws its own and gets no box.
