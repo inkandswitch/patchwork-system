@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Repo } from "@automerge/automerge-repo/slim";
 import {
   Repo as AutomergeRepo,
+  generateAutomergeUrl,
   type AutomergeUrl,
   type PeerId,
 } from "@automerge/automerge-repo";
@@ -962,5 +963,184 @@ describe("ModuleWatcher with a stub tracker", () => {
         await repo.shutdown().catch(() => {});
       }
     });
+  });
+});
+
+describe("ModuleWatcher.prioritize", () => {
+  const tool = (id: string) => ({ type: "patchwork:tool", id });
+  const ticks = async (n = 10) => {
+    for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
+  };
+
+  // Each source is a static manifest of package docs, looked up as they are
+  // and imported only when the test says.
+  function setup(sources: Record<string, AutomergeUrl[]>) {
+    const manifests: Record<string, unknown> = {};
+    const urls: Record<string, string> = {};
+    for (const [name, modules] of Object.entries(sources)) {
+      urls[name] = `http://example.test/${name}.json`;
+      manifests[urls[name]] = { modules };
+    }
+    stubFetchManifest(manifests);
+    const started: string[] = [];
+    const imports = new Map<string, (mod: any) => void>();
+    const tracker: PackageTracker = {
+      findLatest: async (url) => url,
+      watch: () => () => {},
+    };
+    const loaded: string[] = [];
+    const watcher = new ModuleWatcher(
+      {} as unknown as Repo,
+      urls,
+      (_name, _mod, key) => loaded.push(key),
+      undefined,
+      (url) => {
+        started.push(url);
+        return new Promise((resolve) => imports.set(url, resolve));
+      },
+      tracker
+    );
+    return {
+      watcher,
+      started,
+      loaded,
+      provide: (url: string, ...plugins: { type: string; id: string }[]) =>
+        imports.get(url)!({ plugins }),
+      fail: (url: string) => imports.get(url)!(undefined),
+      addManifest(name: string, modules: AutomergeUrl[]) {
+        manifests[`http://example.test/${name}.json`] = { modules };
+        return `http://example.test/${name}.json`;
+      },
+    };
+  }
+
+  const [a, b, c, d] = Array.from({ length: 4 }, () => generateAutomergeUrl());
+
+  it("loads each batch once the one before has provided what it was expected to", async () => {
+    const { watcher, started, provide } = setup({ system: [a, b, c, d] });
+    const prioritized = watcher.prioritize([
+      { [a]: [tool("frame")] },
+      { [b]: [tool("sidebar")] },
+    ]);
+    try {
+      await ticks();
+      expect(started).toEqual([a]);
+
+      provide(a, tool("frame"), tool("other"));
+      await ticks();
+      expect(started).toEqual([a, b]);
+
+      provide(b, tool("sidebar"));
+      await ticks();
+      expect(started.sort()).toEqual([a, b, c, d].sort());
+      expect(await prioritized).toBe(true);
+
+      provide(c);
+      provide(d);
+      await watcher.doneLoading;
+    } finally {
+      watcher.dispose();
+    }
+  });
+
+  it("lets everything go when an entry no longer provides a plugin it was expected to", async () => {
+    const { watcher, started, provide } = setup({ system: [a, b, c] });
+    const prioritized = watcher.prioritize([
+      { [a]: [tool("frame")] },
+      { [b]: [tool("sidebar")] },
+    ]);
+    try {
+      await ticks();
+      provide(a, tool("a-different-frame"));
+      await ticks();
+      expect(started.sort()).toEqual([a, b, c].sort());
+      expect(await prioritized).toBe(false);
+    } finally {
+      watcher.dispose();
+    }
+  });
+
+  it("lets everything go when an entry fails to load", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const { watcher, started, fail } = setup({ system: [a, b, c] });
+    const prioritized = watcher.prioritize([{ [a]: [tool("frame")] }]);
+    try {
+      await ticks();
+      fail(a);
+      await ticks();
+      expect(started.sort()).toEqual([a, b, c].sort());
+      expect(await prioritized).toBe(false);
+    } finally {
+      watcher.dispose();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it("lets everything go when a batch takes too long", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { watcher, started } = setup({ system: [a, b, c] });
+    const prioritized = watcher.prioritize([{ [a]: [tool("frame")] }]);
+    try {
+      await vi.advanceTimersByTimeAsync(100);
+      expect(started).toEqual([a]);
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(started.sort()).toEqual([a, b, c].sort());
+      expect(await prioritized).toBe(false);
+    } finally {
+      watcher.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it("lists a later source without waiting for the first's modules, which wait for its batch", async () => {
+    const { watcher, started, provide, addManifest } = setup({
+      system: [a, b],
+    });
+    const prioritized = watcher.prioritize([{ [c]: [tool("installed")] }]);
+    try {
+      await ticks();
+      expect(started).toEqual([]);
+
+      void watcher.addUrl("user", addManifest("user", [c]));
+      await ticks();
+      expect(started).toEqual([c]);
+
+      provide(c, tool("installed"));
+      await ticks();
+      expect(started.sort()).toEqual([a, b, c].sort());
+      expect(await prioritized).toBe(true);
+    } finally {
+      watcher.dispose();
+    }
+  });
+
+  it("doesn't load a held module that left the settings while it waited", async () => {
+    const { watcher, started, provide, addManifest } = setup({
+      system: [a, b, c],
+    });
+    void watcher.prioritize([{ [a]: [tool("frame")] }]);
+    try {
+      await ticks();
+      // Its load waits on the held modules, so it can't be awaited here.
+      void watcher.addUrl("system", addManifest("system-2", [a, b]));
+      await ticks();
+      provide(a, tool("frame"));
+      await ticks();
+      // Both loads looked `a` up, so it's imported twice.
+      expect(new Set(started)).toEqual(new Set([a, b]));
+    } finally {
+      watcher.dispose();
+    }
+  });
+
+  it("has nothing to hold back without a batch", async () => {
+    const { watcher, started } = setup({ system: [a, b] });
+    expect(await watcher.prioritize([{}])).toBe(false);
+    try {
+      await ticks();
+      expect(started.sort()).toEqual([a, b].sort());
+    } finally {
+      watcher.dispose();
+    }
   });
 });

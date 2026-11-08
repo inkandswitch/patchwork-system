@@ -163,6 +163,30 @@ describe("the tab's title", () => {
     expect(document.title).toBe(`Pears | ${SITE}`);
   });
 
+  it("names a document whose datatype registers after it opened", async () => {
+    start();
+    const plum = repo.create({
+      "@patchwork": { type: "router-test-late" },
+      title: "Plum",
+    }).url;
+    open(plum);
+    await ticks(20);
+    expect(document.title).toBe(SITE);
+    getRegistry("patchwork:datatype").register(
+      {
+        type: "patchwork:datatype",
+        id: "router-test-late",
+        name: "Late",
+        load: async () => ({
+          init() {},
+          getTitle: (doc: Note) => doc.title,
+        }),
+      } as any,
+      "router-test-late"
+    );
+    await vi.waitFor(() => expect(document.title).toBe(`Plum | ${SITE}`));
+  });
+
   it("goes back to the site's name when no document is open", async () => {
     start();
     open(note("Apples"));

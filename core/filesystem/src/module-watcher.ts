@@ -36,6 +36,44 @@ const RELOAD_DEBOUNCE_MS = 250;
 // fires when the package doc's own heads move — so back off and try again.
 const RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 20_000];
 
+// How long a batch from `prioritize` gets to load what it was expected to,
+// from when it opens, before everything still held back is let go. A return
+// visit boots in about a second.
+const BATCH_TIME_LIMIT_MS = 3_000;
+
+/** A plugin, by the type and id it registers under. */
+export type PluginRef = { type: string; id: string };
+
+/**
+ * Settings entries to load ahead of the rest, each with the plugins it's
+ * expected to provide.
+ */
+export type LoadBatch = Record<string, PluginRef[]>;
+
+const refKey = (ref: PluginRef) => `${ref.type}\u0000${ref.id}`;
+
+type Gate = { promise: Promise<void>; open: () => void };
+
+function gate(): Gate {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => (open = resolve));
+  return { promise, open };
+}
+
+type LoadPlan = {
+  batches: Map<string, PluginRef[]>[];
+  /** How many gates are open. One past the last batch's is the rest's. */
+  opened: number;
+  /** One per batch, then one for every module in none of them. */
+  gates: Gate[];
+  timer?: ReturnType<typeof setTimeout>;
+  /** What each entry provided, as `refKey`s, once it's loaded. */
+  provided: Map<string, Set<string>>;
+  /** Entries whose import or lookup failed. */
+  failed: Set<string>;
+  settle: (held: boolean) => void;
+};
+
 function getDocumentBaseUrl(): string {
   // `document.baseURI` is the document's proper base URL — for a srcdoc/sandboxed
   // frame that's the embedder's URL (a valid base), where `location.href` would
@@ -147,6 +185,9 @@ export class ModuleWatcher {
   #loadedUrls = new Map<string, string>();
   #activeModules = new Set<string>();
   #disposed = false;
+  #plan: LoadPlan | undefined;
+  // The sources given to the constructor have been read.
+  #sourcesRead = gate();
 
   /**
    * Told the url the module was imported from (pinned to heads, for an
@@ -228,8 +269,131 @@ export class ModuleWatcher {
         this.staticManifests[value.name] = value.manifest;
       }
     }
+    this.#sourcesRead.open();
     if (this.#disposed) return;
     await this.load();
+  }
+
+  /**
+   * Load `batches` ahead of everything else, one after another: each opens
+   * once every entry in the one before has loaded and provided the plugins
+   * it was expected to. Modules in no batch wait for the last. If an entry
+   * fails, comes back without a plugin it was expected to provide, or a batch
+   * takes longer than {@link BATCH_TIME_LIMIT_MS}, everything still held back
+   * is let go at once.
+   *
+   * Call it straight after constructing the watcher, before its first load.
+   * Resolves true once every batch loaded as expected, and false if the plan
+   * fell back (or there was nothing to plan).
+   */
+  prioritize(batches: LoadBatch[]): Promise<boolean> {
+    const planned = batches
+      .map((batch) => new Map(Object.entries(batch)))
+      .filter((batch) => batch.size > 0);
+    if (!planned.length || this.#plan || this.#disposed) {
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((settle) => {
+      this.#plan = {
+        batches: planned,
+        opened: 0,
+        gates: [...planned, null].map(() => gate()),
+        provided: new Map(),
+        failed: new Set(),
+        settle,
+      };
+      this.#openNextBatch();
+    });
+  }
+
+  #openNextBatch() {
+    const plan = this.#plan;
+    if (!plan) return;
+    clearTimeout(plan.timer);
+    plan.gates[plan.opened++].open();
+    if (plan.opened > plan.batches.length) {
+      this.#endPlan(true);
+      return;
+    }
+    plan.timer = setTimeout(
+      () =>
+        this.#fallBack(
+          `batch ${plan.opened} took more than ${BATCH_TIME_LIMIT_MS}ms`
+        ),
+      BATCH_TIME_LIMIT_MS
+    );
+    this.#checkBatch();
+  }
+
+  /** Opens the next batch if the open one has loaded as expected. */
+  #checkBatch() {
+    const plan = this.#plan;
+    if (!plan) return;
+    const batch = plan.batches[plan.opened - 1];
+    for (const [entry, expected] of batch) {
+      if (plan.failed.has(entry)) {
+        this.#fallBack(`${entry} failed to load`);
+        return;
+      }
+      const provided = plan.provided.get(entry);
+      if (!provided) return;
+      const missing = expected.find((ref) => !provided.has(refKey(ref)));
+      if (missing) {
+        this.#fallBack(
+          `${entry} no longer provides ${missing.type} ${missing.id}`
+        );
+        return;
+      }
+    }
+    this.#openNextBatch();
+  }
+
+  #fallBack(reason: string) {
+    const plan = this.#plan;
+    if (!plan) return;
+    log(`letting every module load: ${reason}`);
+    for (const { open } of plan.gates) open();
+    this.#endPlan(false);
+  }
+
+  #endPlan(held: boolean) {
+    const plan = this.#plan;
+    if (!plan) return;
+    clearTimeout(plan.timer);
+    this.#plan = undefined;
+    plan.settle(held);
+  }
+
+  /** Waits for `entry`'s batch to open, if a plan is holding it back. */
+  #turnOf(entry: string): Promise<void> | undefined {
+    const plan = this.#plan;
+    if (!plan) return undefined;
+    const batch = plan.batches.findIndex((batch) => batch.has(entry));
+    const index = batch === -1 ? plan.batches.length : batch;
+    if (index < plan.opened) return undefined;
+    return plan.gates[index].promise;
+  }
+
+  #noteLoaded(entry: string, mod: any) {
+    const plan = this.#plan;
+    if (!plan) return;
+    const plugins: any[] = Array.isArray(mod?.plugins) ? mod.plugins : [];
+    plan.provided.set(
+      entry,
+      new Set(
+        plugins
+          .filter((p) => typeof p?.type === "string" && typeof p?.id === "string")
+          .map(refKey)
+      )
+    );
+    this.#checkBatch();
+  }
+
+  #noteFailed(entry: string) {
+    const plan = this.#plan;
+    if (!plan) return;
+    plan.failed.add(entry);
+    this.#checkBatch();
   }
 
   private settingsDocs(): Array<{
@@ -251,6 +415,12 @@ export class ModuleWatcher {
     await Promise.all(
       modules.map(async (importName) => {
         try {
+          const turn = this.#turnOf(importName);
+          if (turn) {
+            await turn;
+            // It may have left the settings while it waited.
+            if (this.#disposed || !this.#activeModules.has(importName)) return;
+          }
           await this.processModuleEntry(importName);
         } catch (error) {
           console.error(
@@ -275,6 +445,7 @@ export class ModuleWatcher {
         latest = await this.findLatestVersion(importName, entry);
       } catch (error) {
         this.retryLookup(importName, entry, error);
+        this.#noteFailed(importName);
         return;
       }
       // A newer lookup took over, and announces what it finds.
@@ -313,7 +484,9 @@ export class ModuleWatcher {
   async addUrl(name: string, url: string): Promise<void> {
     if (this.urls[name] === url) return;
     this.urls[name] = url;
-    await this.doneLoading;
+    // A plan may want this source's modules first, so it can't wait for the
+    // others to load. Without one, the constructor's sources load first.
+    await (this.#plan ? this.#sourcesRead.promise : this.doneLoading);
     if (this.#disposed) return;
     const replaced = this.handles?.[name];
     if (replaced) replaced.removeListener("change", this.onChange);
@@ -352,8 +525,11 @@ export class ModuleWatcher {
         this.#lastAnnounced.set(moduleKey, versionKey);
         this.unloadIfDocumentChanged(moduleKey, importUrl);
         this.#loadedUrls.set(moduleKey, importUrl);
-        return this.onLoad(importUrl, mod, moduleKey);
+        this.onLoad(importUrl, mod, moduleKey);
+        this.#noteLoaded(moduleKey, mod);
+        return;
       }
+      this.#noteFailed(moduleKey);
       const delay = RETRY_DELAYS_MS[attemptIndex];
       if (delay === undefined) return;
       const timer = setTimeout(() => {
@@ -577,6 +753,7 @@ export class ModuleWatcher {
 
   dispose() {
     this.#disposed = true;
+    this.#fallBack("the watcher was disposed");
     for (const handle of Object.values(this.handles ?? {})) {
       handle.removeListener("change", this.onChange);
     }
