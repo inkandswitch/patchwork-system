@@ -62,6 +62,13 @@ import { watchDocument } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 import { showBootStatus } from "./boot-status.js";
+import {
+  hashTools,
+  planLoadOrder,
+  preloadPlugins,
+  readLoadOrder,
+  recordLoadOrder,
+} from "./load-order.js";
 
 const log = debug("patchwork:setup");
 
@@ -190,6 +197,11 @@ async function doSetup(
   if (hive) gatePublicDocsOnReader(repo);
   registerPatchworkViewElement({ hive, repo });
 
+  const accountKey = options.accountKey ?? "patchworkAccountURL";
+  const loadOrderKey = `patchwork:load-order:${accountKey}`;
+  const loadOrderHints = readLoadOrder(localStorage, loadOrderKey);
+  const loadOrder = recordLoadOrder(localStorage, loadOrderKey, loadOrderHints);
+
   // Starts with the site's sources alone: they hold the `account` datatype
   // resolveAccountHandle waits for, and the account's own settings join later.
   // Counted by settings entry, not heads-pinned url, so a reload doesn't count
@@ -206,6 +218,7 @@ async function doSetup(
     nameSources(moduleSources),
     (name, mod, moduleKey) => {
       onModuleLoaded(name, mod);
+      loadOrder.loaded(moduleKey, mod);
       loaded.add(moduleKey);
       report({
         packages: {
@@ -219,6 +232,7 @@ async function doSetup(
     // which for a branch package is a different document.
     (moduleKey, importUrl) => {
       loaded.delete(moduleKey);
+      loadOrder.unloaded(moduleKey);
       unregisterPlugins(importUrl);
     },
     options.importModulesInWorker === false
@@ -231,6 +245,15 @@ async function doSetup(
       watchDocument(repo, url, onChange)
     )
   );
+
+  // What the last visit had on screen loads first: the hash's tools, then
+  // the root view's, then the views inside it, and so on.
+  const loadBatches = planLoadOrder(
+    loadOrderHints,
+    routing === false ? [] : hashTools(window.location.hash)
+  );
+  const prioritized = moduleWatcher.prioritize(loadBatches);
+  preloadPlugins(loadBatches, prioritized);
 
   moduleWatcher.onModules = (modules) => {
     listed = new Set(modules);
@@ -246,12 +269,16 @@ async function doSetup(
   report({ stage: "package-list" });
 
   const accountDocHandle = (await resolveAccountHandle(repo, {
-    storageKey: options.accountKey ?? "patchworkAccountURL",
+    storageKey: accountKey,
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
 
-  wireModuleSettings(accountDocHandle, moduleWatcher);
+  // Once the account's packages are listed too, the list is whole, and a
+  // package that's left it since last visit is forgotten.
+  wireModuleSettings(accountDocHandle, moduleWatcher, () => {
+    if (listed) loadOrder.keepOnly(listed);
+  });
 
   const toolsLoaded = moduleWatcher.doneLoading.then(
     () =>
@@ -264,7 +291,14 @@ async function doSetup(
     (err: unknown) => console.error("doneLoading rejected:", err)
   );
 
-  void toolsLoaded.then(() => {
+  // The tools that were on screen last visit, when they all loaded where
+  // they did then. Otherwise there's no telling which are needed first, so
+  // every one of the site's packages.
+  const firstToolsLoaded = prioritized.then((held) =>
+    held ? undefined : toolsLoaded
+  );
+
+  void firstToolsLoaded.then(() => {
     stopHearingReader();
     report({ stage: "opening" });
   });
@@ -272,7 +306,7 @@ async function doSetup(
   let router: Router | undefined;
   if (routing !== false) {
     rootElement.style.visibility = "hidden";
-    await toolsLoaded;
+    await firstToolsLoaded;
     router = createRouter({
       rootElement,
       repo,
@@ -418,12 +452,13 @@ function onModuleLoaded(name: string, mod: any): void {
  */
 function wireModuleSettings(
   accountDocHandle: DocHandle<AccountDoc>,
-  moduleWatcher: ModuleWatcher
+  moduleWatcher: ModuleWatcher,
+  onLoaded: () => void
 ): void {
   const wire = () => {
     const url = accountDocHandle.doc()?.moduleSettingsUrl;
     if (!url) return;
-    void moduleWatcher.addUrl("user", url);
+    void moduleWatcher.addUrl("user", url).then(onLoaded);
     accountDocHandle.off("change", wire);
   };
   wire();

@@ -261,36 +261,53 @@ function createTitle(repo: Repo, siteTitle: string) {
         show();
       }
 
-      try {
-        const handle = await repo.find<TitledDoc>(url);
-        if (!isCurrent()) return;
-        const docType = type || handle.doc()?.["@patchwork"]?.type;
-        const datatype = docType
-          ? await getRegistry<DatatypeDescription>("patchwork:datatype").load(
-              docType
-            )
-          : undefined;
-        if (!isCurrent()) return;
-        if (!datatype) {
-          show();
-          return;
-        }
-        const { getTitle } = datatype.module as DatatypeImplementation;
-        const update = () => {
-          try {
-            show(getTitle(handle.doc()));
-          } catch (error) {
-            console.error(`patchwork: couldn't read the title of ${url}`, error);
-          }
-        };
-        update();
-        handle.on("change", update);
-        stopFollowing = () => handle.off("change", update);
-      } catch (error) {
+      const failed = (error: unknown) => {
         if (!isCurrent()) return;
         // Forget it, so opening it again tries again.
         following = undefined;
         console.error(`patchwork: couldn't title ${url}`, error);
+      };
+
+      try {
+        const handle = await repo.find<TitledDoc>(url);
+        if (!isCurrent()) return;
+        const docType = type || handle.doc()?.["@patchwork"]?.type;
+        const registry = getRegistry<DatatypeDescription>("patchwork:datatype");
+        const title = async () => {
+          const datatype = docType ? await registry.load(docType) : undefined;
+          if (!isCurrent()) return;
+          if (!datatype) {
+            show();
+            // Its package may still be loading: boot opens the first view
+            // before every package is in.
+            if (docType && !registry.has(docType)) {
+              const off = registry.on("registered", (plugin) => {
+                if (plugin.id !== docType) return;
+                off();
+                if (isCurrent()) title().catch(failed);
+              });
+              stopFollowing = off;
+            }
+            return;
+          }
+          const { getTitle } = datatype.module as DatatypeImplementation;
+          const update = () => {
+            try {
+              show(getTitle(handle.doc()));
+            } catch (error) {
+              console.error(
+                `patchwork: couldn't read the title of ${url}`,
+                error
+              );
+            }
+          };
+          update();
+          handle.on("change", update);
+          stopFollowing = () => handle.off("change", update);
+        };
+        await title();
+      } catch (error) {
+        failed(error);
       }
     },
   };
