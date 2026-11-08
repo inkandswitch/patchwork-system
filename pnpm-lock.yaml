@@ -410,12 +410,24 @@ importers:
 
   packages/providers/core:
     devDependencies:
+      '@automerge/automerge':
+        specifier: 3.5.0
+        version: 3.5.0
       '@automerge/automerge-repo':
         specifier: 2.6.0-subduction.49
         version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
+      '@automerge/automerge-subduction':
+        specifier: 0.20.1
+        version: 0.20.1
+      happy-dom:
+        specifier: ^20.0.0
+        version: 20.11.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
+      vitest:
+        specifier: ^3.2.6
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(@vitest/ui@3.2.7)(happy-dom@20.11.0)
 
   packages/providers/frameworks/react:
     dependencies:

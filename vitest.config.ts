@@ -6,6 +6,7 @@ export default defineConfig({
       "core/filesystem",
       "core/patchwork",
       "packages/edge-handles",
+      "packages/providers/core",
     ],
   },
 });
