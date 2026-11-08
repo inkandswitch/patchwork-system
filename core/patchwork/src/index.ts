@@ -208,9 +208,11 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
         },
       });
     },
-    (name) => {
-      loaded.delete(name);
-      unregisterPlugins(name);
+    // Counted by settings entry; registered under the url that was loaded,
+    // which for a branch package is a different document.
+    (moduleKey, importUrl) => {
+      loaded.delete(moduleKey);
+      unregisterPlugins(importUrl);
     },
     options.importModulesInWorker === false
       ? undefined

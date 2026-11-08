@@ -764,3 +764,102 @@ describe("importPackageFromHttpUrl error handling", () => {
     expect(err.cause).toBe(parseError);
   });
 });
+
+describe("ModuleWatcher with a stub tracker", () => {
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /** A tracker that answers from `latest` and records who is watching. */
+  function stubTracker(
+    findLatest: PackageTracker["findLatest"] = async (url) => url
+  ) {
+    const watching = new Map<string, Parameters<PackageTracker["watch"]>[1]>();
+    const tracker: PackageTracker = {
+      findLatest: (url) => findLatest(url),
+      watch(url, onChange) {
+        watching.set(url, onChange);
+        return () => watching.delete(url);
+      },
+    };
+    return { tracker, watching };
+  }
+
+  function docUrls(repo: InstanceType<typeof AutomergeRepo>) {
+    const doc = repo.create<any>({ "@patchwork": { type: "folder" } });
+    return { url: doc.url, atHeads: doc.view(doc.heads()).url };
+  }
+
+  it("tells onUnload the url that was loaded, which a branch package does not share with its settings entry", async () => {
+    const repo = new AutomergeRepo({ peerId: "unload-url" as PeerId });
+    try {
+      const entry = docUrls(repo);
+      const branch = docUrls(repo);
+      const settings = repo.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [entry.url],
+      });
+      const { tracker } = stubTracker(async () => branch.atHeads);
+      const unloaded: Array<[string, string]> = [];
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const watcher = new ModuleWatcher(
+        repo,
+        { system: settings.url },
+        () => {},
+        (name, importUrl) => unloaded.push([name, importUrl]),
+        async () => ({ plugins: [] }),
+        tracker
+      );
+      await watcher.doneLoading;
+
+      settings.change((d: any) => {
+        d.modules = [];
+      });
+      await pause(100);
+
+      expect(unloaded).toEqual([[entry.url, branch.atHeads]]);
+      warn.mockRestore();
+      watcher.dispose();
+    } finally {
+      await repo.shutdown().catch(() => {});
+    }
+  });
+
+  it("unloads the previous branch's plugins when the default branch moves to another document", async () => {
+    const repo = new AutomergeRepo({ peerId: "branch-moves" as PeerId });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const entry = docUrls(repo);
+      const first = docUrls(repo);
+      const second = docUrls(repo);
+      const settings = repo.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [entry.url],
+      });
+      let latest = first.atHeads;
+      const { tracker, watching } = stubTracker(async () => latest);
+      const events: string[] = [];
+      const watcher = new ModuleWatcher(
+        repo,
+        { system: settings.url },
+        (url) => events.push(`load ${url}`),
+        (name, url) => events.push(`unload ${name} ${url}`),
+        async () => ({ plugins: [] }),
+        tracker
+      );
+      await watcher.doneLoading;
+
+      latest = second.atHeads;
+      watching.get(first.url)!();
+      await pause(400);
+
+      expect(events).toEqual([
+        `load ${first.atHeads}`,
+        `unload ${entry.url} ${first.atHeads}`,
+        `load ${second.atHeads}`,
+      ]);
+      watcher.dispose();
+    } finally {
+      warn.mockRestore();
+      await repo.shutdown().catch(() => {});
+    }
+  });
+});
