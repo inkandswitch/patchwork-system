@@ -120,6 +120,13 @@ export class OverlayRepo implements RepoLike {
     AutomergeUrl,
     Map<() => void, () => void>
   >();
+  // Why the latest attempt to resolve a presented url ended without a handle,
+  // in the same `failed`/`unavailable` shape the realm-local repo reports. It
+  // outlives the eviction of the rejected resolution (so `peek()` can still
+  // report it) and is cleared when a retry starts or succeeds.
+  readonly #failures = new Map<AutomergeUrl, QueryState<unknown>>();
+  // Rejects each still-pending resolution; settles it on dispose.
+  readonly #rejecters = new Map<AutomergeUrl, (err: Error) => void>();
   #disposed = false;
 
   constructor(baseRepo: Repo, element: HTMLElement) {
@@ -162,6 +169,8 @@ export class OverlayRepo implements RepoLike {
     wrappedPromise.catch(() => {});
 
     const peek = (): QueryState<T> => {
+      const failure = self.#failures.get(presented);
+      if (failure) return failure as QueryState<T>;
       const inner = self.#inner.get(presented) as
         | DocumentProgress<T>
         | undefined;
@@ -183,37 +192,30 @@ export class OverlayRepo implements RepoLike {
       documentId,
       peek,
       subscribe: (callback) => {
-        // `closed` covers the unsubscribe-before-resolve race: without it the
-        // resolution settling later would still subscribe to the inner
-        // progress (leaking that subscription forever) and invoke the
-        // consumer's callback after it unsubscribed.
+        // Like the realm-local repo, only transitions are reported; the
+        // current state is read with `peek()`.
         let closed = false;
-        let last: string | null = null;
-        let registered = false;
+        const signature = (state: QueryState<T>) =>
+          state.state === "failed"
+            ? `failed:${state.error.message}`
+            : state.state;
+        let last = signature(peek());
         const dispatch = () => {
           if (closed) return;
           const state = peek();
-          const sig =
-            state.state === "failed"
-              ? `failed:${state.error.message}`
-              : state.state;
+          const sig = signature(state);
           if (sig === last) return;
           last = sig;
           callback(state);
         };
-        // Registered via the dispatcher registry (not on the inner directly)
-        // so a backing swap can re-wire this subscriber onto the new inner.
-        wrappedPromise.then(() => {
-          if (closed) return;
-          self.#registerProgressDispatcher(presented, dispatch);
-          registered = true;
-          dispatch();
-        }, dispatch);
+        // Registered at once, not when the resolution settles, so a failure or
+        // a later retry's success reaches subscribers that were waiting. The
+        // registry also lets a backing swap re-wire this subscriber onto the
+        // new inner.
+        if (!self.#disposed) self.#registerProgressDispatcher(presented, dispatch);
         return () => {
           closed = true;
-          if (registered) {
-            self.#unregisterProgressDispatcher(presented, dispatch);
-          }
+          self.#unregisterProgressDispatcher(presented, dispatch);
         };
       },
       whenReady: ({ signal } = {}) => {
@@ -265,6 +267,17 @@ export class OverlayRepo implements RepoLike {
   dispose(): void {
     if (this.#disposed) return;
     this.#disposed = true;
+    // Settled first so a tool awaiting `find` during unmount rejects instead
+    // of hanging; the progress subscribers hear about it before they go.
+    const disposedError = new Error("OverlayRepo disposed");
+    for (const [presented, reject] of this.#rejecters) {
+      this.#failures.set(presented, failedState(disposedError));
+      reject(disposedError);
+    }
+    this.#rejecters.clear();
+    for (const presented of [...this.#progressDispatchers.keys()]) {
+      this.#notifyProgress(presented);
+    }
     for (const unsubscribe of this.#subscriptions.values()) unsubscribe();
     this.#subscriptions.clear();
     for (const dispatchers of this.#progressDispatchers.values()) {
@@ -289,10 +302,15 @@ export class OverlayRepo implements RepoLike {
     if (existing) return existing as Promise<OverlayHandle<T>>;
     // Don't open subscriptions nobody will tear down; the element is gone.
     if (this.#disposed) {
-      return Promise.reject(
-        new Error("OverlayRepo is disposed; cannot resolve " + presented)
+      const error = new Error(
+        "OverlayRepo is disposed; cannot resolve " + presented
       );
+      this.#failures.set(presented, failedState(error));
+      return Promise.reject(error);
     }
+    // A retry starts from `loading`, as the repo's query does when a source
+    // goes pending again.
+    if (this.#failures.delete(presented)) this.#notifyProgress(presented);
 
     // The descriptor channel remaps whole documents, so ask about the root
     // and reapply the original path/heads onto whatever clone comes back.
@@ -300,7 +318,12 @@ export class OverlayRepo implements RepoLike {
     const { documentId, segments, heads } = parseAutomergeUrl(presented);
     const rootUrl = stringifyAutomergeUrl({ documentId });
 
+    // Set by a failed `apply`: the inner's own `unavailable`/`failed` state
+    // when it has one, since that is what the repo would have reported.
+    let failure: QueryState<unknown> | undefined;
+
     const promise = new Promise<OverlayHandle<T>>((resolve, reject) => {
+      this.#rejecters.set(presented, reject);
       // Only the latest received descriptor may commit its backing.
       let seq = 0;
 
@@ -338,13 +361,17 @@ export class OverlayRepo implements RepoLike {
               () => {}
             )
           : undefined;
-        let inner: DocumentProgress<T>;
+        let inner: DocumentProgress<T> | undefined;
         let backing: DocHandle<T>;
         try {
           inner = repo.findWithProgress<T>(backingUrl);
           backing = await repo.find<T>(backingUrl);
         } catch (err) {
           lease?.();
+          failure = failureOf(
+            inner as DocumentProgress<unknown> | undefined,
+            err
+          );
           throw err;
         }
         if (mySeq !== seq || this.#disposed) {
@@ -353,6 +380,7 @@ export class OverlayRepo implements RepoLike {
         }
 
         this.#backings.set(presented, { repo, url: backingUrl });
+        this.#failures.delete(presented);
         this.#setInner(presented, inner as DocumentProgress<unknown>);
         // The previous lease goes only once nothing forwards to its
         // document, so the remapper deleting it can't reach consumers.
@@ -371,7 +399,9 @@ export class OverlayRepo implements RepoLike {
             backing,
           });
           this.#wrapped.set(presented, created as OverlayHandle<unknown>);
+          this.#rejecters.delete(presented);
           resolve(created);
+          this.#notifyProgress(presented);
         }
         previous?.();
       };
@@ -406,10 +436,13 @@ export class OverlayRepo implements RepoLike {
     // The failed attempt's descriptor subscription goes too: the retry opens
     // its own and overwrites the map entry, which would leave this one live
     // and out of reach of `dispose`.
-    promise.catch(() => {
+    promise.catch((error: Error) => {
       if (this.#resolving.get(presented) === promise) {
         this.#resolving.delete(presented);
+        this.#rejecters.delete(presented);
         this.#inner.delete(presented);
+        this.#failures.set(presented, failure ?? failedState(error));
+        this.#notifyProgress(presented);
         this.#subscriptions.get(presented)?.();
         this.#subscriptions.delete(presented);
       }
@@ -445,6 +478,13 @@ export class OverlayRepo implements RepoLike {
     if (dispatchers.size === 0) this.#progressDispatchers.delete(presented);
   }
 
+  // Tell every progress subscriber of a presented url to re-read its state.
+  #notifyProgress(presented: AutomergeUrl): void {
+    const dispatchers = this.#progressDispatchers.get(presented);
+    if (!dispatchers) return;
+    for (const dispatch of [...dispatchers.keys()]) dispatch();
+  }
+
   // Replace the inner progress and move every registered subscriber onto it.
   #setInner(presented: AutomergeUrl, inner: DocumentProgress<unknown>): void {
     this.#inner.set(presented, inner);
@@ -456,6 +496,22 @@ export class OverlayRepo implements RepoLike {
       dispatch();
     }
   }
+}
+
+function failedState(error: Error): QueryState<never> {
+  return { state: "failed", error, sources: {} };
+}
+
+// What a failed resolution looks like to a progress subscriber: the repo's
+// `unavailable` when the document just isn't there yet, otherwise `failed`.
+function failureOf(
+  inner: DocumentProgress<unknown> | undefined,
+  error: unknown
+): QueryState<never> {
+  const err = error instanceof Error ? error : new Error(String(error));
+  const state = inner?.peek();
+  if (state?.state === "unavailable") return state;
+  return { state: "failed", error: err, sources: state?.sources ?? {} };
 }
 
 // Canonicalize any id to its *presented* url, preserving the path suffix
