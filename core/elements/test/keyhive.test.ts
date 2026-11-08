@@ -508,3 +508,178 @@ describe("keyhive access (legacy mode)", () => {
     expect(view.querySelector(".pw-error")).toBeNull();
   });
 });
+
+// A failed load of a keyhive doc used to leave the view blank until reload.
+describe("failed loads (component mode)", () => {
+  type Progress = {
+    peek: () => { state: string; error?: Error };
+    subscribe: (cb: (s: { state: string; error?: Error }) => void) => () => void;
+  };
+
+  let current: { state: string; error?: Error };
+  let listeners: Set<(s: { state: string; error?: Error }) => void>;
+  let findWithProgress: ReturnType<typeof vi.fn>;
+  let resyncSubduction: ReturnType<typeof vi.fn>;
+  let tag: string;
+  let component: ReturnType<typeof registerComponent>;
+
+  function setState(next: { state: string; error?: Error }) {
+    current = next;
+    for (const listener of [...listeners]) listener(next);
+  }
+
+  function setup(initial: { state: string; error?: Error }) {
+    current = initial;
+    listeners = new Set();
+    findWithProgress = vi.fn(
+      (): Progress => ({
+        peek: () => current,
+        subscribe: (cb) => {
+          listeners.add(cb);
+          return () => listeners.delete(cb);
+        },
+      })
+    );
+    resyncSubduction = vi.fn();
+    const repo = { findWithProgress, resyncSubduction } as unknown as Repo;
+    tag = `kh-failed-${++seq}`;
+    registerPatchworkViewElement({
+      name: tag,
+      repo,
+      hive: fakeHive(true).hive,
+    });
+    component = registerComponent();
+  }
+
+  function mount() {
+    const view = document.createElement(tag);
+    view.setAttribute("component", component.id);
+    view.setAttribute("url", keyhiveUrl());
+    document.body.append(view);
+    return view;
+  }
+
+  beforeEach(() => {
+    document.body.replaceChildren();
+    vi.useFakeTimers();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    document.body.replaceChildren();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("retries a failure seen on the first look, and mounts once it loads", async () => {
+    setup({ state: "failed", error: new Error("nope") });
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(component.mounts).toBe(0);
+    expect(findWithProgress).toHaveBeenCalledTimes(1);
+
+    current = { state: "ready" };
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(findWithProgress).toHaveBeenCalledTimes(2);
+    expect(component.mounts).toBe(1);
+
+    // a mounted view stops retrying
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(findWithProgress).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries a failure that arrives while waiting", async () => {
+    setup({ state: "loading" });
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    setState({ state: "failed", error: new Error("later") });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(component.mounts).toBe(0);
+
+    current = { state: "ready" };
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(component.mounts).toBe(1);
+  });
+
+  it("backs off, resyncs before each retry, and starts over after a success", async () => {
+    setup({ state: "failed", error: new Error("nope") });
+    const view = mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(resyncSubduction).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(findWithProgress).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(findWithProgress).toHaveBeenCalledTimes(2);
+
+    // the second failure waits twice as long
+    await vi.advanceTimersByTimeAsync(1999);
+    expect(findWithProgress).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(findWithProgress).toHaveBeenCalledTimes(3);
+    expect(resyncSubduction).toHaveBeenCalledTimes(3);
+
+    // a success resets the count: the next failure waits the first delay again
+    current = { state: "ready" };
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(component.mounts).toBe(1);
+    current = { state: "failed", error: new Error("again") };
+    view.setAttribute("url", keyhiveUrl());
+    await vi.advanceTimersByTimeAsync(0);
+    findWithProgress.mockClear();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(findWithProgress).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries an unavailable doc on the timer until it is ready", async () => {
+    setup({ state: "unavailable" });
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(component.mounts).toBe(0);
+    expect(resyncSubduction).toHaveBeenCalledTimes(1);
+
+    // the resync puts the query back to loading, which doesn't cancel the timer
+    setState({ state: "loading" });
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(findWithProgress).toHaveBeenCalledTimes(2);
+    expect(component.mounts).toBe(0);
+
+    // the round finds nothing, so the restarted view hears unavailable again
+    // and waits the longer delay
+    setState({ state: "unavailable" });
+    current = { state: "ready" };
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(component.mounts).toBe(1);
+  });
+
+  it("restarts once, and drops the timer, when ready beats it", async () => {
+    setup({ state: "loading" });
+    mount();
+    await vi.advanceTimersByTimeAsync(0);
+    setState({ state: "unavailable" });
+    expect(vi.getTimerCount()).toBe(1);
+
+    current = { state: "ready" };
+    setState({ state: "ready" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(component.mounts).toBe(1);
+    expect(findWithProgress).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(findWithProgress).toHaveBeenCalledTimes(2);
+    expect(component.mounts).toBe(1);
+  });
+
+  it("stops retrying when the view is removed", async () => {
+    setup({ state: "failed", error: new Error("nope") });
+    const view = mount();
+    await vi.advanceTimersByTimeAsync(0);
+    view.remove();
+    await vi.advanceTimersByTimeAsync(0);
+    findWithProgress.mockClear();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(findWithProgress).not.toHaveBeenCalled();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});
