@@ -142,9 +142,9 @@ export type OfflineSwitch = {
  * ones are held going nowhere until it's back online. (Refusing them instead
  * would close the page's socket without an `error` event, which
  * automerge-repo's connect never recovers from — a shape no real network
- * produces.) A worker's socket is out
- * of reach of both, so the worker modes are told to drop theirs and fail
- * reconnects while offline. Install before opening any tab.
+ * produces.) A worker's socket is out of reach of both, so the worker modes
+ * are told to drop theirs and fail reconnects while offline. Install before
+ * opening any tab.
  */
 export async function offlineSwitch(
   context: BrowserContext

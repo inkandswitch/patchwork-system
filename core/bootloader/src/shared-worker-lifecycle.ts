@@ -164,8 +164,6 @@ export function sharedWorkerHandle(
       else get().port.postMessage(message, transfer ?? []);
     },
     restart(reason) {
-      // Only an instance that exists can be restarted; spawning one to kill
-      // it would be pointless.
       current?.port.postMessage({ type: "restart", reason });
     },
     revive() {

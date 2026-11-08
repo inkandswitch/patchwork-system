@@ -1,28 +1,4 @@
-// Reading documents made public with Patchwork's public pair.
-//
-// Keyhive 0.6 has no public "world" user. A repo is made public to an app by
-// granting two principals whose secrets the app ships in the clear:
-//
-//   reader   read. Its archive holds its prekey secrets but no signing key,
-//            so anyone can decrypt as it and nobody can sign as it.
-//   fetcher  relay. Its signing seed is shipped, so anyone can connect to
-//            the sync server as it and pull the ciphertext.
-//
-// The user's own Repo connects as the user, who isn't a member of these docs,
-// so the server never sends it their blobs. Instead a second Repo connects as
-// the fetcher: it syncs keyhive as the fetcher, hands every keyhive event it
-// gets to a keyhive opened as the reader, and decrypts blobs with that. It sits
-// beside the user's Repo as a peer on a MessageChannel, and the user's Repo
-// asks it for exactly the docs the user's keyhive doesn't know, so a find for
-// a public doc is answered over automerge sync like any other.
-//
-// The reader Repo never writes: anything the user changes in a public doc
-// stays local. Pushwork makes repos public this way (`--public-access read`).
-//
-// Ingesting the server's keyhive is seconds of wasm, so in a browser the
-// reader runs once per origin, in its own SharedWorker (public-reader.ts), and
-// every tab's Repo and the resolver's connect to it over a port. Its keyhive
-// state is kept in IndexedDB, so only the first start replays it all.
+// See docs/bootloader.html#public-pair.
 
 import {
   stringifyAutomergeUrl,
@@ -239,12 +215,10 @@ export async function startPublicReader({
     flush ??= setTimeout(() => void relay(), RELAY_AFTER_MS);
   });
 
-  // The fetcher's saved state can be ahead of the reader's: the last run may
-  // have gone after the fetcher persisted an update but before the reader's
-  // debounced save, or the reader's archive may be missing or rejected. Only
-  // what's new is relayed, so the reader catches up from the fetcher's whole
-  // history here, before any client is served. Updates from here on are queued
-  // behind this snapshot if they arrive while it is being ingested.
+  // The fetcher's saved state can be ahead of the reader's (the last run went
+  // before the reader's save, or its archive was missing or rejected), and
+  // only what's new is relayed, so the reader catches up on the fetcher's
+  // whole history here, before anyone is served.
   try {
     const caughtUp = await queue(async () => {
       const before = (await reader.stats()).totalOps;

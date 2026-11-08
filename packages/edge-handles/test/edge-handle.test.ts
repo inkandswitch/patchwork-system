@@ -28,8 +28,6 @@ describe("EdgeHandle", () => {
     repo = new Repo();
   });
 
-  // ─── doc shape ─────────────────────────────────────────────────────────
-
   describe("doc shape", () => {
     it("creates an edge-handle doc with empty source/target by default", async () => {
       const edge = await createEdgeHandle(repo);
@@ -69,8 +67,6 @@ describe("EdgeHandle", () => {
       expect(Object.keys(edge.source)).toEqual(["ref", "url"]);
     });
   });
-
-  // ─── value side ────────────────────────────────────────────────────────
 
   describe("value side", () => {
     it("starts undefined and fires onValueChange on initial subscribe", async () => {
@@ -126,13 +122,10 @@ describe("EdgeHandle", () => {
       const edge = await createEdgeHandle<string>(repo, {
         target: { sink: sink.sub("html") },
       });
-      // Ref.change(undefined) will write undefined into the doc; whether
-      // that's "useful" is a transform/datatype concern. The cell itself
-      // just hands the value to each target unconditionally.
+      // The sink may store undefined or throw; either way the cell must hand
+      // it over.
       const before = sink.doc()?.html;
       edge.change(undefined as unknown as string);
-      // The Ref attempt may throw, in which case the error is recorded —
-      // either way, the cell isn't silently skipping the call.
       const after = sink.doc()?.html;
       const erroredAtSink = "sink" in edge.targetErrors;
       expect(before === after || erroredAtSink || after === undefined).toBe(
@@ -140,8 +133,6 @@ describe("EdgeHandle", () => {
       );
     });
   });
-
-  // ─── persistence ───────────────────────────────────────────────────────
 
   describe("persistence", () => {
     it("does not persist by default (no persist flag or value in doc)", async () => {
@@ -191,9 +182,8 @@ describe("EdgeHandle", () => {
       edge.change(99);
       expect(edge.persisted()).toBe(false);
       edge.setPersisted(true);
-      // Reads synchronously:
       expect(edge.persisted()).toBe(true);
-      // Doc write also lands synchronously since DocHandle.change is sync:
+      // DocHandle.change is synchronous too.
       expect(edge.doc.doc().value).toBe(99);
     });
 
@@ -207,9 +197,7 @@ describe("EdgeHandle", () => {
       expect(edge.persisted()).toBe(false);
       expect("value" in edge.doc.doc()).toBe(false);
       expect("persist" in edge.doc.doc()).toBe(false);
-      // In-memory value preserved:
       expect(edge.value()).toBe(20);
-      // Subsequent writes don't persist:
       edge.change(99);
       expect("value" in edge.doc.doc()).toBe(false);
     });
@@ -230,24 +218,18 @@ describe("EdgeHandle", () => {
       });
       const seen: ({ n: number } | undefined)[] = [];
       edge.onValueChange((v) => seen.push(v));
-      // Initial fire is one notification with the current value.
       expect(seen.length).toBe(1);
 
-      // Trigger an unrelated doc mutation. The refresh re-reads doc.value
-      // (a new automerge view, reference-unequal) — but it's structurally
-      // equal, so we must NOT notify again.
+      // A fresh automerge view of an equal value mustn't notify again.
       edge.doc.change((d) => {
         d.source["dummy"] = "automerge:dummy" as AutomergeUrl;
       });
       await wait(20);
 
-      // We expect at most one MORE notification (none, ideally). Most
-      // importantly, no notification storm.
+      // None, ideally; above all, no storm.
       expect(seen.length).toBeLessThanOrEqual(2);
     });
   });
-
-  // ─── wire side ─────────────────────────────────────────────────────────
 
   describe("wire side", () => {
     it("onSourceChange does NOT fire on subscribe", async () => {
@@ -300,13 +282,11 @@ describe("EdgeHandle", () => {
 
       edge.setSource("s", src.sub("body"));
       await waitFor(() => calls.length >= 2);
-      // Membership change → (undefined, undefined)
       expect(calls[calls.length - 1]).toEqual([undefined, undefined]);
 
       src.change((d) => {
         d.body = "world";
       });
-      // Per-source emit → (value, key)
       await waitFor(() => calls.length >= 3);
       expect(calls[calls.length - 1]).toEqual(["world", "s"]);
     });
@@ -367,8 +347,6 @@ describe("EdgeHandle", () => {
     });
   });
 
-  // ─── url validation ────────────────────────────────────────────────────
-
   describe("url validation at edit time", () => {
     it("setSource throws on a malformed URL", async () => {
       const edge = await createEdgeHandle(repo);
@@ -391,14 +369,11 @@ describe("EdgeHandle", () => {
     });
   });
 
-  // ─── error reporting ───────────────────────────────────────────────────
-
   describe("endpoint resolution errors", () => {
     it("captures an error for an unresolvable source URL written directly", async () => {
       const edge = await createEdgeHandle(repo);
-      // Bypass `setSource`'s validation to simulate a stale URL that
-      // arrived via sync; the doc may still have a syntactically valid but
-      // unresolvable URL (e.g., for a doc that hasn't synced yet).
+      // Past setSource's check, like a url that came by sync for a doc that
+      // hasn't yet.
       const ghost =
         "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2K" as AutomergeUrl;
       edge.doc.change((d) => {
@@ -434,33 +409,25 @@ describe("EdgeHandle", () => {
       });
       await waitFor(() => "ghost" in edge.sourceErrors);
 
-      // Mutate an unrelated part of the doc; the refresh path should NOT
-      // skip resolution despite source-map being unchanged, because we have
-      // outstanding errors.
+      // An unrelated change: with errors outstanding, the refresh mustn't skip.
       const before = edge.sourceErrors.ghost;
       edge.doc.change((d) => {
         d.target["t"] = "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2L" as AutomergeUrl;
       });
       await wait(30);
-      // We can't easily prove "retry happened" without injecting a retryable
-      // failure source, but at least the error stays an Error and the
-      // sourceErrors entry persists (it doesn't disappear due to the cache
-      // skipping the refresh).
+      // A retry can't be seen from here without a failure that recovers; this
+      // only checks the error outlives the refresh.
       expect(edge.sourceErrors.ghost).toBeInstanceOf(Error);
-      // The error reference may or may not be the same — the point is the
-      // refresh runs.
       void before;
     });
 
     it("fan-out errors clear on the next successful write", async () => {
-      // Use an EdgeHandle as the target so we can fail and recover it
-      // synchronously without mocking Refs.
+      // An edge as the target, so it can fail and recover without mocks.
       const target = await createEdgeHandle<string>(repo);
       const edge = await createEdgeHandle<string>(repo, {
         target: { t: target },
       });
 
-      // Sabotage `target.change` to throw on the next write, then succeed.
       let shouldThrow = true;
       const original = target.change.bind(target);
       (target as { change: typeof target.change }).change = (v: unknown) => {
@@ -479,8 +446,6 @@ describe("EdgeHandle", () => {
     });
   });
 
-  // ─── plain doc urls ────────────────────────────────────────────────────
-
   describe("plain doc urls resolve to root refs", () => {
     it("resolves a plain automerge:docId url to a whole-doc endpoint", async () => {
       const src = repo.create<SrcDoc>({ body: "hello" });
@@ -490,14 +455,11 @@ describe("EdgeHandle", () => {
       });
       const resolved = edge.source.s;
       expect(resolved).toBeDefined();
-      // A plain doc url resolves to a whole-doc endpoint (no sub-path).
       expect(resolved!.url).toBe(src.url);
       const v = resolved!.value() as SrcDoc;
       expect(v.body).toBe("hello");
     });
   });
-
-  // ─── findEdgeHandle ────────────────────────────────────────────────────
 
   describe("findEdgeHandle", () => {
     it("returns the cached instance for the same url", async () => {
@@ -524,8 +486,6 @@ describe("EdgeHandle", () => {
       await expect(findEdgeHandle(repo, other.url)).rejects.toThrow();
     });
   });
-
-  // ─── destroy ───────────────────────────────────────────────────────────
 
   describe("destroy", () => {
     it("destroy evicts the cache; reopen produces a fresh instance", async () => {
@@ -560,8 +520,6 @@ describe("EdgeHandle", () => {
     });
   });
 
-  // ─── cycle safety ──────────────────────────────────────────────────────
-
   describe("cycle safety", () => {
     it("write re-entrancy guard tolerates cycles without blowing the stack", async () => {
       const a = await createEdgeHandle<string>(repo);
@@ -579,8 +537,6 @@ describe("EdgeHandle", () => {
       expect(() => a.setSource("b", b)).not.toThrow();
     });
   });
-
-  // ─── end-to-end with an inline transform ───────────────────────────────
 
   describe("end-to-end with an inline transform", () => {
     it("multi-source sum routes through to a target on any input change", async () => {
@@ -619,8 +575,6 @@ describe("EdgeHandle", () => {
     });
   });
 
-  // ─── edge → edge chaining ──────────────────────────────────────────────
-
   describe("edge → edge chaining", () => {
     it("an EdgeHandle in `target` relays writes through to its own targets", async () => {
       const sink = repo.create<SinkDoc>({ html: "" });
@@ -658,11 +612,9 @@ describe("EdgeHandle", () => {
       expect(ref).toBeDefined();
       // Compile-time conformance:
       expectTypeOf(ref).toMatchTypeOf<Handle<unknown>>();
-      // Runtime shape:
       expect(typeof ref.url).toBe("string");
       expect(typeof ref.value).toBe("function");
       expect(typeof ref.onChange).toBe("function");
-      // And subscribing works:
       const seen: unknown[] = [];
       const unsub = ref.onChange((v) => seen.push(v));
       src.change((d) => {
@@ -674,8 +626,6 @@ describe("EdgeHandle", () => {
     });
   });
 });
-
-// ─── helpers ─────────────────────────────────────────────────────────────
 
 async function waitFor(predicate: () => boolean | undefined, timeoutMs = 500) {
   const start = Date.now();

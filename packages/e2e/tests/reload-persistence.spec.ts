@@ -7,12 +7,8 @@ import {
 } from "./helpers.js";
 
 /**
- * IndexedDB persistence across reloads.
- *
- * A doc created in a tab is synced to the SW, which persists it to
- * IndexedDB (Subduction storage). After a reload — even though the tab's
- * in-memory Repo is gone — the doc must still be retrievable, proving the
- * persistence layer works without any network.
+ * A doc made in a tab is kept in IndexedDB, so after a reload empties the
+ * tab's Repo it's still there, with no network involved.
  */
 test("a doc survives a page reload via IndexedDB", async ({
   context,
@@ -24,10 +20,9 @@ test("a doc survives a page reload via IndexedDB", async ({
 
   const url = await createDoc(page, { note: "persist-me" });
 
-  // Confirm the SW has the doc before reloading. Asking `page` proves
-  // nothing (its own Repo answers from memory), so ask a tab that never
-  // had it: otherwise the reload can tear down the relay mid-sync and the
-  // doc is lost before it reaches the SW.
+  // Confirm the doc has left `page`'s memory before reloading. Asking `page`
+  // proves nothing (its own Repo answers from memory), so ask a tab that never
+  // had it: otherwise the reload can come mid-save and the doc is lost.
   const probe = await context.newPage();
   await probe.goto("/");
   await waitForRepoReady(probe);

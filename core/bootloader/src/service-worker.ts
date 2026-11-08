@@ -68,8 +68,6 @@ self.addEventListener("unhandledrejection", (event) => {
   );
 });
 
-// ── Lifecycle ──────────────────────────────────────────────────────────
-
 self.addEventListener("install", (event) => {
   lifecycle(
     "info",
@@ -379,8 +377,6 @@ async function broadcastHandoff(
     pendingHandoffs.delete(id);
   });
 }
-
-// ── Caching ────────────────────────────────────────────────────────────
 
 /** A page is cached under its own url plus /index.html and / on this origin. */
 function pageCacheKeys(request: Request | string): Request[] {

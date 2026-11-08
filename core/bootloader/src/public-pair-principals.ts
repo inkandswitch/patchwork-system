@@ -2,7 +2,7 @@
 // src/keyhive/keyline/public-principals.json, "patchwork"). A keyline repo made
 // public "to patchwork" grants read to the reader and relay to the fetcher, so
 // these have to be exactly the ones pushwork grants: a new pair would read
-// nothing already published. See public-pair.ts.
+// nothing already published. See docs/bootloader.html#public-pair.
 
 /** One app's public principals, each with the secret that lets anyone act as it. */
 export type PublicPrincipals = {

@@ -1,11 +1,7 @@
-// Main-thread client for the module-loader worker (see module-loader-worker.ts).
-//
-// `importAutomergePackageViaWorker` is wired into the ModuleWatcher in place of
-// its default (direct, main-thread) package import. It asks the worker to
-// import the package entry point and report which plugins it exports, then
-// returns the same `{ plugins }` shape the watcher already feeds to
-// `registerPlugins` — except each plugin's `load()` re-imports the package
-// (pinned to the same heads) on this thread and runs the real plugin loader.
+// The main thread's side of module-loader-worker.ts. The ModuleWatcher uses
+// `importAutomergePackageViaWorker` in place of importing a package here: the
+// worker says which plugins it exports, and each plugin's `load()` imports
+// the package on this thread (at the same heads) and runs the real loader.
 
 import { importPluginFromFolderDocUrl } from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";

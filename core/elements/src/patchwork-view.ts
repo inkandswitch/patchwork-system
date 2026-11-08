@@ -25,10 +25,9 @@ import debug from "debug";
 const log = debug("patchwork:elements:patchwork-view");
 
 /**
- * A component receives the element it is mounted on plus the realm-local base
- * `Repo`. The base repo (not the overlay shim) is handed to components so
- * providers that answer `repo:handle-descriptor` can clone/create against the
- * real repo without re-entering their own remapping.
+ * A component gets the element it's mounted on and the realm's base `Repo`,
+ * not the overlay, so providers answering `repo:handle-descriptor` can clone
+ * and create in the real repo without going through their own remapping.
  */
 export type ComponentRender = (
   element: PatchworkViewElement,
@@ -71,24 +70,18 @@ const ATTRS = {
 export type RegisterPatchworkViewElementParams = {
   name?: string;
   /**
-   * The realm-local base `Repo`. Each `<patchwork-view>` wraps it in an
-   * {@link OverlayRepo} (exposed as `element.repo`) so legacy-mode tools
-   * resolve their primary handle through the remapping shim. Components also
-   * get `element.repo`, but the base repo is passed to the component render fn
-   * directly so `repo:handle-descriptor`-answering providers don't re-enter.
+   * The realm's base `Repo`. Each `<patchwork-view>` wraps it in an
+   * {@link OverlayRepo}, as `element.repo`, so tools find their primary doc
+   * through the remappers above. Components get the base repo itself (see
+   * {@link ComponentRender}).
    */
   repo: Repo;
-  /**
-   * Threaded into the `LegacyImpl` so legacy-mode tools get access to a
-   * Keyhive instance via `element.hive`.
-   */
+  /** Handed to legacy-mode tools as `element.hive`. */
   hive?: AutomergeRepoKeyhive;
 };
 
-// Shared shape for every `<patchwork-view>` instance, regardless of whether it
-// renders a component or a legacy tool. `repo` (the per-element overlay shim)
-// is always provisioned before the mounted code runs - see `#ensureOverlayRepo`,
-// called on both the legacy and component render paths - so it is non-optional.
+// Every `<patchwork-view>`, component or legacy tool. `repo` (the element's
+// overlay) is always set before the mounted code runs, so it isn't optional.
 export type PatchworkViewElementBase = HTMLElement & {
   repo: Repo;
   docUrl?: AutomergeUrl | null;
@@ -135,15 +128,12 @@ export function registerPatchworkViewElement(
       // Receiving a keyhive op can recover this.
       #unableNoAccess = false;
 
-      // Realm-local remapping shim, created lazily on first render. Exposed as
-      // `element.repo` so tools resolve their primary handle through it.
+      // Made on first render; `element.repo` is this.
       #overlayRepo: OverlayRepo | null = null;
       repo!: Repo;
 
-      // In legacy mode, the legacy view logic is hosted on *this*
-      // element (not a child) so events dispatched on `<patchwork-view>`
-      // and listeners attached by the mounted tool land on the same
-      // DOM node — matching the pre-split behavior.
+      // Legacy mode runs on this element, not a child, so events dispatched on
+      // `<patchwork-view>` and the tool's listeners meet on one node.
       #legacyImpl: LegacyImpl | null = null;
 
       get component() {
@@ -215,9 +205,9 @@ export function registerPatchworkViewElement(
       }
 
       disconnectedCallback() {
-        // The overlay repo survives attribute-driven re-syncs; only a real
-        // disconnect releases it. Detach now so a re-connect gets a fresh
-        // shim, then dispose once the teardown has run.
+        // The overlay outlives attribute re-syncs; only a real disconnect lets
+        // it go. Detached now so a reconnect gets a fresh one, disposed once
+        // the teardown has run.
         const overlayRepo = this.#overlayRepo;
         this.#overlayRepo = null;
         void this.#disposeAfterTeardown(overlayRepo);
@@ -243,9 +233,6 @@ export function registerPatchworkViewElement(
         if (attrName === ATTRS.component) this.#component = val;
         else if (attrName === ATTRS.url) this.#url = val as AutomergeUrl | null;
 
-        // Already in legacy mode and still want it: forward doc-url /
-        // tool-id changes into the impl so it tears down and re-inits
-        // without us having to rebuild the element.
         if (this.#legacyImpl && !this.#wantsComponent()) {
           if (attrName === ATTRS.docUrl || attrName === ATTRS.toolId) {
             this.#legacyImpl.attributeChangedCallback(attrName, old, val);
@@ -253,22 +240,17 @@ export function registerPatchworkViewElement(
           return;
         }
 
-        // Already mounting a component and still want one: only react
-        // to the component-driving attributes; doc-url / tool-id are
-        // ignored while a `component` attribute is set.
+        // While a `component` attribute is set, doc-url and tool-id are
+        // ignored.
         if (this.#state !== State.none && this.#wantsComponent()) {
           if (attrName !== ATTRS.component && attrName !== ATTRS.url) return;
         }
 
-        // Either transitioning between forms or initial setup after an
-        // attribute landed on an idle element. Tear down whatever is
-        // there (no-op when idle) and re-sync against the attributes.
         void this.#restart();
       }
 
-      // Tear down and mount again against the current attributes. Every
-      // remount goes through `#sync`, which won't mount a detached element, so
-      // a view removed while the teardown was in flight stays down.
+      // Every remount goes through `#sync`, which won't mount a detached
+      // element, so a view removed while the teardown was in flight stays down.
       async #restart() {
         await this.#teardown.run();
         this.#sync();
@@ -287,9 +269,8 @@ export function registerPatchworkViewElement(
 
       #sync() {
         // Attributes change on detached elements too (a framework sets them
-        // before inserting), and async remounts can land after a disconnect.
-        // Only a connected element mounts; `connectedCallback` syncs on
-        // (re)insertion, and nothing would ever tear down a detached mount.
+        // before inserting), and async remounts can land after a disconnect;
+        // nothing would ever tear down a detached mount.
         if (!this.isConnected) return;
 
         if (this.#wantsLegacy()) {
@@ -298,8 +279,8 @@ export function registerPatchworkViewElement(
         }
 
         if (this.#wantsComponent()) {
-          // Legacy mode leaves `display` alone so sites' CSS rules on
-          // `patchwork-view` (e.g. `display: block`) apply.
+          // Only here: legacy mode leaves `display` to sites' CSS rules on
+          // `patchwork-view` (`display: block`, say).
           if (!this.style.display) this.style.display = "contents";
           this.#initComponent();
         }
@@ -314,8 +295,7 @@ export function registerPatchworkViewElement(
         this.#legacyImpl.connectedCallback();
       }
 
-      // The overlay shim is per-element (it dispatches `repo:handle-descriptor`
-      // from `this`) but wraps the single shared base repo.
+      // One per element (it asks from `this`), over the one shared base repo.
       #ensureOverlayRepo(): Repo {
         if (!this.#overlayRepo) {
           this.#overlayRepo = new OverlayRepo(params.repo, this);
@@ -450,8 +430,6 @@ export function registerPatchworkViewElement(
         this.#overlayRepo = null;
       }
 
-      // Access to the mounted doc changed: mount once it's granted, unmount
-      // once it's revoked.
       #onAccessChange(hasAccess: boolean) {
         const granted =
           hasAccess && this.#state === State.unable && this.#unableNoAccess;
@@ -469,11 +447,10 @@ export function registerPatchworkViewElement(
         });
       }
 
-      // A render queued before a teardown began must not land while it runs:
-      // its cleanup would join a set the teardown has already drained, and
-      // nothing would ever call it. Teardown bumps the epoch first thing, but
-      // registry listeners can queue a fresh render (with the new epoch)
-      // until their own cleanup runs, hence the in-flight check too.
+      // A render mustn't land during a teardown: its cleanup would join a set
+      // the teardown already drained, and never run. The epoch bumps first
+      // thing, but registry listeners can queue a render (with the new epoch)
+      // until their own cleanup runs, hence the in-flight check.
       #mayRender(epoch: number) {
         return epoch === this.#initEpoch && !this.#teardown.pending;
       }
@@ -512,9 +489,8 @@ export function registerPatchworkViewElement(
         }
 
         try {
-          // Expose `element.repo` (the overlay shim) so components that want
-          // ancestor-remapped resolution can opt in; the render fn still
-          // receives the base repo (see ComponentRender docs).
+          // `element.repo` for components that want the remappers above; the
+          // render fn still gets the base repo.
           this.#ensureOverlayRepo();
           const cleanup = this.#loaded.module(this, params.repo);
           if (typeof cleanup === "function") {

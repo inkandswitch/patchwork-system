@@ -6,18 +6,11 @@ import type {
 } from "@automerge/automerge-repo/slim";
 
 /**
- * Minimal repo surface that both the real `Repo` and overlay repos (e.g.
- * `WorkspaceRepo`) can satisfy. Consumers requesting `patchwork:repo`
- * should type the result as `RepoLike` rather than `Repo` so the overlay
- * path stays honest.
- *
- * Tracks the methods that hook libraries reach for:
- * - `find` (used by `solid-automerge`)
- * - `findWithProgress` (used by `automerge-repo-react-hooks`'
- *   `useDocHandle` for the synchronous fast-path peek)
- * - `create` / `create2` (the latter awaits the deterministic id factory,
- *   used by `createDocOfDatatype2`)
- * - `handles` (synchronous documentId → handle index)
+ * The part of a `Repo` an `OverlayRepo` has too. Type a repo that may be an
+ * overlay as `RepoLike`, not `Repo`. It's what hook libraries reach for:
+ * `find` (solid-automerge), `findWithProgress` (automerge-repo-react-hooks'
+ * `useDocHandle`, for its synchronous peek), `create` and `create2` (which
+ * waits for the id factory; `createDocOfDatatype2` uses it), and `handles`.
  */
 export type RepoLike = {
   find<T>(id: AnyDocumentId): Promise<DocHandle<T>>;

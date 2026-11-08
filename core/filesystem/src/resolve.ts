@@ -13,14 +13,10 @@ export type Resolved = {
   content: string | Uint8Array;
   type: string;
   /**
-   * True when every document on the path — the root and each link followed — was addressed with
-   * heads, so this URL names these exact bytes and always will.
-   *
-   * Heads on a URL pin the document they name and nothing further. Links inside a folder or a
-   * directory are ordinarily bare, so `/{root#heads}/a/b` reads a pinned root and then follows
-   * whatever those links point at *now*: the content can move while the URL does not. A caller
-   * that treats such a URL as content-addressed — an HTTP cache, say — will serve what it stored
-   * the first time, forever.
+   * Every document on the path, the root and each link followed, was addressed with heads, so
+   * this URL names these exact bytes for good. Links are usually bare, so `/{root#heads}/a/b`
+   * follows them as they are *now*: the content can move while the URL doesn't, and a cache keyed
+   * on the URL would serve its first answer forever.
    */
   pinned: boolean;
 };

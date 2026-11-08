@@ -5,17 +5,13 @@ import { waitForRepoReady } from "./helpers.js";
 /**
  * The extensibility loop: install a package at runtime, then use the tool it
  * ships. The one-file counter module (fixtures/counter.js) is written into a
- * directory doc — package.json plus index.js as automerge content, served
- * same-origin by the service worker under /automerge%3A<id>/… — and its
- * automerge: URL is installed through the Packages UI: pasted into the
- * filter, confirmed in the modal. That pushes it onto the account's
- * module-settings doc, the ModuleWatcher hot-loads it, its datatype appears
- * in the create-new menu, and its tool renders the doc.
+ * directory doc, which the service worker serves same-origin under
+ * /automerge%3A<id>/…, and its url is pasted into the Packages filter and
+ * confirmed in the modal. That puts it on the account's module-settings doc,
+ * the ModuleWatcher hot-loads it, its datatype appears in the create-new
+ * menu, and its tool renders the doc.
  *
- * Needs the full UI (network for the base module bundle), so like the
- * cross-profile suite it runs on chromium only: Playwright's Firefox fails
- * cors fetches from inside service workers, and its WebKit is too flaky on
- * SW timing and emulation to hold a green suite.
+ * It needs the full UI, so like cross-profile-sync it runs on chromium only.
  */
 
 const COUNTER_SOURCE = readFileSync(
@@ -112,9 +108,8 @@ test("a counter tool installed from an automerge url can be created and clicked"
   await increment.click();
   await expect(count).toHaveText("3");
 
-  // Reloading immediately can outrun the tab -> worker sync and lose the
-  // last increments, so first prove the worker holds count=3 by reading the
-  // doc from a second tab.
+  // Reloading straight away can come before the last increments are saved,
+  // so first prove count=3 has left this tab by reading the doc from another.
   const docUrl = await page.evaluate(
     () => new URLSearchParams(location.hash.slice(1)).get("doc")!,
   );

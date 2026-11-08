@@ -19,25 +19,18 @@ import { buildInfo } from "./build-info-plugin.js";
 import type { PatchworkSiteOptions } from "../site-kit/options.js";
 
 /**
- * The patchwork vite plugin. A site's vite.config.ts can shrink down to
- * `plugins: [patchwork({...})]` plus a single source icon file — this plugin
- * owns the wasm plugin, the importmap/service-worker emission, the generated
- * index.html/manifest.webmanifest/Netlify _headers+_redirects, the site's
- * icon set, and vite's server/preview/worker/build/define config.
+ * The patchwork vite plugin: a site's vite.config.ts can be
+ * `plugins: [patchwork({...})]` and one icon file. It brings the wasm plugin,
+ * the import map and service worker, the generated index.html, manifest,
+ * Netlify _headers and _redirects, the icons, and vite's
+ * server/preview/worker/build/define config. Pass `false` for `html`,
+ * `manifest`, `netlify`, `icons`, `server`, `preview` or `worker` to leave
+ * that piece out.
  *
- * Each generated piece is switched off individually by passing `false` for
- * its option (`html: false`, `manifest: false`, `netlify: false`,
- * `icons: false`, `server: false`, `preview: false`, `worker: false`).
+ * Don't also set `server`, `preview`, `worker`, `build` or `define` in the
+ * site's own `defineConfig`: vite doesn't promise which one wins.
  *
- * `server`/`preview`/`worker`/`build`/`define` are owned by this plugin's
- * `config()` hook and driven entirely by these options — don't also set them
- * in the site's own `defineConfig({...})` alongside `patchwork()`, since
- * Vite's plugin-config merge order doesn't guarantee which one wins.
- *
- * Most of what this plugin does — icon rendering, and building the
- * index.html/manifest.webmanifest/Netlify _headers content — has no vite
- * dependency at all; see `../site-kit/index.ts` for those pieces reused by
- * a different bundler adapter.
+ * The parts with no vite in them are in `../site-kit/index.ts`.
  */
 export default function patchwork(options?: PatchworkVitePluginOptions) {
   return [

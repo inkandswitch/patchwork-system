@@ -1,15 +1,4 @@
-// The Repo that resolves `automerge:` URLs for the service worker when no tab
-// can, in a SharedWorker: one instance serves every tab and lives as long as
-// any tab does. The worker's script is automerge-protocol-handler-worker.ts,
-// which takes the lock and then imports this.
-//
-// It is a node like any tab's: the same IndexedDB, its own sync-server socket,
-// and the storage channel to the tabs. Resolving requests is its whole job.
-// When the service worker can't get a tab to resolve a request that looks like
-// a URL encoded URL, it broadcasts a HandoffRequestMessage on HANDOFF_CHANNEL;
-// we resolve the automerge URL, write the response into the service worker's
-// cache (keyed by a Request reconstructed to match the one it's holding), and
-// reply on the same channel.
+// See docs/bootloader.html#resolver.
 import { initializeWasm } from "@automerge/automerge/slim";
 // eslint-disable-next-line
 // @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
@@ -81,8 +70,6 @@ function initWasm(): Promise<void> {
   }
   return wasmPromise;
 }
-
-// ── The repo ───────────────────────────────────────────────────────────
 
 let repoPromise: Promise<Repo> | null = null;
 
@@ -178,10 +165,9 @@ async function buildKeyhiveRepo(): Promise<{
   return { repo, hive };
 }
 
-// ── The public reader ──────────────────────────────────────────────────
-// It runs in its own SharedWorker (public-reader.ts). A SharedWorker can't
-// start another, so a tab hands us a port to it, and another whenever either
-// of us is replaced: the latest one wins.
+// The public reader runs in its own SharedWorker. A SharedWorker can't start
+// another, so a tab hands this one a port to it, and another whenever either
+// is replaced: the latest one wins.
 
 let keyhiveNode: { repo: Repo; hive: AutomergeRepoKeyhive } | undefined;
 let readerPort: MessagePort | undefined;
@@ -205,9 +191,8 @@ function linkPublicReader() {
   });
 }
 
-// ── Answering handoffs ─────────────────────────────────────────────────
-// What nothing else could answer: the service worker asks the tab that made a
-// request first, then any other tab, and broadcasts it here only when none of
+// Handoffs are what nothing else could answer: the service worker asks the
+// tab that made a request first, then any other tab, and broadcasts it here only when none of
 // them can (one still booting, one from an older build, a site that brings
 // its own Repo).
 
@@ -234,16 +219,8 @@ function handoffFinished() {
   recycleTimer = setTimeout(recycleIfHolding, RECYCLE_IDLE_MS);
 }
 
-// ── Recycling ──────────────────────────────────────────────────────────
-// A wasm memory grows and never shrinks: a module holds the most it ever
-// needed at once until its global goes. Resolving packages at boot takes the
-// resolver Repo's automerge to 90–130MB, and letting the documents go gives
-// none of it back. So once handoffs stop for RECYCLE_IDLE_MS, an instance whose
-// wasm has grown by more than RECYCLE_AT_MB restarts itself, as it does for a
-// new build: tabs spawn the replacement, the service worker re-sends any
-// handoff still unanswered, and what was resolved is in its cache, so the
-// replacement doesn't load it all again. Only the resolver goes with it: every
-// tab is its own node, with its own socket.
+// wasm memory never shrinks, so a grown instance restarts once handoffs stop.
+// See docs/bootloader.html#recycling.
 
 const RECYCLE_AT_MB = 64;
 const RECYCLE_IDLE_MS = 15_000;

@@ -7,13 +7,8 @@ import {
 } from "./helpers.js";
 
 /**
- * Same-browser multi-tab sync through the Service Worker relay.
- *
- * Two tabs on the same origin share one Service Worker. A doc created in
- * tab A is held by the SW (single source of truth) and relayed to tab B
- * via the MessageChannel adapter. No external Subduction server is
- * involved — this is the most reproducible slice of the "sync instantly"
- * path and the heart of the B1 harness.
+ * Sync between two tabs of one browser, with no sync server involved: the
+ * most reproducible slice of "sync instantly".
  */
 test("a doc created in tab A is found in tab B via the SW relay", async ({
   context,

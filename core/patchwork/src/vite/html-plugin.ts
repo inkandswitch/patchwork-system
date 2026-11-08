@@ -6,12 +6,9 @@ import { buildHtml } from "../site-kit/html.js";
 const GENERATED_PATH = "index.html";
 
 /**
- * Vite's html build step (`vite:build-html`) is a normal `transform` hook
- * filtered on `id: /\.html$/` — it doesn't require a real file, just an id
- * that *looks like* one under root (that's all `path.relative(root, id)`,
- * which decides the output filename, cares about). So this is a plain
- * virtual module: `resolveId` claims the one id we care about, `load`
- * returns the generated string — nothing ever touches disk.
+ * Vite's html build step is a `transform` filtered on `/\.html$/`, and only
+ * needs an id that looks like a file under root (its path names the output).
+ * So the page is a virtual module, and nothing touches disk.
  */
 export function html(
   options: PatchworkVitePluginOptions = {}

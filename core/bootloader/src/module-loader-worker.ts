@@ -1,15 +1,11 @@
-// Dedicated module worker for plugin-descriptor discovery.
+// Reads which plugins a package provides, off the main thread. Registering
+// them needs only their descriptions (id, type, name, icon…), so this imports
+// the package's entry point, keeps what can be cloned from its `plugins`, and
+// posts that back. The main thread imports the package (at the same heads)
+// only when a plugin is loaded: see `importPluginFromFolderDocUrl`.
 //
-// A module-settings doc lists Automerge folder-doc packages. To register the
-// plugins a package provides we only need their *descriptions* (id, type,
-// name, icon…), not their implementations. This worker imports a package's
-// entry point off the main thread purely to read its exported `plugins` array,
-// strips the non-cloneable `load()` / `import` machinery, and posts the plain
-// descriptors back. The main thread re-imports the package (at the same heads)
-// only when a plugin is actually loaded — see `importPluginFromFolderDocUrl`.
-//
-// Created with type:"module"; its dynamic `import()` of `/<automergeUrl>/…`
-// entry points is served by the service worker that controls this worker.
+// Its `import()` of `/<automergeUrl>/…` is served by the service worker that
+// controls this worker.
 
 import { importPackageFromFolderDocUrl } from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
@@ -20,10 +16,8 @@ type DiscoverRequest = {
   url: AutomergeUrl;
 };
 
-// Keep only the structured-cloneable description fields. `load` is a closure
-// and `module` is the (possibly already-loaded) implementation — neither can
-// cross the worker boundary. `import` is droppable too: the main thread
-// rebuilds loading by re-importing the package and calling the live plugin.
+// `load` is a closure and `module` the implementation, so neither can cross to
+// the main thread; `import` isn't needed there, as it loads by re-importing.
 function toDescriptor(plugin: any): Record<string, unknown> {
   if (!plugin || typeof plugin !== "object") return {};
   const { load, import: _import, module, ...description } = plugin;

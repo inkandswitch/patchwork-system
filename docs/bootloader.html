@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bootloader workers</title>
+    <style>
+      :root {
+        --bg: #fbfaf7;
+        --fg: #1f1d1a;
+        --muted: #6b665e;
+        --rule: #e4e0d8;
+        --code-bg: #f0ede6;
+        --accent: #7a4b2a;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #171614;
+          --fg: #e9e5dd;
+          --muted: #9a948a;
+          --rule: #2f2c28;
+          --code-bg: #24221f;
+          --accent: #d9a273;
+        }
+      }
+      html {
+        background: var(--bg);
+        color: var(--fg);
+      }
+      body {
+        margin: 0 auto;
+        max-width: 68ch;
+        padding: 3rem 16px 5rem;
+        font:
+          17px/1.6 ui-serif,
+          Georgia,
+          serif;
+      }
+      h1,
+      h2 {
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        line-height: 1.25;
+      }
+      h1 {
+        font-size: 1.6rem;
+        margin: 0 0 0.25rem;
+      }
+      h2 {
+        font-size: 1.15rem;
+        margin: 2.75rem 0 0.5rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--rule);
+      }
+      h2 a {
+        color: inherit;
+        text-decoration: none;
+      }
+      h2 a:hover {
+        color: var(--accent);
+      }
+      p.files {
+        margin: -0.25rem 0 1rem;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      code {
+        font:
+          0.88em/1 ui-monospace,
+          Menlo,
+          monospace;
+        background: var(--code-bg);
+        padding: 0.1em 0.3em;
+        border-radius: 3px;
+      }
+      dl {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.35rem 1rem;
+        margin: 1rem 0;
+      }
+      dt {
+        font-weight: 600;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+      }
+      dd {
+        margin: 0;
+      }
+      nav ul {
+        padding-left: 1.1rem;
+        color: var(--muted);
+      }
+      nav a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Bootloader workers</h1>
+    <p>
+      Why the bootloader's SharedWorkers are shaped the way they are. These were
+      file headers in <code>core/bootloader/src</code>.
+    </p>
+
+    <nav>
+      <ul>
+        <li><a href="#public-pair">Reading public documents</a></li>
+        <li><a href="#public-reader">The public reader's worker</a></li>
+        <li><a href="#resolver">The resolver</a></li>
+        <li><a href="#recycling">Recycling the resolver</a></li>
+        <li><a href="#worker-early">Starting a worker early</a></li>
+      </ul>
+    </nav>
+
+    <h2 id="public-pair">
+      <a href="#public-pair">Reading public documents</a>
+    </h2>
+    <p class="files">
+      <code>public-pair.ts</code>, <code>public-pair-principals.ts</code>
+    </p>
+
+    <p>
+      Keyhive 0.6 has no public "world" user. A repo is made public to an app by
+      granting two principals whose secrets the app ships in the clear:
+    </p>
+    <dl>
+      <dt>reader</dt>
+      <dd>
+        Read. Its archive holds its prekey secrets but no signing key, so anyone
+        can decrypt as it and nobody can sign as it.
+      </dd>
+      <dt>fetcher</dt>
+      <dd>
+        Relay. Its signing seed is shipped, so anyone can connect to the sync
+        server as it and pull the ciphertext.
+      </dd>
+    </dl>
+
+    <p>
+      The user's own Repo connects as the user, who isn't a member of these
+      docs, so the server never sends it their blobs. Instead a second Repo
+      connects as the fetcher. It syncs keyhive as the fetcher, hands every
+      keyhive event it gets to a keyhive opened as the reader, and decrypts
+      blobs with that. It sits beside the user's Repo as a peer on a
+      MessageChannel, and the user's Repo asks it for exactly the docs the
+      user's keyhive doesn't know, so a find for a public doc is answered over
+      automerge sync like any other.
+    </p>
+
+    <p>
+      The reader Repo never writes: anything the user changes in a public doc
+      stays local. Pushwork makes repos public this way (<code
+        >--public-access read</code
+      >), and the pair in <code>public-pair-principals.ts</code> has to be
+      exactly the one pushwork grants, or it reads nothing already published.
+    </p>
+
+    <h2 id="public-reader">
+      <a href="#public-reader">The public reader's worker</a>
+    </h2>
+    <p class="files">
+      <code>public-reader.ts</code>, <code>public-reader-worker.ts</code>
+    </p>
+
+    <p>
+      The public reader runs in a SharedWorker: one per origin, for as long as
+      any tab is open. It reads public documents for every tab's Repo and for
+      the resolver's.
+    </p>
+
+    <p>
+      It's there rather than beside each Repo because catching up on the
+      server's keyhive is seconds of wasm. On a tab's thread that held up the
+      page, long enough that the service worker gave up asking the tab for its
+      own requests, and the resolver, which then got them, had to catch up all
+      over again. Its keyhive state is kept in IndexedDB, so only the first
+      start replays it all.
+    </p>
+
+    <p>
+      Each Repo is a client: a tab sends <code>{type: "client", port}</code> on
+      the worker's port, for itself or for the resolver. A SharedWorker can't
+      start another, so the tabs introduce the two. The reader answers on
+      <code>port</code>, as <code>PublicReader.serve</code> does.
+    </p>
+
+    <h2 id="resolver"><a href="#resolver">The resolver</a></h2>
+    <p class="files">
+      <code>automerge-protocol-handler.ts</code>,
+      <code>automerge-protocol-handler-worker.ts</code>
+    </p>
+
+    <p>
+      The resolver is the Repo that resolves <code>automerge:</code> URLs for
+      the service worker when no tab can. It lives in a SharedWorker, so one
+      instance serves every tab and lives as long as any tab does. The worker's
+      script takes the lock, then imports the rest.
+    </p>
+
+    <p>
+      It's a node like any tab's: the same IndexedDB, its own sync-server
+      socket, and the storage channel to the tabs. Resolving requests is its
+      whole job. When the service worker can't get a tab to resolve a request
+      that looks like an encoded URL, it broadcasts a
+      <code>HandoffRequestMessage</code> on <code>HANDOFF_CHANNEL</code>. The
+      resolver resolves the automerge URL, writes the response into the service
+      worker's cache (keyed by a Request rebuilt to match the one the service
+      worker is holding), and replies on the same channel.
+    </p>
+
+    <h2 id="recycling"><a href="#recycling">Recycling the resolver</a></h2>
+    <p class="files">
+      <code>automerge-protocol-handler.ts</code>: <code>RECYCLE_AT_MB</code>,
+      <code>RECYCLE_IDLE_MS</code>
+    </p>
+
+    <p>
+      A wasm memory grows and never shrinks: a module holds the most it ever
+      needed at once until its global goes. Resolving packages at boot takes the
+      resolver's automerge to 90–130MB, and letting the documents go gives none
+      of it back.
+    </p>
+
+    <p>
+      So once handoffs stop for <code>RECYCLE_IDLE_MS</code>, an instance whose
+      wasm has grown by more than <code>RECYCLE_AT_MB</code> restarts itself, as
+      it does for a new build. Tabs spawn the replacement, the service worker
+      re-sends any handoff still unanswered, and what was resolved is in its
+      cache, so the replacement doesn't load it all again. Only the resolver
+      goes: every tab is its own node, with its own socket.
+    </p>
+
+    <h2 id="worker-early">
+      <a href="#worker-early">Starting a worker early</a>
+    </h2>
+    <p class="files"><code>worker-early.ts</code></p>
+
+    <p>
+      A module's body only runs once its whole static import graph has been
+      fetched and evaluated, which for the automerge worker is most of a
+      megabyte and takes from half a second to several. Until it asks for its
+      lock, nothing can tell it exists: the service worker, finding no lock,
+      asks the tabs to start a worker.
+    </p>
+
+    <p>
+      So a worker's script is a small module that asks for its lock and buffers
+      the tabs' <code>connect</code> events, which go nowhere without a
+      listener, then imports the rest; <code>startWorkerControl</code> picks it
+      up from there. The two halves hand over through the global rather than a
+      module, so it survives them being bundled separately (the dev server
+      bundles each worker on its own).
+    </p>
+  </body>
+</html>

@@ -24,22 +24,13 @@ function isAsyncFunction(fn: unknown) {
   );
 }
 
-/**
- * Registry for managing plugins of a specific type
- * D = Description type that extends PluginDescription
- * I = Implementation type that will be loaded and combined with the description
- */
 export class PluginRegistry<D extends PluginDescription, I = any> {
   #plugins = new Map<string, Plugin<D, I>>();
   #loadPromises = new Map<string, Promise<LoadedPlugin<D, I> | undefined>>();
   #events = new EventEmitter<PluginRegistryEvents<D, I>>();
   #loading = new Set<string>();
 
-  /**
-   * Register an plugin with this registry
-   */
   register(plugin: LoadablePlugin<D, I>, importUrl: string) {
-    // If an import URL was provided, attach it to the plugin
     if (importUrl && !plugin.importUrl) {
       plugin.importUrl = importUrl;
     }
@@ -65,20 +56,15 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
     this.#events.emit("changed");
   }
 
-  /**
-   * Get an plugin by ID, returning either its description or loaded state
-   */
   get(id: string): Plugin<D, I> | undefined {
     return this.#plugins.get(id);
   }
 
-  /** Get all plugins, both descriptions and loaded */
   all(): Plugin<D, I>[] {
     const entries = Array.from(this.#plugins.values());
     return entries as Plugin<D, I>[];
   }
 
-  /** Return a filtered list of plugins */
   filter(filter: (plugin: Plugin<D, I>) => boolean): Plugin<D, I>[] {
     return this.all().filter(filter);
   }
@@ -110,10 +96,6 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
     });
   }
 
-  /**
-   * Load an plugin by ID, loading it on demand if necessary (asynchronous)
-   * If shouldWait is true, will wait for the plugin to be registered if it isn't already
-   */
   async load(id: string): Promise<LoadedPlugin<D, I> | undefined> {
     log(`load called for: ${id}`, {});
 
@@ -216,13 +198,7 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
     return loadPromise;
   }
 
-  /**
-   * Load all provided plugins
-   * @returns A promise resolving to an array of loaded plugins
-   */
   async loadAll(plugins: Plugin<D, I>[]): Promise<LoadedPlugin<D, I>[]> {
-    // Get all plugins or filter them if a filter function is provided
-    // Create an array of promises for loading each plugin
     const loadPromises = plugins.map((plugin) => this.load(plugin.id));
 
     const results = await Promise.allSettled(loadPromises);
@@ -252,16 +228,10 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
     return true;
   }
 
-  /**
-   * Check if a plugin is currently being loaded
-   */
   isLoading(id: string): boolean {
     return this.#loading.has(id);
   }
 
-  /**
-   * Check if an plugin ID is registered
-   */
   has(id: string): boolean {
     return this.#plugins.has(id);
   }

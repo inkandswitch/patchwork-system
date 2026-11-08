@@ -9,9 +9,8 @@ import * as Providers from "@inkandswitch/patchwork-providers";
 import type { JSONValue, Selector } from "@inkandswitch/patchwork-providers";
 
 /**
- * Generic reactive request hook. Resolves the first value a provider emits for
- * `selector` (via the one-shot `request` helper) and returns it once it
- * arrives (and whenever `element`/`selector` change). `T` is the response type.
+ * The first value a provider sends for `selector`, asked again whenever
+ * `element` or `selector` changes.
  */
 export function useRequest<T extends JSONValue>(
   element: HTMLElement,
@@ -36,11 +35,9 @@ export function useRequest<T extends JSONValue>(
 }
 
 /**
- * Generic reactive subscription hook. Opens a `patchwork:subscribe` for
- * `selector` and returns the latest value the provider pushes, re-rendering on
- * each emission. The subscription is torn down on unmount (or when
- * `element`/`selector` change). Pass `initialValue` to seed the state before
- * the first emission.
+ * The latest value a provider sends for `selector`, re-rendering on each one.
+ * Unsubscribes on unmount, or when `element` or `selector` changes.
+ * `initialValue` seeds it before the first.
  */
 export function useSubscribe<T extends JSONValue>(
   element: HTMLElement,
@@ -72,11 +69,9 @@ export function useSubscribe<T extends JSONValue>(
 }
 
 /**
- * Handle-specialized subscription hook. Use when the answering provider emits
- * an `AutomergeUrl`. The handle is recovered locally from the global repo, so
- * it stays fully live. Returns `[doc, handle]` matching the shape of
- * `useDocument`; both read `undefined` until the first url arrives. `T` is the
- * doc shape inside the handle.
+ * A subscription whose provider sends an `AutomergeUrl`, found in the repo
+ * from React's `RepoContext`, so it's fully live. Returns `[doc, handle]`,
+ * like `useDocument`; both are `undefined` until the first url.
  */
 export function useSubscribeDoc<T>(
   element: HTMLElement,

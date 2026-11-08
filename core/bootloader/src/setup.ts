@@ -71,7 +71,6 @@ function installServiceWorkerLogForwarding(): void {
   navigator.serviceWorker.startMessages();
 }
 
-// ── New builds ─────────────────────────────────────────────────────────
 // After a deploy, open tabs are on the old build. The default response is to
 // say so and offer a reload, rather than reload out from under someone
 // mid-edit; an old page sharing IndexedDB with the new automerge worker is
@@ -102,7 +101,6 @@ function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
   }).finally(() => port1.close());
 }
 
-// ── The automerge worker ───────────────────────────────────────────────
 // A SharedWorker holding a Repo that resolves `automerge:` URLs for the
 // service worker when no tab can. Tabs don't sync through it — each tab is its
 // own node — but only a page can start a SharedWorker, so each tab keeps it
@@ -155,7 +153,6 @@ export function restartAutomergeProtocolHandlerWorker(
   automergeProtocolHandlerWorker.restart(reason);
 }
 
-// ── The public reader ──────────────────────────────────────────────────
 // A SharedWorker reading documents made public to Patchwork (see
 // public-reader.ts), which this tab's Repo and the resolver's connect to.
 // Only a page can start a SharedWorker, and one can't start another, so the
@@ -283,8 +280,6 @@ export function connectPublicReader(
     })();
   });
 }
-
-// ── Boot ───────────────────────────────────────────────────────────────
 
 function waitForActive(reg: ServiceWorkerRegistration): Promise<ServiceWorker> {
   if (reg.active) return Promise.resolve(reg.active);

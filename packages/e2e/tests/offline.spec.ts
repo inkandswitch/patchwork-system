@@ -8,13 +8,10 @@ import {
 } from "./helpers.js";
 
 /**
- * Local-first behaviour with the network cut.
- *
- * Everything in B1 scope routes through the SW relay + IndexedDB, so none
- * of it should need the network once the page has booted. These tests boot
- * online, then flip the context offline and assert that doc creation,
- * multi-tab sync, and (via the SW page/asset cache) even a full reload
- * keep working.
+ * Local-first with the network cut. Once the page has booted, nothing here
+ * should need the network: these boot online, go offline, and check that
+ * making docs, sync between tabs and (from the service worker's cache) even
+ * a full reload keep working.
  */
 
 test("docs sync between tabs while offline", async ({ context }) => {

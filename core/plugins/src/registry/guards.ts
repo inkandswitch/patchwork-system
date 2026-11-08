@@ -5,9 +5,6 @@ import type {
   Plugin,
 } from "./types";
 
-/**
- * Type predicate to ensure a value is of type D
- */
 export function isPluginDescription<D extends PluginDescription>(
   value: unknown
 ): value is D {
@@ -20,10 +17,6 @@ export function isPluginDescription<D extends PluginDescription>(
   );
 }
 
-/**
- * Check if a value is a loadable plugin
- */
-
 export function isLoadablePlugin<
   D extends PluginDescription = PluginDescription,
   I = any,
@@ -35,10 +28,6 @@ export function isLoadablePlugin<
   );
 }
 
-/**
- * Check if a value is a loaded plugin
- */
-
 export function isLoadedPlugin<
   D extends PluginDescription = PluginDescription,
   I = any,
@@ -46,10 +35,6 @@ export function isLoadedPlugin<
   return isPluginDescription<D>(value) && "module" in value;
 }
 
-/**
- * Check if a value is a plugin, optionally of a specific type
- * If a type is provided, it will be used to infer the correct plugin type
- */
 export function isPlugin<
   T extends PluginDescription = PluginDescription,
   I = any,

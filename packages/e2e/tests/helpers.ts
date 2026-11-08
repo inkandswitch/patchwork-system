@@ -1,15 +1,12 @@
 import type { Page } from "@playwright/test";
 
 /**
- * Shared helpers for driving the Patchwork boot path from a Playwright page.
+ * Helpers for driving Patchwork's boot from a Playwright page.
  *
- * Boot signals (see core/bootloader/src/site.ts):
- *  - `window.repo` is set in `installDevConsoleGlobals`, immediately after
- *    the SW repo channel connects — BEFORE account resolution. It is the
- *    server-independent "sync infrastructure is live" signal we rely on in
- *    B1 (account resolution needs the prod Subduction server).
- *  - `window.patchwork` is set only after the full boot incl. account
- *    resolution, so it is NOT reliable offline. B1 deliberately avoids it.
+ * They wait on `window.repo`, which core/patchwork's `setup` sets as soon as
+ * its Repo exists, before the account resolves: that needs the sync server,
+ * and most of the suite runs without one. `window.patchwork` is set by the
+ * site, after the full boot, so it isn't reliable offline.
  */
 
 declare global {

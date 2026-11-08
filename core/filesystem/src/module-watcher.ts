@@ -26,12 +26,9 @@ export type ModuleSettingsDoc = {
     "@patchwork": { type: "patchwork:module-settings" };
   };
 
-// A single pushwork sync commits a burst of changes to a package's doc — the
-// file-list write, an optional pin refresh, and a trailing `lastSyncAt` stamp —
-// and the file docs it references sync as independent documents. Coalesce that
-// burst into one reload by waiting for the package doc's heads to stop moving
-// for this long before re-importing, so we pin to the settled, consistent
-// snapshot instead of an intermediate one.
+// One pushwork sync is a burst of changes to a package's doc (the file list,
+// maybe a pin refresh, a `lastSyncAt` stamp), so wait for its heads to stop
+// moving this long, then import the settled snapshot once.
 const RELOAD_DEBOUNCE_MS = 250;
 
 // A package can fail to import just because the automerge worker serving its
@@ -51,9 +48,8 @@ function getDocumentBaseUrl(): string {
 }
 
 /**
- * Relative (non-Automerge) module URLs are
- * resolved against the manifest's own URL so they can be dynamically imported
- * regardless of where the watcher code itself lives.
+ * Relative module URLs in a manifest resolve against the manifest's own URL,
+ * so they import from wherever this code lives.
  */
 async function fetchModuleManifest(url: string): Promise<ModuleSettingsDoc> {
   const manifestUrl = new URL(url, getDocumentBaseUrl()).href;
@@ -110,12 +106,11 @@ function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
 // handler
 
 /**
- * Settings sources are passed in keyed by name (e.g. `{ system, user }`). Each
- * source URL may be either an Automerge module-settings doc (`automerge:...`,
- * live-reloaded) or an HTTP(S) URL to a static JSON manifest of the same shape
- * (fetched once at construction). The two kinds can be freely mixed, and the
- * module URLs *within* either kind can themselves point at Automerge package
- * docs (folders or directories) or plain HTTP(S) bundles.
+ * Settings sources come keyed by name (`{ system, user }`). Each is an
+ * Automerge module-settings doc (`automerge:…`, live) or an HTTP(S) URL to a
+ * static JSON manifest of the same shape (fetched once), mixed freely. The
+ * module URLs in either can be Automerge package docs or plain HTTP(S)
+ * bundles.
  */
 export class ModuleWatcher {
   repo: Repo;
@@ -124,10 +119,9 @@ export class ModuleWatcher {
   staticManifests: Record<string, ModuleSettingsDoc> = {};
   doneLoading: Promise<void>;
   #watchedModules = new Map<string, WatchedModule>();
-  // Per-module announce generation. Bumped whenever a newer announce starts
-  // for the same module, so a stale retry chain (still backing off from a
-  // failed import of an older pinned version) abandons itself instead of
-  // eventually succeeding and rolling the registry back to that old version.
+  // Bumped when a newer announce starts for a module, so a retry chain still
+  // backing off from an older version gives up instead of rolling the
+  // registry back to it.
   #announceGenerations = new Map<string, number>();
   #retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #lastAnnounced = new Map<string, string>();
@@ -145,18 +139,15 @@ export class ModuleWatcher {
   /** Told every module the settings list, whenever it (re)reads them. */
   onModules?: (modules: string[]) => void;
   /**
-   * How an Automerge package doc (pinned to heads) is turned into the
-   * `{ plugins }` shape `onLoad` consumes. Defaults to importing the package
-   * entry point directly on this thread. The browser bootloader overrides this
-   * to run the entry point in a worker for descriptor discovery and rebuild the
-   * `{ plugins }` shape with main-thread `load()` functions.
+   * Turns an Automerge package doc, pinned to heads, into the `{ plugins }`
+   * `onLoad` takes. By default it imports the entry point on this thread; the
+   * browser bootloader runs it in a worker instead.
    */
   importAutomergePackage: (urlAtHeads: string) => Promise<any>;
   /**
-   * How a package's doc is looked up at its latest heads and watched for new
-   * ones. Defaults to holding each package doc in `repo`. The browser setup
-   * passes {@link trackPackagesViaServiceWorker}, looking them up through the
-   * service worker and watching them in `repo`.
+   * How a package doc is looked up at its latest heads and watched for new
+   * ones. Defaults to holding each one in `repo`; the browser passes
+   * {@link trackPackagesViaServiceWorker}.
    */
   tracker: PackageTracker;
 
@@ -307,9 +298,8 @@ export class ModuleWatcher {
 
   /**
    * Import a module and hand it to `onLoad`, retrying on failure. `moduleKey`
-   * is the module's stable identity (the unversioned settings-doc entry);
-   * `importUrl` may be a version pinned to heads (the reload path). Starting
-   * an announce supersedes any announce still in flight for the same key.
+   * is its stable identity (the settings-doc entry); `importUrl` may be pinned
+   * to heads. A newer announce for the same key supersedes this one.
    */
   private async announce(
     importUrl: string,
@@ -323,9 +313,7 @@ export class ModuleWatcher {
 
     const attempt = async (attemptIndex: number): Promise<void> => {
       const mod = await this.importPackageSafe(importUrl);
-      // A newer announce for this module started while we were importing or
-      // backing off — its result wins; announcing ours now could regress the
-      // registry to an older version.
+      // A newer announce started meanwhile; its result wins.
       if (!current()) return;
       if (mod) {
         this.#lastAnnounced.set(moduleKey, versionKey);
@@ -358,11 +346,9 @@ export class ModuleWatcher {
 
   /**
    * Reload `importName` when the package doc at `packageUrl` moves to new
-   * heads, debounced to the trailing edge so a push's burst of changes
-   * collapses into one import at the settled heads. This reacts to real
-   * content changes (including offline `save`, which never stamps
-   * lastSyncAt) rather than a magic timestamp field. With `baseline`, the
-   * current version is looked up now, and only what comes after it reloads.
+   * heads, on the trailing edge so a push's burst is one import. Heads, not
+   * `lastSyncAt`: an offline `save` never stamps that. With `baseline`, the
+   * current version is looked up now and only what comes after it reloads.
    */
   private watchPackage(
     importName: string,
@@ -431,11 +417,10 @@ export class ModuleWatcher {
   }
 
   /**
-   * One lookup and import at a time per package. A package doc that's still
-   * syncing in says it changed with every batch, and a lookup or an import
-   * can take as long as the automerge worker's resolve timeout; starting one
-   * per change piles them up on a worker that's slow because it's busy.
-   * Changes that land meanwhile collapse into one more once this one's back.
+   * One lookup and import at a time per package: a doc still syncing in says
+   * it changed with every batch, and a lookup or import can take as long as
+   * the worker's resolve timeout, so one per change piles up on a busy worker.
+   * Changes meanwhile collapse into one more.
    */
   private async reloadIfMoved(importName: string, entry: WatchedModule) {
     if (entry.looking) {

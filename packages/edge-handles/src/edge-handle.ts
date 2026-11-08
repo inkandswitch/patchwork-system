@@ -1,36 +1,25 @@
 /**
- * EdgeHandle — a doc-backed reactive cell with named source and target
- * connections to refs and other edges.
+ * EdgeHandle: a doc-backed reactive cell with named source and target
+ * connections to documents, sub-trees and other edges.
  *
- * The doc holds the persistent wiring (`source` and `target` maps, plus
- * optional value persistence). The class is its live in-memory presence.
- * EdgeHandles run no computation of their own; transforms are external
- * code that subscribes to `onSourceChange` / `onMembersChange` (or the
- * `onAnyChange` sugar) and writes back through `change`.
+ * The doc holds the wiring (`source` and `target`, and the value when it's
+ * persisted); the class is its live presence. An edge computes nothing
+ * itself: a transform subscribes to `onSourceChange` and `onMembersChange`
+ * (or `onAnyChange`) and writes back through `change`.
  *
- *     edge.value()                                  // current value
- *     edge.change(fnOrValue)                        // Ref.change shape
- *     edge.onValueChange(cb)                        // self value moved
- *
- *     edge.source / edge.target                     // resolved handles
- *     edge.sourceErrors / edge.targetErrors         // per-name errors
- *     edge.onSourceChange(cb)                       // (value, key): per-source
- *                                                   //   emit, both args defined
- *     edge.onMembersChange(cb)                      // (): membership changed
- *                                                   //   (fires on subscribe)
- *     edge.onAnyChange(cb)                          // sugar: either of the
- *                                                   //   above, (value?, key?)
- *
+ *     edge.value() / edge.change(fnOrValue) / edge.onValueChange(cb)
+ *     edge.source / edge.target                 // resolved handles
+ *     edge.sourceErrors / edge.targetErrors     // errors by name
+ *     edge.onSourceChange(cb)                   // (value, key), per source
+ *     edge.onMembersChange(cb)                  // (), wiring changed; fires on subscribe
+ *     edge.onAnyChange(cb)                      // either, (value?, key?)
  *     edge.setSource(name, handle) / removeSource(name)
  *     edge.setTarget(name, handle) / removeTarget(name)
+ *     edge.persisted() / edge.setPersisted(on)
+ *     edge.destroy()
  *
- *     edge.persisted() / edge.setPersisted(on)      // doc-mirror policy
- *
- *     edge.destroy()                                // explicit teardown
- *
- * Live state is GC-able: unreferenced edges are collected, doc/endpoint
- * listeners get torn down by a FinalizationRegistry, the cache holds only
- * WeakRefs. You don't have to `destroy()` in normal flow.
+ * Nothing needs destroying in normal use: an edge nobody holds is collected,
+ * and a FinalizationRegistry takes down its listeners.
  */
 
 import {
@@ -41,8 +30,6 @@ import {
   type Repo,
   type SubChangeFn,
 } from "@automerge/automerge-repo/slim";
-
-// ─── subscriber set ────────────────────────────────────────────────────────
 
 class SubscriberSet<T = unknown> {
   #subs = new Set<(value: T) => void>();
@@ -57,25 +44,16 @@ class SubscriberSet<T = unknown> {
   }
 }
 
-// ─── doc shape ─────────────────────────────────────────────────────────────
-
 /** `@patchwork.type` value used by EdgeHandle docs. */
 export const EDGE_HANDLE_DATATYPE = "edge-handle";
 
 /**
- * Serialized URL of a `Handle`. A plain `automerge:<docId>` addresses a whole
- * doc/edge; an `automerge:<docId>/<path>` addresses a sub-tree (what used to
- * be a `Ref`). Both are `AutomergeUrl` now that sub-handles are `DocHandle`s.
+ * A handle's url: `automerge:<docId>` for a whole doc or edge,
+ * `automerge:<docId>/<path>` for a sub-tree.
  */
 export type HandleUrl = AutomergeUrl;
 
-/**
- * On-disk shape of an EdgeHandle doc.
- *
- * `persist` and `value` are independent optional fields:
- *  - `persist: true` makes `change()` mirror its writes to `value`.
- *  - `value` holds the last persisted value when `persist` is on.
- */
+/** What an EdgeHandle doc holds. */
 export interface EdgeHandleDoc {
   "@patchwork": { type: typeof EDGE_HANDLE_DATATYPE; version: 1 };
   /** Upstream handle URLs keyed by local name. */
@@ -87,8 +65,6 @@ export interface EdgeHandleDoc {
   /** Mirrored value when persistence is on. */
   value?: unknown;
 }
-
-// ─── handle interface ──────────────────────────────────────────────────────
 
 /**
  * What can sit at either end of an edge in memory: anything with a URL, a
@@ -104,9 +80,8 @@ export interface Handle<T = unknown> {
 }
 
 /**
- * Adapts a `DocHandle` (a whole doc or a `.sub()` sub-tree) to the {@link Handle}
- * interface. Sub-handles replace the old `Ref` concept: reads (`doc()`),
- * writes (`change()`) and `change` events are all scoped to the handle's path.
+ * A `DocHandle`, whole doc or `.sub()` sub-tree, as a {@link Handle}. Reads,
+ * writes and `change` events are all scoped to its path.
  */
 class DocHandleEndpoint<T = unknown> implements Handle<T> {
   constructor(private readonly handle: DocHandle<T>) {}
@@ -130,8 +105,6 @@ class DocHandleEndpoint<T = unknown> implements Handle<T> {
   }
 }
 
-// ─── url validation ────────────────────────────────────────────────────────
-
 const URL_PREFIX = "automerge:";
 
 type HandleUrlKind = "doc-or-edge" | "ref" | "invalid";
@@ -146,11 +119,10 @@ function classifyHandleUrl(url: string): HandleUrlKind {
   return beforeHash.includes("/") ? "ref" : "doc-or-edge";
 }
 
-/** Validate that a string is a syntactically well-formed handle URL. */
 function isValidHandleUrl(url: string): boolean {
   const kind = classifyHandleUrl(url);
   if (kind === "invalid") return false;
-  // Extract the documentId portion and validate it with the canonical check.
+  // Only the documentId part has a canonical check.
   const rest = url.slice(URL_PREFIX.length);
   const stops: number[] = [];
   const slashIx = rest.indexOf("/");
@@ -169,17 +141,14 @@ function assertValidHandleUrl(url: string): asserts url is HandleUrl {
 }
 
 /**
- * Anything that can be handed in as an edge endpoint: a {@link Handle}
- * (`EdgeHandle` or a {@link DocHandleEndpoint}), a raw `DocHandle` /
- * sub-handle (addressed by its `url`), or a serialized {@link HandleUrl}.
+ * Anything that can be an endpoint: a {@link Handle}, a `DocHandle` or
+ * sub-handle (by its `url`), or a {@link HandleUrl}.
  */
 export type HandleInput = Handle | DocHandle<unknown> | HandleUrl;
 
 function toHandleUrl(h: HandleInput): HandleUrl {
   return typeof h === "string" ? h : (h.url as HandleUrl);
 }
-
-// ─── GC-safe teardown registry ─────────────────────────────────────────────
 
 interface TeardownBundle {
   doc: DocHandle<EdgeHandleDoc>;
@@ -203,16 +172,13 @@ const finalRegistry = new FinalizationRegistry<TeardownBundle>(
         // best-effort
       }
     }
-    // The cache entry, if any, is a WeakRef pointing at the collected edge;
-    // remove the dead pointer so the next `find` doesn't bother dereffing.
+    // Drop the dead WeakRef from the cache.
     const cache = resolvedByRepo.get(repo);
     if (cache && cache.get(url)?.deref() === undefined) {
       cache.delete(url);
     }
   }
 );
-
-// ─── EdgeHandle class ──────────────────────────────────────────────────────
 
 export class EdgeHandle<TValue = unknown>
   implements Handle<TValue | undefined>
@@ -228,9 +194,8 @@ export class EdgeHandle<TValue = unknown>
   /** Resolution errors keyed by source name. Empty when everything resolved. */
   sourceErrors: Record<string, Error> = {};
   /**
-   * Errors keyed by target name. Resolution errors (URL didn't resolve to a
-   * live handle) and fan-out errors (write threw) share this map; both clear
-   * when their cause is resolved.
+   * Errors by target name, from resolving it or from writing to it. Either
+   * kind clears when a later resolve or write succeeds.
    */
   targetErrors: Record<string, Error> = {};
 
@@ -278,8 +243,8 @@ export class EdgeHandle<TValue = unknown>
       if ("value" in initial) this.#value = initial.value as TValue;
     }
 
-    // Listener closure captures a WeakRef so it doesn't keep `this` alive.
-    // The DocHandle (long-lived via the Repo) would otherwise pin the edge.
+    // Through a WeakRef: the DocHandle lives as long as the Repo, and would
+    // otherwise keep the edge alive.
     const self = this.#self;
     const onDocChange = () => {
       const e = self.deref();
@@ -299,22 +264,15 @@ export class EdgeHandle<TValue = unknown>
     await this.#refreshEndpoints();
   }
 
-  // ── value side ──────────────────────────────────────────────────────────
-
   value(): TValue | undefined {
     return this.#value;
   }
 
   /**
-   * Set or mutate the value. Same shape as `Ref.change`:
-   *  - direct value: replaces.
-   *  - callback `(prev) => next | void`: returning void leaves the value
-   *    unchanged; returning a value replaces.
-   *
-   * When persistence is on, writes the new value back to the doc. Fans out
-   * to every target (including writes of `undefined` — what targets do with
-   * a clear is their concern, not the cell's). Re-entrant calls during
-   * fan-out (cycles) are dropped.
+   * Set the value, or change it with `(prev) => next`, where returning
+   * nothing keeps it. Writes it to the doc when persisted, and to every
+   * target, `undefined` too (what a target makes of a clear is its business).
+   * A `change` made while one is fanning out (a cycle) is dropped.
    */
   change(fnOrValue: SubChangeFn<TValue | undefined> | TValue | undefined): void {
     if (this.#destroyed) return;
@@ -364,24 +322,20 @@ export class EdgeHandle<TValue = unknown>
     return this.onValueChange(cb);
   }
 
-  // ── wire side ───────────────────────────────────────────────────────────
-
   /**
-   * Fires when a specific source's value emits. Both `value` and `key` are
-   * always defined. Does NOT fire on initial subscribe and does NOT fire on
-   * membership changes — see {@link onMembersChange} for those.
+   * Fires when a source's value emits, with `(value, key)`; unlike
+   * {@link onAnyChange}, `key` is always set. Doesn't fire when you
+   * subscribe, or when the wiring changes: see {@link onMembersChange}.
    */
   onSourceChange(cb: (value: unknown, key: string) => void): () => void {
     return this.#sourceSubscribers.add(({ value, key }) => cb(value, key));
   }
 
   /**
-   * Fires on initial subscribe and whenever source/target membership changes.
-   * The new wiring is on `edge.source` / `edge.target` by the time it fires.
-   *
-   * Most transforms want to recompute on any upstream change — they subscribe
-   * to both `onSourceChange` and `onMembersChange` with the same callback,
-   * or use the {@link onAnyChange} sugar.
+   * Fires when you subscribe and whenever the wiring changes, with the new
+   * wiring already on `edge.source` and `edge.target`. A transform that
+   * recomputes on any upstream change wants this and {@link onSourceChange}
+   * together, which is {@link onAnyChange}.
    */
   onMembersChange(cb: () => void): () => void {
     const unsub = this.#membersSubscribers.add(cb);
@@ -390,13 +344,9 @@ export class EdgeHandle<TValue = unknown>
   }
 
   /**
-   * Sugar combining `onSourceChange` and `onMembersChange`. Fires on:
-   *  - initial subscribe — `cb(undefined, undefined)`
-   *  - membership changes — `cb(undefined, undefined)`
-   *  - per-source value emissions — `cb(value, key)`
-   *
-   * Use this when you just want "recompute on any upstream change" and
-   * don't care which kind. Use the precise pair when you do care.
+   * {@link onSourceChange} and {@link onMembersChange} in one: `cb(value, key)`
+   * when a source emits, `cb(undefined, undefined)` when you subscribe and
+   * when the wiring changes.
    */
   onAnyChange(
     cb: (value: unknown, key: string | undefined) => void
@@ -441,17 +391,14 @@ export class EdgeHandle<TValue = unknown>
     });
   }
 
-  // ── persistence ─────────────────────────────────────────────────────────
-
   persisted(): boolean {
     return this.#persisted;
   }
 
   /**
-   * Flip the persistence flag on the doc. Updates `persisted()` synchronously
-   * so the caller can rely on it immediately; the doc write happens in the
-   * same tick. Turning persistence on writes the current in-memory value to
-   * the doc; turning it off removes the cached value.
+   * Turn persistence on or off. `persisted()` and the doc both change straight
+   * away. Turning it on writes the current value to the doc; turning it off
+   * removes it.
    */
   setPersisted(on: boolean): void {
     if (this.#persisted === on) return;
@@ -468,12 +415,9 @@ export class EdgeHandle<TValue = unknown>
     });
   }
 
-  // ── lifecycle ───────────────────────────────────────────────────────────
-
   /**
-   * Explicit teardown. Idempotent. Use this when you want deterministic
-   * cleanup (tests, hot reloads); in production normal GC plus the
-   * FinalizationRegistry handle teardown without you doing anything.
+   * Tear down now. Idempotent. For when cleanup has to be deterministic
+   * (tests, hot reloads); otherwise GC and the FinalizationRegistry do it.
    */
   destroy(): void {
     if (this.#destroyed) return;
@@ -484,8 +428,6 @@ export class EdgeHandle<TValue = unknown>
     this.#docUnsub = null;
     resolvedByRepo.get(this.repo)?.delete(this.url);
   }
-
-  // ── internals ──────────────────────────────────────────────────────────
 
   async #refreshEndpoints(): Promise<void> {
     if (this.#destroyed) return;
@@ -499,9 +441,8 @@ export class EdgeHandle<TValue = unknown>
     }
     if (!next) return;
 
-    // Sync persistence + value from the doc. Use structural equality so we
-    // don't notify on every refresh for object-valued edges (each automerge
-    // snapshot hands back a fresh view, reference-unequal to our cached one).
+    // Compared structurally: every automerge snapshot is a fresh object, so
+    // an object value would otherwise notify on every refresh.
     const docPersist = next.persist === true;
     if (docPersist) {
       this.#persisted = true;
@@ -516,9 +457,8 @@ export class EdgeHandle<TValue = unknown>
       this.#persisted = false;
     }
 
-    // Members: skip the rest if neither map changed AND we have no
-    // outstanding resolution errors (errors should be retried on the next
-    // doc tick — a peer that wasn't loaded before might be now).
+    // Nothing to do if the wiring hasn't changed, unless something failed to
+    // resolve: a doc that wasn't loaded before might be now.
     const sourceUrls = next.source ?? {};
     const targetUrls = next.target ?? {};
     const sourceJson = JSON.stringify(sourceUrls);
@@ -544,8 +484,7 @@ export class EdgeHandle<TValue = unknown>
       Object.keys(sourceResolved.errors).length > 0 ||
       Object.keys(targetResolved.errors).length > 0;
 
-    // Cache the snapshot only when resolution fully succeeded. Leaving the
-    // cache stale on errors means the next doc tick will retry.
+    // Only remembered when everything resolved, so a failure is retried.
     if (stillErrored) {
       this.#lastSourceJson = "";
       this.#lastTargetJson = "";
@@ -560,12 +499,9 @@ export class EdgeHandle<TValue = unknown>
     this.source = sourceResolved.endpoints;
     this.target = targetResolved.endpoints;
     this.sourceErrors = sourceResolved.errors;
-    // Fan-out errors are reset on each refresh; subsequent writes will
-    // populate fresh ones if they fail.
+    // Write errors go here; the next failing write sets them again.
     this.targetErrors = targetResolved.errors;
 
-    // Per-source emission subscriptions. Listener closure captures a WeakRef
-    // to self so the subscription doesn't pin this edge.
     const self = this.#self;
     for (const [name, handle] of Object.entries(this.source)) {
       const cb = (value: unknown) => {
@@ -592,10 +528,8 @@ export class EdgeHandle<TValue = unknown>
         );
       }
     }
-    // Update targetErrors per-name: replace fan-out errors for the iterated
-    // names (success clears stale errors, failure sets fresh ones). Errors
-    // for names that aren't in `target` (i.e. resolution failures) are
-    // preserved.
+    // A write replaces only the errors of the targets it wrote to; resolution
+    // errors for targets that aren't wired stay.
     if (Object.keys(this.target).length > 0) {
       const next = { ...this.targetErrors };
       for (const name of Object.keys(this.target)) {
@@ -607,13 +541,7 @@ export class EdgeHandle<TValue = unknown>
   }
 }
 
-// ─── value equality ────────────────────────────────────────────────────────
-
-/**
- * Equality for cached values. Fast path for primitives via `Object.is`; for
- * objects we fall back to JSON.stringify, which is good enough for the
- * value shapes we expect (Automerge primitives + plain JSON-ish objects).
- */
+/** `Object.is`, then JSON for objects: enough for automerge values and plain JSON. */
 function valuesEqual(a: unknown, b: unknown): boolean {
   if (Object.is(a, b)) return true;
   if (typeof a !== "object" || typeof b !== "object") return false;
@@ -625,13 +553,7 @@ function valuesEqual(a: unknown, b: unknown): boolean {
   }
 }
 
-// ─── url resolution ────────────────────────────────────────────────────────
-
-/**
- * Resolve a URL to a live `Handle`. Returns the handle on success or an
- * `Error` describing the failure. The `visited` set breaks cycles in chains
- * of edges.
- */
+/** A live Handle for `url`, or the Error that stopped it. `visited` breaks cycles through edges. */
 async function resolveHandleUrl(
   repo: Repo,
   url: HandleUrl,
@@ -641,9 +563,7 @@ async function resolveHandleUrl(
   if (kind === "invalid") return new Error(`invalid handle URL: ${url}`);
 
   if (kind === "ref") {
-    // A path URL (`automerge:<docId>/<path>`) resolves to a scoped sub-handle:
-    // `repo.find` applies the path suffix and hands back a `DocHandle` whose
-    // reads/writes are scoped to that sub-tree (the old `Ref`).
+    // A path url: `repo.find` gives a sub-handle scoped to that sub-tree.
     try {
       const handle = await repo.find(url as AutomergeUrl);
       return new DocHandleEndpoint(handle);
@@ -721,21 +641,15 @@ async function resolveMap(
   return { endpoints, errors };
 }
 
-// ─── factory + cache ───────────────────────────────────────────────────────
-
-/**
- * In-flight cache: concurrent opens of the same `(repo, url)` share the
- * same promise so referential equality holds across races.
- */
+/** Concurrent opens of the same `(repo, url)` share one promise, so they get the same edge. */
 const pendingByRepo = new WeakMap<
   Repo,
   Map<string, Promise<EdgeHandle<any>>>
 >();
 
 /**
- * Resolved cache: settled instances, held by `WeakRef` so we don't pin
- * them when no caller holds a strong reference. Dead entries are pruned by
- * the FinalizationRegistry on top of this file.
+ * Settled edges, by WeakRef so the cache doesn't keep them alive. The
+ * FinalizationRegistry above prunes the dead ones.
  */
 const resolvedByRepo = new WeakMap<
   Repo,
@@ -804,12 +718,9 @@ export async function createEdgeHandle<T = unknown>(
 }
 
 /**
- * Find an existing `EdgeHandle` by URL. Returns the cached instance for
- * `(repo, url)` if one is still live; otherwise opens a fresh one. Throws
- * if the URL does not point at an edge-handle doc.
- *
- * In-flight promises are deduplicated, so concurrent calls all await the
- * same resolution.
+ * Find an `EdgeHandle` by url: the live instance for `(repo, url)` if there
+ * is one, or a fresh one. Concurrent calls share one open. Throws if the url
+ * isn't an edge-handle doc.
  */
 export async function findEdgeHandle<T = unknown>(
   repo: Repo,
@@ -818,8 +729,7 @@ export async function findEdgeHandle<T = unknown>(
   return openEdgeHandle<T>(repo, url, new Set());
 }
 
-/** Internal open used by both the public `findEdgeHandle` and chained-edge
- *  resolution. The `visited` set propagates cycle detection. */
+/** Shared by `findEdgeHandle` and chained edges; `visited` carries cycle detection. */
 async function openEdgeHandle<T = unknown>(
   repo: Repo,
   url: AutomergeUrl,

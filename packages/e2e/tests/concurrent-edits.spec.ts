@@ -7,11 +7,9 @@ import {
 } from "./helpers.js";
 
 /**
- * CRDT merge semantics across the SW relay.
- *
  * Two tabs editing the same doc must converge without losing either edit.
- * The edits here are fired without ordering between the tabs, so they race
- * through the relay; Automerge's merge must keep both.
+ * The edits are fired with no ordering between the tabs, so they race, and
+ * Automerge's merge must keep both.
  */
 
 test("edits to different fields from two tabs both survive the merge", async ({

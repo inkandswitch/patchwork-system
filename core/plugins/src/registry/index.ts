@@ -11,7 +11,6 @@ export type {
   PluginRegistryEvents,
 } from "./types.js";
 
-// Map of plugin types to their registries
 const registries: Record<string, PluginRegistry<any>> = {};
 
 /**
@@ -21,7 +20,6 @@ const registries: Record<string, PluginRegistry<any>> = {};
 export function getRegistry<T extends PluginDescription>(
   type: string
 ): PluginRegistry<T> {
-  // If the registry doesn't exist yet, create it
   if (!registries[type]) {
     registries[type] = new PluginRegistry<T>();
   }
@@ -52,14 +50,10 @@ function migrate(plugin: LoadablePlugin) {
   }
 }
 
-/**
- * Register plugins
- */
 export function registerPlugins<D extends PluginDescription, I>(
   plugins: LoadablePlugin<D, I>[],
   importUrl: string
 ) {
-  // Register each group with its appropriate registry
   plugins.forEach((plugin) => {
     if (!plugin.type) {
       console.warn("Plugin has no type", plugin);
@@ -86,9 +80,6 @@ export function unregisterPlugins(importUrl: string) {
   }
 }
 
-/**
- * Get all registries
- */
 export function getAllRegistries(): Map<string, PluginRegistry<any>> {
   return new Map(Object.entries(registries));
 }

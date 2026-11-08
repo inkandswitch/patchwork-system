@@ -1,28 +1,18 @@
 /**
- * DOM <> handle bridge.
+ * Tools put their automerge identity on the DOM as plain attributes, so any
+ * other tool (or the platform) can ask what a node stands for without
+ * coupling to it.
  *
- * Tools surface their automerge identity to the DOM via plain attributes so
- * any other tool (or the platform itself) can ask "what does this DOM node
- * represent in an automerge doc?" without coupling.
+ * | Attribute       | Handle kind                          |
+ * |-----------------|--------------------------------------|
+ * | `doc-url`       | DocHandle (`<patchwork-view>`'s own) |
+ * | `data-doc-url`  | DocHandle                            |
+ * | `data-ref-url`  | sub-handle                           |
+ * | `data-edge-url` | EdgeHandle                           |
  *
- * We honour both the `<patchwork-view>` element's own `doc-url`/`tool-id`
- * attributes and explicit `data-*` attributes on arbitrary elements:
- *
- * | Attribute       | Handle kind   |
- * |-----------------|---------------|
- * | `doc-url`       | DocHandle     |
- * | `data-doc-url`  | DocHandle     |
- * | `data-ref-url`  | Ref           |
- * | `data-edge-url` | EdgeHandle    |
- *
- * Only the first matching attribute on a node is used. `closestHandle`
- * walks ancestors so transforms can attach anywhere inside an embedded view.
- *
- * Note: the upstream `refFromObject(handle, value)` landing in
- * `@automerge/automerge-repo` is a *different* primitive — it recovers a
- * `Ref` from a sub-object you already have in hand. The two compose: walk
- * the DOM here to get a URL, resolve it to a handle, then use
- * `refFromObject` upstream to address sub-objects within that handle.
+ * A node with several uses the first of `data-ref-url`, `data-edge-url`,
+ * `data-doc-url`, `doc-url`. `closestHandle` walks ancestors, so transforms
+ * can attach anywhere inside an embedded view.
  */
 
 import type { HandleUrl } from "./edge-handle.js";
@@ -51,10 +41,7 @@ export function handleFromElement(el: Element): HandleUrl | undefined {
   return direct ? (direct as HandleUrl) : undefined;
 }
 
-/**
- * Walk up from `node` until we find an element carrying a handle URL.
- * Returns `undefined` if there isn't one in the ancestor chain.
- */
+/** The nearest handle url on `node` or its ancestors. */
 export function closestHandle(node: Node | null): HandleUrl | undefined {
   let el: Element | null =
     node instanceof Element
@@ -69,9 +56,8 @@ export function closestHandle(node: Node | null): HandleUrl | undefined {
 }
 
 /**
- * Discover every handle-carrying element under `root`. Pass a custom
- * `selector` to scope the search; the default finds all four supported
- * attributes.
+ * Every handle-carrying element under `root`. `selector` narrows the search;
+ * the default finds all four attributes.
  */
 export function querySelectorHandles(
   root: ParentNode = document,

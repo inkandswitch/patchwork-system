@@ -36,9 +36,8 @@ import {
 const log = debug("patchwork:elements:legacy");
 
 /**
- * Whether `tool` supports `type` only through a `*` wildcard rather than by
- * naming the datatype explicitly. A wildcard-only match means the tool is a
- * generic fallback (e.g. a raw viewer), not a tool built for this datatype.
+ * Whether `tool` takes `type` only through a `*`: a generic fallback like a
+ * raw viewer, not a tool built for that datatype.
  */
 function isWildcardOnlyMatch(
   tool: LoadedTool,
@@ -68,10 +67,8 @@ const ATTRS = {
 
 export type LegacyImplParams = {
   /**
-   * Repo used to resolve the primary doc handle. This is the
-   * `<patchwork-view>`'s overlay shim, so the handle the tool receives is
-   * remapped (e.g. to a draft clone) when a remapper answers
-   * `repo:handle-descriptor`.
+   * Finds the primary doc. It's the view's overlay repo, so a remapper (a
+   * draft, say) decides which document the tool gets.
    */
   repo: Repo;
   hive?: AutomergeRepoKeyhive;
@@ -82,12 +79,10 @@ type HostElement = HTMLElement & {
   hive?: AutomergeRepoKeyhive;
 };
 
-// How long a failed load waits before trying again, attempt by attempt. A
-// grant can land seconds before the doc it grants is fetchable, and the op
-// that carried it may be the last one for a while, so a keyhive op alone
-// can't be relied on to bring the view back. After ~30s it settles on the
-// last delay, and keeps asking for as long as the view is up: a sender's
-// device can take minutes to push a doc it just shared.
+// Delays between tries of a failed load. A grant can land seconds before its
+// doc is fetchable, with no keyhive op after it to bring the view back, so a
+// timer keeps asking, on the last delay for as long as the view is up: a
+// sender's device can take minutes to push a doc it just shared.
 const LOAD_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 30000];
 
 const ERROR_STYLE_ID = "patchwork-view-error-style";
@@ -96,9 +91,8 @@ const ERROR_STYLE_ID = "patchwork-view-error-style";
 // flyout.
 let errorFlyoutSeq = 0;
 
-// One shared stylesheet for every view's error UI. Colours/fonts/radii come
-// from ../base/theming (the `--studio-*` custom properties) with plain
-// fallbacks so the error still reads sensibly outside a themed context.
+// One stylesheet for every view's error UI, from the `--studio-*` properties,
+// with fallbacks for when nothing is themed.
 function ensureErrorStyles() {
   if (document.getElementById(ERROR_STYLE_ID)) return;
   const style = document.createElement("style");
@@ -241,10 +235,10 @@ function ensureErrorStyles() {
 }
 
 /**
- * `doc-url`/`tool-id`-driven legacy view behavior for `<patchwork-view>`. The
- * tool renders into an inner `.patchwork-view-content` element (the only thing
- * wiped on re-render); the host stays the identity/event node, leaving safe
- * sibling space for augmentations a tool's re-render can't trample.
+ * The `doc-url`/`tool-id` behaviour of `<patchwork-view>`. The tool renders
+ * into an inner `.patchwork-view-content`, the only thing a re-render wipes, so
+ * the host keeps its identity and events, with room beside the content for
+ * things a re-render mustn't trample.
  */
 export class LegacyImpl {
   #element: HostElement;
@@ -267,8 +261,7 @@ export class LegacyImpl {
   #teardown = new Serialized(() => this.#runTeardown());
   // `unable` because the identity has no access yet; a grant mounts the view.
   #unableNoAccess = false;
-  // `unable` because the doc failed to load; a keyhive op retries the load,
-  // and so does a timer, backing off through LOAD_RETRY_DELAYS_MS.
+  // `unable` because the doc failed to load; a keyhive op or the timer retries.
   #loadFailed = false;
   #retryingLoad = false;
   #pendingRetryEpoch: number | null = null;
@@ -286,9 +279,8 @@ export class LegacyImpl {
     this.#hive = params.hive;
     this.#element.hive = params.hive;
 
-    // `height: 100%` makes the wrapper fill the host so tools that size/measure
-    // their root element see the host's box (the wrapper carries the
-    // `repo`/`hive` surface tools read off the element they're handed).
+  // Fills the host, so tools that measure their root element see the host's
+  // box.
     this.#content = document.createElement("div") as HostElement;
     this.#content.className = "patchwork-view-content";
     this.#content.style.width = "100%";
@@ -337,8 +329,8 @@ export class LegacyImpl {
     if (getType(before) != getType(after)) void this.#restart();
   };
 
-  // Tear down and mount again. Every remount goes through `#init`, which a
-  // disposed impl refuses, so one disconnected mid-teardown stays down.
+  // Every remount goes through `#init`, which a disposed impl refuses, so one
+  // disconnected mid-teardown stays down.
   async #restart(): Promise<void> {
     await this.#teardown.run();
     await this.#init();
@@ -371,10 +363,8 @@ export class LegacyImpl {
       async (addedTool) => {
         const toolId = addedTool.id;
         const isChosenTool = toolId == this.#toolId;
-        // `getFallbackTool` scans the whole registry, so recomputing it on
-        // every registration is O(N²) across a load burst. A registration can
-        // only change the outcome when no fallback is known yet or the new
-        // tool supports this doc's type.
+        // getFallbackTool scans the whole registry: calling it on every
+        // registration is O(N²) across a load burst.
         if (this.#handle && this.#couldChangeFallback(addedTool)) {
           this.#fallbackId = getFallbackTool(this.#handle.doc())?.id;
         }
@@ -424,10 +414,9 @@ export class LegacyImpl {
       handle = await repo.find<HasPatchworkMetadata>(this.#docUrl);
     } catch (err) {
       if (epoch !== this.#initEpoch) return;
-      // Every caller voids `#init`'s promise, so rethrowing would only
-      // produce an unhandled rejection and wedge `#state` in `initializing`.
-      // Show the error and park in `unable`: the usual reason a find fails
-      // is that the doc hasn't synced yet, and a keyhive op retries it.
+      // Callers void `#init`'s promise, so a rethrow would only wedge `#state`
+      // in `initializing`. Usually the doc just hasn't synced yet, and a
+      // keyhive op or the timer retries.
       console.error(`failed to load ${this.#docUrl}`, err);
       this.#state = State.unable;
       this.#loadFailed = true;
@@ -448,11 +437,9 @@ export class LegacyImpl {
     this.#queueRender();
   }
 
-  // Load the doc again after a failed find, leaving the error up while it
-  // runs: a teardown would blank the view and fade the error back in on every
-  // keyhive op, which arrive far faster than the fade. Overlapping retries
-  // collapse into the one in flight, with one follow-up for an op received
-  // while it runs.
+  // Leaves the error up while it runs: a teardown would blank the view and fade
+  // the error back in on every keyhive op, and they come far faster than the
+  // fade. Retries asked for during one collapse into a single follow-up.
   async #retryLoad(): Promise<void> {
     if (!this.#docUrl) return;
     if (this.#retryingLoad) {
@@ -469,8 +456,6 @@ export class LegacyImpl {
       this.#retryAttempt = 0;
       this.#mountHandle(handle);
     } catch (err) {
-      // Still unavailable. The error stays up; the next op, or the timer,
-      // tries again.
       log("retry of %s failed: %o", this.#docUrl, err);
       if (epoch === this.#initEpoch && this.#loadFailed) this.#scheduleRetry();
     } finally {
@@ -487,19 +472,11 @@ export class LegacyImpl {
     }
   }
 
-  // Have the repo ask the sync server for the doc again. Once a doc's query
-  // has settled on "unavailable", `find` answers from that verdict without
-  // asking anyone: the subduction source only re-arms when data is pushed, a
-  // connection changes, or a key arrives. So a timed re-find on its own finds
-  // nothing new. `resyncSubduction` marks the doc never-synced, and the round
-  // it opens starts a macrotask later, so it's asked for when a retry is
-  // scheduled: by the time the retry's `find` runs, the query is loading or
-  // has a fresh answer. A repo without a subduction source has no
-  // `resyncSubduction`, and a doc that isn't attached to it is a no-op.
-  //
-  // It goes by the url the view was given. Under a remapping provider the doc
-  // actually fetched may be another (a draft's clone), which this doesn't
-  // reach; that's no worse than before, when no retry re-armed anything.
+  // A query that settled on "unavailable" stays there until data is pushed, a
+  // connection changes or a key arrives, so a re-find alone finds nothing new.
+  // `resyncSubduction` re-arms it. It's called when a retry is scheduled, so
+  // the round is under way by the time the retry's find runs. It goes by the
+  // view's url, so under a remapper it doesn't reach a draft's clone.
   #askAgain(url: AutomergeUrl): void {
     const repo = this.#repo as Repo & {
       resyncSubduction?: (documentId: DocumentId) => void;
@@ -512,8 +489,6 @@ export class LegacyImpl {
     }
   }
 
-  // Try a failed load again after the next delay in LOAD_RETRY_DELAYS_MS,
-  // staying on the last one once they've all been used.
   #scheduleRetry(): void {
     if (this.#disposed || this.#retryTimer) return;
     const delay =
@@ -555,9 +530,8 @@ export class LegacyImpl {
     if (granted || revoked) void this.#restart();
   }
 
-  // A registration can shift the fallback only when we don't have one yet or
-  // the new tool supports the doc's type (a specific match sorts ahead of a
-  // wildcard, so a supporting tool can displace the current pick).
+  // Only when there's no fallback yet, or the new tool supports the doc's type
+  // (a specific match sorts ahead of a wildcard).
   #couldChangeFallback(added: ToolDescription): boolean {
     if (!this.#fallbackId) return true;
     const supported = added.supportedDatatypes;
@@ -570,11 +544,8 @@ export class LegacyImpl {
   async #runTeardown(): Promise<void> {
     if (this.#state == State.none) return;
 
-    // Capture the mount-event payload (if any) before clearing state,
-    // so the unmount echoes the same {url, toolId} we dispatched at
-    // mount. `rendered`/`fallback` are exactly the states in which
-    // `#render` dispatched a MountedEvent (it sets `#tool` only after
-    // the tool's module call succeeds).
+    // Read before clearing, so the unmount names the same {url, toolId} the
+    // mount did; `#render` sends a MountedEvent only in these two states.
     const wasMounted =
       this.#state == State.rendered || this.#state == State.fallback;
     const mountedUrl = this.#handle?.url;
@@ -615,11 +586,10 @@ export class LegacyImpl {
     });
   }
 
-  // A render queued before a teardown began must not land while it runs: the
-  // tool's cleanup would join a set the teardown has already drained, and
-  // nothing would ever call it. Teardown bumps the epoch first thing, but
-  // registry listeners can queue a fresh render (with the new epoch) until
-  // their own cleanup runs, hence the in-flight check too.
+  // A render mustn't land during a teardown: the tool's cleanup would join a
+  // set the teardown already drained, and never run. The epoch bumps first
+  // thing, but registry listeners can queue a render (with the new epoch)
+  // until their own cleanup runs, hence the in-flight check.
   #mayRender(epoch: number): boolean {
     return (
       !this.#disposed &&
@@ -643,9 +613,6 @@ export class LegacyImpl {
     const fallingBack = !this.#toolId;
     const toolId = this.#toolId || this.#fallbackId;
 
-    // A wildcard fallback tool (`supportedDatatypes: ["*"]`) supports this doc
-    // only generically, not because it's built for the doc's datatype — it's a
-    // stopgap, so it gives way to anything the doc suggests we load instead.
     const mountingWildcardStopgap =
       fallingBack &&
       !!fallbackTool &&
@@ -653,18 +620,15 @@ export class LegacyImpl {
 
     if (fallingBack) {
       console.warn(`falling back to default tool for ${this.#docUrl}`);
-      // A wildcard stopgap is a raw viewer, not this datatype's editor. When the
-      // doc names a package that would bring the real thing, offer that instead
-      // of mounting the stopgap: raw JSON isn't what was asked for, and it would
-      // only be swapped out from under the reader once the import lands. Parking
-      // in `unable` is what lets the registry listeners re-render then — the
-      // loaded tool sorts ahead of the wildcard as the new fallback.
+      // A wildcard stopgap is a raw viewer, not this datatype's editor. If the
+      // doc names a package that brings the real one, offer it rather than show
+      // raw JSON that'd be swapped out once the import lands. Parking in
+      // `unable` lets the registry listeners re-render then.
       if (mountingWildcardStopgap) {
         const suggestion = this.#suggestedImport();
         if (suggestion) {
           this.#state = State.unable;
-          // While the import is in flight `#loadSuggestedImport`'s progress
-          // toast is already up, and `#resetDisplay` leaves it alone.
+          // In flight: the progress toast is already up.
           if (!suggestion.loading) {
             this.#showToast(
               "This document suggests a package",
@@ -679,10 +643,8 @@ export class LegacyImpl {
 
     if (!toolId) {
       this.#state = "unable";
-      // The doc's datatype has no registered tool and no explicit tool was
-      // requested. If the doc points at a module to import, offer it — the
-      // registry listeners re-render once an accepted import registers a
-      // supporting tool. Otherwise there's genuinely nothing to open.
+      // Nothing is registered for this datatype. Offer the doc's suggested
+      // import, if any; the registry listeners re-render once it registers.
       const suggestion = this.#suggestedImport();
       if (suggestion) {
         if (suggestion.loading) this.#displayLoading("");
@@ -706,8 +668,6 @@ export class LegacyImpl {
 
     if (!this.#tool) {
       this.#state = "unable";
-      // The requested tool isn't loaded. If the doc suggests a module to import
-      // it from, offer that; otherwise there's nothing more to try.
       const suggestion = this.#suggestedImport();
       if (!suggestion) {
         this.#displayError(`I couldn't find the tool with id ${toolId}.`);
@@ -734,8 +694,8 @@ export class LegacyImpl {
     }
 
     try {
-      // `#init` set the content element's `repo` before reaching `#queueRender`,
-      // so it satisfies `ToolElement`'s non-optional `repo`.
+      // `#init` set the content's `repo` before `#queueRender`, so it is a
+      // `ToolElement`.
       const cleanup = this.#tool.module(
         this.#handle,
         this.#content as ToolElement
@@ -745,9 +705,8 @@ export class LegacyImpl {
       } else {
         console.warn(`return a cleanup function from ${toolId}`);
       }
-      // Something mounted, so retire any "loading suggested import" toast. A
-      // wildcard stopgap only gets this far when the doc suggests nothing, so
-      // there's no offer left standing either way.
+      // A stopgap only gets this far when the doc suggests nothing, so no
+      // offer goes with the toast.
       this.#dismissToast();
       this.#state = fallingBack ? "fallback" : "rendered";
       this.#element.dispatchEvent(
@@ -792,10 +751,8 @@ export class LegacyImpl {
     this.#teardowns.add(() => clearTimeout(timer));
   };
 
-  // A lone `:(` that fades in instead of a bare details triangle. Clicking it
-  // rotates it 90° and pops the full error (message + stack) as a caret flyout
-  // under the button; `original` is what gets re-logged when it opens so it's
-  // easy to grab from the console again.
+  // A lone `:(` that fades in; clicking it pops the full error under it.
+  // `original` is logged again on open, so it's easy to grab from the console.
   #displayError = (
     summary: string,
     detail?: string,
@@ -804,8 +761,7 @@ export class LegacyImpl {
   ) => {
     ensureErrorStyles();
 
-    // Stacks usually begin with the message already; only prepend the summary
-    // as a headline when the detail doesn't lead with it.
+    // Stacks usually start with the message already.
     const full =
       detail && !detail.startsWith(summary)
         ? `${summary}\n\n${detail}`
@@ -831,7 +787,6 @@ export class LegacyImpl {
     const wrap = document.createElement("div");
     wrap.className = "pw-error";
     wrap.style.opacity = "0";
-    // Stay invisible for 0.5s, then fade in over 1s.
     wrap.style.transition = "opacity 1s ease 0.5s";
 
     const face = document.createElement("button");
@@ -841,13 +796,11 @@ export class LegacyImpl {
     face.title = summary;
     face.setAttribute("aria-label", "see error");
     face.setAttribute("aria-expanded", "false");
-    // Let the browser own the open/close (toggle + light-dismiss on click-out
-    // or Esc); we just react to it below.
+    // The browser opens, closes and light-dismisses it.
     face.setAttribute("popovertarget", flyoutId);
 
-    // Place the flyout under the button, centred on it, flipping above when
-    // there isn't room below and clamping to the viewport. The caret always
-    // points back at the button's centre.
+    // Under the button and centred on it, flipped above when there's no room
+    // below, kept in the viewport; the caret points at the button's centre.
     const GAP = 9;
     const MARGIN = 8;
     const position = () => {
@@ -934,11 +887,9 @@ export class LegacyImpl {
   }
 
   /**
-   * The module the current doc suggests importing (its `suggestedImportUrl`,
-   * in the form {@link presentableImportUrl} makes safe to show and import),
-   * if there is one we haven't already been refused. `loading` means it's been
-   * accepted and the import is in flight, so callers show a spinner instead of
-   * offering it again.
+   * The module the doc suggests importing (as {@link presentableImportUrl}
+   * makes it), unless it's been refused. `loading` means it was accepted and
+   * is in flight: show a spinner, not the offer.
    */
   #suggestedImport(): { url: string; loading: boolean } | null {
     if (!this.#docUrl || !this.#handle) return null;
@@ -950,9 +901,9 @@ export class LegacyImpl {
   }
 
   /**
-   * Say that the doc names a package and offer to run it. We never import on
-   * our own: the module is arbitrary JavaScript named by the document, so it
-   * takes a click and then a confirm naming the URL before anything is fetched.
+   * Offer to run the package the doc names. Never on our own: it's arbitrary
+   * JavaScript named by the document, so it takes a click, then a confirm
+   * naming the URL.
    */
   #displaySuggestion(url: string): void {
     this.#displayError(
@@ -967,11 +918,8 @@ export class LegacyImpl {
   }
 
   /**
-   * Confirm, then import. The import runs in this element's own realm rather
-   * than being delegated to a single top-level handler, so a `<patchwork-view>`
-   * nested in an embedded context (e.g. an iframe an event couldn't bubble out
-   * of) still resolves its own tool. Once registered, the tool registry gains a
-   * supporting tool and this view's registry listeners re-render.
+   * Confirm, then import, in this element's own realm, so a view inside an
+   * iframe (which an event couldn't bubble out of) still gets its tool.
    */
   #loadSuggestedImport(url: string): void {
     const ok = window.confirm(
@@ -989,11 +937,8 @@ export class LegacyImpl {
   }
 
   /**
-   * A small o-message-style toast, floated over the view, announcing that we're
-   * fetching the doc's suggested import because no built-in editor matched. It's
-   * appended to the host element (never `#content`, which a tool's re-render
-   * wipes) and retired by `#dismissToast` once a real tool mounts or on
-   * teardown; a timer clears it if the import never resolves.
+   * A small o-message-style toast over the view. It goes on the host, never
+   * `#content`, which a tool's re-render wipes.
    */
   #showToast(title: string, body: string, action?: () => void): void {
     this.#dismissToast(true);
@@ -1174,22 +1119,17 @@ export class LegacyImpl {
   }
 
   /**
-   * The import registered nothing, so the view it was going to fill has nothing
-   * coming: say so, and offer to try again, rather than sit empty once the
-   * progress toast times out.
-   * Only called where nothing could have been registered, so no render is in
-   * flight, and only acts while this view still has nothing mounted.
+   * The import registered nothing: say so and offer to try again, rather than
+   * sit empty once the progress toast times out. Only called where nothing
+   * could have registered, so no render is in flight.
    */
   #reportImportFailed(epoch: number, url: string, error?: unknown): void {
-    // No longer in flight, so the doc's suggestion can be offered again
-    // rather than every later render showing a spinner for an import that's
-    // over.
+    // It's over, so the suggestion can be offered again instead of a spinner.
     if (epoch !== this.#initEpoch) return;
     this.#requestedToolImports.delete(url);
     if (this.#state !== State.unable) return;
     this.#dismissToast(true);
-    // Replace whatever was standing in while the import ran (the loading
-    // pulse) rather than stacking the error under it.
+    // In place of the loading pulse, not under it.
     this.#resetDisplay();
     const err = error as Error | undefined;
     this.#displayError(

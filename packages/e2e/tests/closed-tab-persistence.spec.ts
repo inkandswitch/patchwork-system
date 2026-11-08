@@ -7,11 +7,9 @@ import {
 } from "./helpers.js";
 
 /**
- * The SW, not the tab, is the source of truth.
- *
- * A doc created in a tab must outlive that tab: once synced to the SW and
- * persisted to IndexedDB, closing the originating tab loses nothing. A tab
- * opened later finds the doc with all its structure intact.
+ * A doc outlives the tab that made it: once it's in IndexedDB, closing that
+ * tab loses nothing, and a tab opened later finds the doc with all its
+ * structure intact.
  */
 
 test("a doc outlives the tab that created it", async ({ context }) => {
@@ -25,8 +23,8 @@ test("a doc outlives the tab that created it", async ({ context }) => {
     meta: { tags: ["one", "two"], nested: { depth: 2 } },
   });
 
-  // Confirm the SW has the doc before killing its origin: a round-trip
-  // find from a second tab proves it left tab A's memory.
+  // Confirm the doc has left tab A's memory before closing it: a find from a
+  // second tab proves it.
   const tabB = await context.newPage();
   await tabB.goto("/");
   await waitForRepoReady(tabB);

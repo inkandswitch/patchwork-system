@@ -8,11 +8,8 @@ import { relative } from "node:path";
 import { hashedFiles } from "./hashed-plugin.js";
 import { arkStack } from "./ark-plugin.js";
 
-/**
- * bootloader owns resolving/emitting its own dependencies (it's the one that
- * actually has automerge/keyhive/codemirror/solid/the other patchwork-*
- * packages as real dependencies) — reused here rather than duplicated.
- */
+// The bootloader has these as real dependencies, so it resolves and emits them;
+// reused here.
 import externals, {
   slim,
   resolveExternal,
@@ -35,14 +32,9 @@ builtins["@inkandswitch/patchwork"] = "/packages/@inkandswitch/patchwork.js";
 
 export const chunks = Object.keys(builtins).filter((id) => !(id in slim));
 
-/**
- * Node resolves a package's own name from within its own source when its
- * package.json has "exports" (self-reference) — the same mechanism
- * @inkandswitch/patchwork-bootloader already relies on to list itself among
- * its own externals. Anchoring at *this* file (which lives inside
- * @inkandswitch/patchwork's own installed directory) makes that
- * self-reference resolve to this package instead of bootloader's.
- */
+// Anchored at this file, inside @inkandswitch/patchwork's own directory, so
+// the package's own name resolves to this package (node's self-reference
+// through "exports"), not the bootloader's.
 const self = fileURLToPath(import.meta.url);
 async function resolveSelf(
   this: import("rollup").PluginContext,

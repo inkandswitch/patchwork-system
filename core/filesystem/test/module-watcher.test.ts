@@ -9,12 +9,8 @@ import {
   type PackageTracker,
 } from "../src/package-tracker.js";
 
-/**
- * These tests exercise the static-HTTP-manifest source support added to
- * ModuleWatcher. They avoid any Automerge repo interaction: manifest sources
- * are fetched over HTTP and their (non-automerge) module entries are loaded via
- * plain dynamic `import()`, which we satisfy here with `data:` URLs.
- */
+// Static manifest sources are fetched over HTTP, and their modules imported
+// with a plain `import()`, which `data:` URLs satisfy here.
 
 const AUTOMERGE_URL = "automerge:2uZrhZ7G2NJxryZSMWSdDNFCke8C";
 
@@ -221,9 +217,8 @@ describe("ModuleWatcher stale announce retries", () => {
         d.modules = [folder.url];
       });
 
-      // The injected importer's behaviour is swapped between phases; every
-      // versioned url it is asked for is recorded so the test can tell the
-      // module versions apart.
+      // Swapped between phases. Every url it's asked for is recorded, to tell
+      // the versions apart.
       const importCalls: string[] = [];
       let importBehavior: (url: string) => any = () => ({ plugins: [] });
       const importAutomergePackage = async (urlAtHeads: string) => {
@@ -728,8 +723,7 @@ describe("ModuleWatcher package trackers", () => {
 describe("importPackageFromHttpUrl error handling", () => {
   it("rethrows a rejected package.json fetch (network/CORS) with the original error as cause", async () => {
     // A CORS-blocked or offline fetch rejects with a TypeError rather than
-    // resolving to a non-ok response. That must surface (not silently fall back
-    // to importing the bare URL), since the same wall blocks the module import.
+    // resolving to a non-ok response, and the same wall blocks the import.
     const networkError = new TypeError("Failed to fetch");
     vi.stubGlobal(
       "fetch",

@@ -1,22 +1,16 @@
 /**
- * One import for a Patchwork site.
+ * One import for a Patchwork site. `setup(options)` makes the Repo, connects
+ * the automerge worker, loads the packages, opens the user's account,
+ * installs the router, and resolves with what a site assigns to
+ * `window.patchwork`.
  *
- * `setup(options)` constructs the Repo, wires up the
- * automerge-protocol-handler-worker port, loads plugins via the
- * ModuleWatcher, resolves the user's account document,
- * installs the router, and resolves with the site's runtime API — `repo`,
- * `create`, `open`, `find`, `packages`, `plugins`, `sw` — which is what a
- * site assigns to `window.patchwork`.
+ * It owns page-wide state (the `window.repo`, `window.Automerge`,
+ * `window.AutomergeRepo` and `window.hive` globals, custom elements, document
+ * listeners), so it runs once per page; a second call throws.
  *
- * Setup owns page-wide state — the `window.repo`/`window.Automerge`/
- * `window.AutomergeRepo`/`window.hive` globals, custom-element registration,
- * document listeners — so it may run only once per page; a second call
- * throws.
- *
- * Pulls in DOM- and plugin-layer dependencies, so it is for a browser site's
- * `main.ts` only. Non-UI consumers should import
- * `@inkandswitch/patchwork-bootloader` directly, which does SW registration
- * and the automerge-protocol-handler-worker handoff and nothing else.
+ * It's for a browser site's `main.ts`. Anything without a UI should import
+ * `@inkandswitch/patchwork-bootloader`, which only registers the service
+ * worker and hands the automerge worker its port.
  */
 import {
   type AutomergeUrl,
@@ -81,8 +75,6 @@ declare global {
     hive?: AutomergeRepoKeyhive;
   }
 }
-
-// ── Setup ────────────────────────────────────────────────────────────────
 
 let setupCalled = false;
 
@@ -163,9 +155,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     resolveHandoffsWith(repo);
   }
 
-  // Dev-console / tool-runtime globals (e2e and loaded tools read these). The
-  // `window.patchwork` handle is deliberately not set here — the caller does
-  // `window.patchwork = await setup(...)`.
+  // Loaded tools and e2e read these. `window.patchwork` is the caller's to set.
   window.repo = repo;
   window.Automerge = Automerge as typeof import("@automerge/automerge/slim");
   window.AutomergeRepo =
@@ -182,10 +172,8 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     throw new Error(`patchwork.setup: no element with id="${rootElementId}"`);
   }
 
-  // `<repo-provider>` sits above the root and answers `repo:handle-descriptor`
-  // for any view outside a remapper, resolving to the requested url unchanged.
-  // Generated site html already declares it around the root; wrap only
-  // hand-written markup that lacks one.
+  // Answers `repo:handle-descriptor` for views with no remapper above them.
+  // Generated site html already has one around the root.
   if (!rootElement.closest("repo-provider")) {
     const repoProvider = document.createElement("repo-provider");
     rootElement.parentElement!.insertBefore(repoProvider, rootElement);
@@ -195,12 +183,10 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   if (hive) gatePublicDocsOnReader(repo);
   registerPatchworkViewElement({ hive, repo });
 
-  // Started with the site bundle alone so resolveAccountHandle has something to
-  // await on — the `account` datatype lives there. The user's own
-  // module-settings URL is added lazily once it appears on the account doc.
-  // Keyed by the settings entry rather than the heads-pinned import url, so
-  // reloading a package doesn't count it twice, and counted against the
-  // current list, so unloaded or removed packages drop out of the count.
+  // Starts with the site's sources alone: they hold the `account` datatype
+  // resolveAccountHandle waits for, and the account's own settings join later.
+  // Counted by settings entry, not heads-pinned url, so a reload doesn't count
+  // twice, and only against the current list, so removed packages drop out.
   const loaded = new Set<string>();
   let listed: Set<string> | undefined;
   const loadedCount = () => {
@@ -226,8 +212,6 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
       loaded.delete(name);
       unregisterPlugins(name);
     },
-    // Discover an Automerge package's plugin descriptors off the main thread;
-    // each plugin's load() re-imports the package (at heads) on this thread.
     options.importModulesInWorker === false
       ? undefined
       : importAutomergePackageViaWorker,
@@ -337,8 +321,6 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   };
 }
 
-// ── Reveal / mount ───────────────────────────────────────────────────────
-
 function installReveal(
   rootElement: HTMLElement,
   router: Router | undefined,
@@ -363,12 +345,9 @@ function installReveal(
     reveal();
   });
 
-  // If nothing ever mounts, reveal anyway so the user sees something rather
-  // than a blank page.
+  // Reveal anyway if nothing ever mounts.
   setTimeout(reveal, 12_000);
 }
-
-// ── Module sources ───────────────────────────────────────────────────────
 
 /**
  * The site's module-list sources. The site owns any dev overrides and passes
@@ -482,8 +461,6 @@ function subscribeSyncState(
 
   return () => repo.off("subduction-remote-heads", onHeads);
 }
-
-// ── Named exports ────────────────────────────────────────────────────────
 
 export { createRepo, initWasm } from "./repo.js";
 export { watchDocument } from "./watch-document.js";

@@ -75,11 +75,8 @@ async function crossProfileMarkdownSync(browser: Browser, origin: string) {
   }
 }
 
-// Full-UI tests run on chromium only. Playwright's Firefox fails any cors
-// fetch made from inside a service worker (plain pages are fine), so the
-// module bundle never loads and the frame can't render; its WebKit is too
-// flaky on SW timing and emulation to hold a green suite. Real Firefox and
-// Safari are unaffected as far as we can tell.
+// Full-UI tests run on chromium only, for the reasons in the skip. Real
+// Firefox and Safari are unaffected as far as we can tell.
 test("a markdown doc round-trips between two profiles via the sync server", async ({
   browser,
   browserName,

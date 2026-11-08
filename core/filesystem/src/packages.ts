@@ -64,9 +64,8 @@ export async function importPackageFromHttpUrl(
 }
 
 /**
- * Note: an `automerge:` URL is imported as-is, without pinning to heads —
- * callers that need a deterministic version (e.g. {@link ModuleWatcher}) should
- * resolve the handle and pin before importing.
+ * An `automerge:` URL is imported as given, not pinned to heads: pin it first
+ * if the version matters, as {@link ModuleWatcher} does.
  */
 export async function importPackage(
   url: string,
@@ -95,9 +94,8 @@ async function httpEntryPointUrl(
   } catch {
     resolved = new URL(url, documentBaseOrigin());
   }
-  // Only probe http(s) directories for a package.json. A URL that already names
-  // a module file, or one on another scheme (e.g. a `data:`/`blob:` module), is
-  // imported exactly as given.
+  // Only http(s) directories get a package.json probe. A module file, or a
+  // `data:`/`blob:` module, is imported as given.
   const isHttp =
     resolved.protocol === "http:" || resolved.protocol === "https:";
   if (!isHttp || MODULE_FILE_EXTENSION.test(resolved.pathname)) {
@@ -113,20 +111,15 @@ async function httpEntryPointUrl(
 
   log(`fetching ${packageJsonUrl.slice(-60)}`);
 
-  // A rejected fetch (a TypeError) is a genuine failure — offline, DNS, or, most
-  // commonly here, a cross-origin request blocked because the host sends no
-  // `Access-Control-Allow-Origin`. That's distinct from "there's no package.json
-  // here" (a non-ok *response*, handled below): don't silently fall back to
-  // importing the bare URL, because the same wall blocks the eventual module
-  // `import()` too, so the URL is unusable until the host is fixed. Surface it,
-  // keeping the original error as `cause`.
+  // A rejected fetch is a real failure (offline, DNS, or most often CORS: no
+  // `Access-Control-Allow-Origin`), not "no package.json here". Don't fall back
+  // to importing the bare URL: the same wall blocks the `import()` too.
   let response: Response;
   try {
     response = await fetch(packageJsonUrl);
   } catch (cause) {
-    // Determining the document origin can itself throw off the main thread
-    // (no `document`/`location`); guard it so building a helpful error never
-    // masks the real `cause`.
+    // Reading the document's origin can throw off the main thread; don't let
+    // that hide `cause`.
     let origin: string | undefined;
     try {
       origin = documentBaseOrigin();
@@ -141,9 +134,8 @@ async function httpEntryPointUrl(
     );
   }
 
-  // A non-ok response (typically 404) means this URL isn't a package root, so
-  // import it directly — a bare directory that serves an `index.js` still works
-  // as before.
+  // Not a package root (usually a 404), so import it directly: a directory
+  // that serves an `index.js` works.
   if (!response.ok) {
     log(
       `no package.json at ${packageJsonUrl} (HTTP ${response.status}); importing ${resolved.href} directly`
@@ -165,21 +157,13 @@ async function httpEntryPointUrl(
 }
 
 /**
- * Import the entry point of a package (at `folderDocUrl`, which should be
- * pinned to heads) and return the loaded implementation of a single one of the
- * plugins it exports, selected by its `pluginType` and `pluginId`.
+ * Import the entry point of a package (at `folderDocUrl`, pinned to heads) and
+ * return the loaded implementation of one plugin it exports, picked by
+ * `pluginType` and `pluginId`: an id is only unique within a type.
  *
- * A plugin `id` is only unique *within* a plugin type (there is a separate
- * registry per type), so a package can export e.g. a `patchwork:datatype` and
- * a `patchwork:tool` that both have id `"x"`. Both `type` and `id` are needed
- * to pick out the right one.
- *
- * This is the main-thread counterpart to discovering a package's plugin
- * descriptors in a worker: the worker reports *which* plugins a package
- * exports, and this re-imports the package here to actually run the plugin's
- * own `load()` / `import` — mirroring what {@link PluginRegistry.load} would do
- * with the live descriptor, so the registered description and the loaded
- * implementation come from the same pinned version.
+ * The main-thread half of discovering plugins in a worker: the worker says
+ * which plugins a package exports, and this runs one's own `load()` or
+ * `import`, so its description and implementation come from the same version.
  */
 export async function importPluginFromFolderDocUrl(
   folderDocUrl: AutomergeUrl,

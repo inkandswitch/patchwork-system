@@ -1,41 +1,4 @@
-// A page that builds one Repo in one of five topologies and exposes enough
-// for the playwright specs in ../tests to time it. No UI, no account, no
-// package list: the shell is out of scope here.
-//
-//   ?mode=patchwork      what patchwork does: createRepo() — the tab's own
-//                        subduction node with this origin's IndexedDB, its own
-//                        server socket and `headsChannel` — plus
-//                        the automerge worker that resolves URLs for the
-//                        service worker
-//   ?mode=pertab         the bare node: storage + socket, no siblings channel,
-//                        no workers, so tabs only meet through the server (or
-//                        the database)
-//   ?mode=pertab-bc      pertab plus classic automerge sync between tabs over a
-//                        BroadcastChannel
-//   ?mode=pertab-mesh    pertab plus patchwork's old siblings mesh (subduction over
-//                        a BroadcastChannel), but each tab signing as itself:
-//                        the old topology minus the shared signer, the
-//                        service worker and the automerge worker
-//   ?mode=pertab-heads   pertab with the origin-wide signer, so every tab is
-//                        the same subduction peer on its own socket, and the
-//                        Repo's `headsChannel`: a tab announces the heads it
-//                        just persisted on a BroadcastChannel and the others
-//                        reload the doc from the shared IndexedDB. No mesh,
-//                        no classic network
-//   ?mode=tab-worker     the node in a dedicated Worker the tab spawns: storage,
-//                        socket and a mesh to the other tabs' workers live
-//                        there; the tab is a storageless Repo on a MessagePort
-//   ?mode=shared-worker  one node in a SharedWorker for every tab; each tab is a
-//                        storageless Repo on a MessagePort to it
-//
-// `?server=none` runs everything but patchwork with no socket, so tabs can only
-// meet through storage (and whatever local channel the mode has).
-// `?storage=worker` swaps in-thread IndexedDB for the IndexedDB worker adapter
-// in the bare per-tab modes; `?mesh=1` gives them patchwork's old siblings mesh
-// (subduction over a BroadcastChannel) and `?signer=shared` patchwork's
-// origin-wide signer, so the shipped topology can be taken apart one piece at
-// a time. `?serverPeer=` names the sync server's subduction peer id; without
-// it the server is whichever peer isn't this tab.
+// The modes and query params are in ../README.md.
 import {
   parseAutomergeUrl,
   Repo,
@@ -153,8 +116,6 @@ function countingEndpoint(url: string): WebSocketEndpointInterface {
   };
 }
 
-// ── Tab modes: the node is this Repo ────────────────────────────────────
-
 async function buildTabNode(): Promise<Repo> {
   let repo: Repo;
   let ownPeerId: string;
@@ -265,8 +226,6 @@ async function buildTabNode(): Promise<Repo> {
   }
   return repo;
 }
-
-// ── Worker modes: the node is in a worker, this Repo is storageless ─────
 
 const PORT_TIMEOUT_MS = 10_000;
 
