@@ -90,6 +90,10 @@ type WatchedModule = {
   looking: boolean;
   /** A change landed while `looking`, so look again once it's back. */
   stale: boolean;
+  /** Lookups that have failed in a row, which pick the next retry's delay. */
+  failures: number;
+  /** Looks the package up again after a failed lookup. */
+  retry?: ReturnType<typeof setTimeout>;
 };
 
 /** The url of the document `url` names, without heads. */
@@ -266,9 +270,16 @@ export class ModuleWatcher {
       // it from settings unloads this module.
       const entry = this.watchPackage(importName, stripHeads(importName));
       if (!entry) return;
-      const latest = await this.findLatestVersion(importName, entry);
+      let latest: AutomergeUrl | undefined;
+      try {
+        latest = await this.findLatestVersion(importName, entry);
+      } catch (error) {
+        this.retryLookup(importName, entry, error);
+        return;
+      }
       // A newer lookup took over, and announces what it finds.
       if (!latest) return;
+      entry.failures = 0;
       entry.version = latest;
       if (this.#lastAnnounced.get(importName) === latest) return;
       await this.announce(latest, importName, latest);
@@ -389,8 +400,10 @@ export class ModuleWatcher {
         const first = entry.seen === undefined;
         entry.seen = seen;
         // The lookup that settles the version is still to come, and finds
-        // whatever this is.
-        if (first && entry.version === undefined) return;
+        // whatever this is. If it already failed, nothing is coming.
+        if (first && entry.version === undefined && entry.failures === 0) {
+          return;
+        }
       }
       if (entry.timer) clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
@@ -406,6 +419,7 @@ export class ModuleWatcher {
       lookups: 0,
       looking: false,
       stale: false,
+      failures: 0,
     };
     this.#watchedModules.set(importName, entry);
     if (baseline) void this.reloadIfMoved(importName, entry);
@@ -467,10 +481,12 @@ export class ModuleWatcher {
     try {
       latest = await this.findLatestVersion(importName, entry);
     } catch (error) {
-      console.warn(`couldn't look up the heads of ${importName}`, error);
+      this.retryLookup(importName, entry, error);
       return;
     }
-    if (!latest || latest === entry.version) return;
+    if (!latest) return;
+    entry.failures = 0;
+    if (latest === entry.version) return;
     entry.version = latest;
     if (entry.baseline) {
       entry.baseline = false;
@@ -487,6 +503,29 @@ export class ModuleWatcher {
       importName,
       latest
     );
+  }
+
+  /**
+   * A failed lookup leaves the watch with nothing to compare against, and
+   * nothing else brings it back until the package changes, so try again the
+   * way a failed import does.
+   */
+  private retryLookup(
+    importName: string,
+    entry: WatchedModule,
+    error: unknown
+  ) {
+    // The watch went while the lookup was out (the module left the settings,
+    // or the watcher was disposed), so nothing is waiting on it.
+    if (this.#watchedModules.get(importName) !== entry) return;
+    console.warn(`couldn't look up the heads of ${importName}`, error);
+    const delay = RETRY_DELAYS_MS[entry.failures++];
+    if (delay === undefined) return;
+    if (entry.retry) clearTimeout(entry.retry);
+    entry.retry = setTimeout(() => {
+      entry.retry = undefined;
+      void this.reloadIfMoved(importName, entry);
+    }, delay);
   }
 
   /**
@@ -510,6 +549,7 @@ export class ModuleWatcher {
     const watched = this.#watchedModules.get(importName);
     if (!watched) return;
     if (watched.timer) clearTimeout(watched.timer);
+    if (watched.retry) clearTimeout(watched.retry);
     watched.unwatch();
     this.#watchedModules.delete(importName);
   }

@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Repo } from "@automerge/automerge-repo/slim";
-import { Repo as AutomergeRepo, type PeerId } from "@automerge/automerge-repo";
+import {
+  Repo as AutomergeRepo,
+  type AutomergeUrl,
+  type PeerId,
+} from "@automerge/automerge-repo";
 import { ModuleWatcher } from "../src/module-watcher.js";
 import { importPackageFromHttpUrl } from "../src/packages.js";
 import {
@@ -66,6 +70,7 @@ describe("ModuleWatcher static manifest sources", () => {
       "https://cdn.example.test/tool/index.js",
       AUTOMERGE_URL,
     ]);
+    watcher.dispose();
   });
 
   it("imports modules listed in a static manifest and announces their plugins", async () => {
@@ -861,5 +866,101 @@ describe("ModuleWatcher with a stub tracker", () => {
       warn.mockRestore();
       await repo.shutdown().catch(() => {});
     }
+  });
+
+  describe("when the first lookup fails", () => {
+    async function setup() {
+      const repo = new AutomergeRepo({ peerId: "lookup-fails" as PeerId });
+      const entry = docUrls(repo);
+      const settings = repo.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [entry.url],
+      });
+      let failures = 1;
+      const { tracker, watching } = stubTracker(async () => {
+        if (failures-- > 0) throw new Error("worker not up yet");
+        return entry.atHeads;
+      });
+      const imported: string[] = [];
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const watcher = new ModuleWatcher(
+        repo,
+        { system: settings.url },
+        () => {},
+        undefined,
+        async (url) => {
+          imported.push(url);
+          return { plugins: [] };
+        },
+        tracker
+      );
+      await watcher.doneLoading;
+      return { repo, entry, watcher, watching, imported };
+    }
+
+    it("tries the lookup again after a delay", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { repo, entry, watcher, imported } = await setup();
+      try {
+        expect(imported).toEqual([]);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(imported).toEqual([entry.atHeads]);
+      } finally {
+        watcher.dispose();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        await repo.shutdown().catch(() => {});
+      }
+    });
+
+    it("doesn't look again for a module that went while its lookup was out", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const repo = new AutomergeRepo({ peerId: "lookup-out" as PeerId });
+      const entry = docUrls(repo);
+      const settings = repo.create<any>({
+        "@patchwork": { type: "patchwork:module-settings" },
+        modules: [entry.url],
+      });
+      let fail!: (error: Error) => void;
+      const findLatest = vi.fn(
+        () => new Promise<AutomergeUrl>((_, reject) => (fail = reject))
+      );
+      const { tracker } = stubTracker(findLatest);
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const watcher = new ModuleWatcher(
+        repo,
+        { system: settings.url },
+        () => {},
+        undefined,
+        async () => ({ plugins: [] }),
+        tracker
+      );
+      try {
+        await vi.waitFor(() => expect(findLatest).toHaveBeenCalledTimes(1));
+        watcher.dispose();
+        fail(new Error("worker not up yet"));
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(findLatest).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        await repo.shutdown().catch(() => {});
+      }
+    });
+
+    it("does not swallow the first change the tracker reports", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const { repo, entry, watcher, watching, imported } = await setup();
+      try {
+        watching.get(entry.url)!("seen-1");
+        await vi.advanceTimersByTimeAsync(300);
+        expect(imported).toEqual([entry.atHeads]);
+      } finally {
+        watcher.dispose();
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+        await repo.shutdown().catch(() => {});
+      }
+    });
   });
 });
