@@ -96,6 +96,18 @@ type WatchedModule = {
 const stripHeads = (url: AutomergeUrl) =>
   stringifyAutomergeUrl({ documentId: parseAutomergeUrl(url).documentId });
 
+/**
+ * `url`, a service-worker url for a path inside a package, with the package
+ * named at `latest` heads. Reloading imports the same file the first load did,
+ * and since the url is new, the browser fetches it again.
+ */
+function pinServiceWorkerUrl(url: string, latest: AutomergeUrl) {
+  return url.replace(
+    /\/automerge%3A[^/]+\//i,
+    `/${encodeURIComponent(latest)}/`
+  );
+}
+
 function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
   console.warn(
     `module ${branchesDocUrl} is a branches doc. Branches docs are no longer supported as modules; falling back to the "${DEFAULT_BRANCH}" branch. Please let us know you hit this: post in #patchwork-testers or email chee@inkandswitch.com`
@@ -456,7 +468,13 @@ export class ModuleWatcher {
     log(`change in ${importName}, reloading at ${latest}`);
     // Keyed by the stable importName so this reload supersedes any
     // still-retrying announce of an older version of the same module.
-    await this.announce(latest, importName, latest);
+    await this.announce(
+      isValidAutomergeUrl(importName)
+        ? latest
+        : pinServiceWorkerUrl(importName, latest),
+      importName,
+      latest
+    );
   }
 
   private detachDocWatcher(importName: string) {
