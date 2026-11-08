@@ -1,5 +1,110 @@
 import { describe, expect, it } from "vitest";
 import { PluginRegistry } from "../src/registry/registry.js";
+import {
+  getRegistry,
+  registerPlugins,
+  unregisterPlugins,
+} from "../src/registry/index.js";
+
+const ID = "2uZrhZ7G2NJxryZSMWSdDNFCke8C";
+const OTHER = "4NMNnkMhL8jXrdJ9jamS58PAVdXu";
+
+const plugin = (type: string, id: string) =>
+  ({ type, id, name: id, load: async () => ({}) }) as any;
+
+describe("registerPlugins and unregisterPlugins", () => {
+  it("unregisters a package's plugins at any heads", () => {
+    const type = "test:unregister-any-heads";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "a")], `automerge:${ID}#heads1`);
+    registerPlugins([plugin(type, "b")], `automerge:${OTHER}#heads9`);
+
+    unregisterPlugins(`automerge:${ID}`);
+
+    expect(registry.has("a")).toBe(false);
+    expect(registry.has("b")).toBe(true);
+    unregisterPlugins(`automerge:${OTHER}`);
+  });
+
+  it("unregisters by a url at heads too", () => {
+    const type = "test:unregister-with-heads";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "a")], `automerge:${ID}#heads1`);
+
+    unregisterPlugins(`automerge:${ID}#heads2`);
+
+    expect(registry.has("a")).toBe(false);
+  });
+
+  it("compares non-automerge urls exactly", () => {
+    const type = "test:unregister-exact";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "a")], "https://example.test/a.js");
+
+    unregisterPlugins("https://example.test/b.js");
+    expect(registry.has("a")).toBe(true);
+
+    unregisterPlugins("https://example.test/a.js");
+    expect(registry.has("a")).toBe(false);
+  });
+
+  it("treats service worker urls at different heads as one package", () => {
+    const type = "test:unregister-sw";
+    const registry = getRegistry(type);
+    registerPlugins(
+      [plugin(type, "a")],
+      `http://localhost/automerge%3A${ID}%23h1/path/entry.js`
+    );
+
+    unregisterPlugins(`http://localhost/automerge%3A${ID}/path/entry.js`);
+
+    expect(registry.has("a")).toBe(false);
+  });
+
+  it("drops a plugin the next version of the package no longer provides", () => {
+    const type = "test:reload-drops";
+    const registry = getRegistry(type);
+    registerPlugins(
+      [plugin(type, "kept"), plugin(type, "renamed-old")],
+      `automerge:${ID}#v1`
+    );
+
+    registerPlugins(
+      [plugin(type, "kept"), plugin(type, "renamed-new")],
+      `automerge:${ID}#v2`
+    );
+
+    expect(registry.has("renamed-old")).toBe(false);
+    expect(registry.has("renamed-new")).toBe(true);
+    expect(registry.get("kept")?.importUrl).toBe(`automerge:${ID}#v2`);
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("replaces plugins the new version still provides without removing them", () => {
+    const type = "test:reload-in-place";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "kept")], `automerge:${ID}#v1`);
+    const removed: string[] = [];
+    registry.on("removed", (id) => void removed.push(id));
+
+    registerPlugins([plugin(type, "kept")], `automerge:${ID}#v2`);
+
+    expect(removed).toEqual([]);
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("leaves a plugin another package has since overridden", () => {
+    const type = "test:reload-overridden";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "shared")], `automerge:${ID}#v1`);
+    registerPlugins([plugin(type, "shared")], `automerge:${OTHER}#v1`);
+
+    registerPlugins([], `automerge:${ID}#v2`);
+
+    expect(registry.get("shared")?.importUrl).toBe(`automerge:${OTHER}#v1`);
+    unregisterPlugins(`automerge:${OTHER}`);
+  });
+});
 
 describe("PluginRegistry.loadWhenReady", () => {
   const description = (id: string, load: () => Promise<unknown>) =>

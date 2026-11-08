@@ -13,6 +13,7 @@ import {
   isPluginDescription,
 } from "./guards.js";
 import type { DatatypeImplementation } from "../datatypes.js";
+import { sourceOf } from "./source.js";
 
 const log = debug("patchwork:plugins");
 
@@ -38,7 +39,7 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
     const existing = this.#plugins.get(plugin.id);
 
     if (existing) {
-      if (existing.importUrl == importUrl) {
+      if (sourceOf(existing.importUrl) == sourceOf(importUrl)) {
         log(`updating ${plugin.id} provided by "${existing.importUrl}"`);
       } else {
         console.warn(
