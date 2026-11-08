@@ -108,11 +108,12 @@ export interface PatchworkOptions {
   routing?: "hash" | false;
 
   /**
-   * Milliseconds before the promise `setup()` returned rejects because boot
-   * hasn't finished — so a hang (service worker stuck, sync unreachable)
-   * surfaces as an error a site can show instead of blank space. The boot
-   * itself is not cancelled and may still complete in the background.
-   * Defaults to 30 seconds; `false` disables the deadline.
+   * Milliseconds before boot counts as stuck, if it hasn't finished: the root
+   * view hasn't mounted, or with `routing: false`, `setup()` hasn't resolved.
+   * A stuck boot isn't an error and isn't cancelled — it often gets there — so
+   * `setup()` doesn't reject; progress reports `stuck: true` and the boot
+   * status box says where it's stuck, with a reload button, until boot
+   * finishes. Defaults to 30 seconds; `false` never calls it stuck.
    */
   timeout?: number | false;
 
@@ -126,7 +127,9 @@ export interface PatchworkOptions {
 
   /**
    * Told what boot is doing, as it moves on, for a loading screen. Called
-   * with a fresh object each time.
+   * with a fresh object each time. Without it, Patchwork shows a small box in
+   * the corner saying what boot is doing, if boot takes long enough to notice;
+   * a site that listens draws its own.
    */
   onProgress?: (progress: BootProgress) => void;
 }
@@ -149,6 +152,11 @@ export interface BootProgress {
   publicReader?: PublicReaderStatus;
   /** How many of the listed packages have loaded, and the name of the last. */
   packages?: { loaded: number; total: number; latest?: string };
+  /**
+   * Boot has been at `stage` for longer than `timeout`. It carries on, and
+   * may still finish.
+   */
+  stuck?: boolean;
 }
 
 /**

@@ -61,6 +61,7 @@ import { gatePublicDocsOnReader } from "./public-access.js";
 import { watchDocument } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
+import { showBootStatus } from "./boot-status.js";
 
 const log = debug("patchwork:setup");
 
@@ -85,42 +86,19 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
     );
   }
   setupCalled = true;
-  const done = doSetup(options);
-  void done.then(() => log("patchwork setup complete"));
 
-  const timeout = options.timeout ?? 30_000;
-  if (timeout === false) return done;
-  let timer: ReturnType<typeof setTimeout>;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(
-          new Error(`patchwork.setup: boot did not finish within ${timeout}ms`)
-        ),
-      timeout
-    );
-  });
-  done.then(
-    () => clearTimeout(timer),
-    () => clearTimeout(timer)
-  );
-  return Promise.race([done, deadline]);
-}
-
-export default setup;
-
-async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
-  const siteTitle =
-    options.title ??
-    (typeof __SITE_TITLE__ !== "undefined" ? __SITE_TITLE__ : "Patchwork");
-  const moduleSources = resolveDefaultModules(options);
-  const routing = options.routing ?? "hash";
-
-  log("booting", options);
-
+  // One record of where boot has got to. The site hears it through
+  // onProgress, or if it isn't listening, Patchwork shows it in the corner.
   const progress: BootProgress = { stage: "workers" };
+  const timeout = options.timeout ?? 30_000;
+  const status = showBootStatus({
+    draw: !options.onProgress,
+    stuckAfterMs: timeout === false ? undefined : timeout,
+    onStuck: () => report({ stuck: true }),
+  });
   const report = (change: Partial<BootProgress>) => {
     Object.assign(progress, change);
+    status.update({ ...progress });
     try {
       options.onProgress?.({ ...progress });
     } catch (error) {
@@ -128,6 +106,32 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     }
   };
   report({});
+
+  const done = doSetup(options, progress, report, status.done);
+  void done.then(
+    () => log("patchwork setup complete"),
+    // The site shows its own error for a boot that failed.
+    () => status.done()
+  );
+  return done;
+}
+
+export default setup;
+
+async function doSetup(
+  options: PatchworkOptions,
+  progress: BootProgress,
+  report: (change: Partial<BootProgress>) => void,
+  // Boot is over: the root view mounted, or without routing, setup resolved.
+  finished: () => void
+): Promise<Patchwork> {
+  const siteTitle =
+    options.title ??
+    (typeof __SITE_TITLE__ !== "undefined" ? __SITE_TITLE__ : "Patchwork");
+  const moduleSources = resolveDefaultModules(options);
+  const routing = options.routing ?? "hash";
+
+  log("booting", options);
 
   if (!options.repo) await initWasm();
 
@@ -275,7 +279,10 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     });
   }
 
-  installReveal(rootElement, router, toolsLoaded);
+  installReveal(rootElement, router, toolsLoaded, finished);
+  // Without routing the site puts its own view on screen, so boot is over
+  // once setup is.
+  if (!router) finished();
 
   return {
     repo,
@@ -326,7 +333,8 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
 function installReveal(
   rootElement: HTMLElement,
   router: Router | undefined,
-  toolsLoaded: Promise<unknown>
+  toolsLoaded: Promise<unknown>,
+  onMounted: () => void
 ): void {
   let revealed = false;
   const reveal = () => {
@@ -338,6 +346,7 @@ function installReveal(
   rootElement.addEventListener("patchwork:mounted", (event) => {
     if (event.target !== rootElement) return;
     log("root element mounted");
+    onMounted();
     if (router) {
       void router.route();
       // Deep-links into tools that were still loading get routed again once
