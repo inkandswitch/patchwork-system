@@ -10,6 +10,7 @@ import {
   type DocumentProgress,
   type QueryState,
   type Repo,
+  type UrlHeads,
 } from "@automerge/automerge-repo/slim";
 
 import { subscribe } from "./index.js";
@@ -41,16 +42,22 @@ import type { RepoLike } from "./types.js";
  * view is live: a throwaway document, never saved or synced, for remappers
  * that compute what a document shows rather than store it. Only its
  * documentId is used. It should start as a fork of `cloneUrl ?? url`, so refs
- * and cursors made on it resolve, but needn't go on sharing its history; so a
- * view pinned to heads (on the presented url, or stamped on `cloneUrl`) never
- * shows it, and shows `cloneUrl ?? url` at those heads instead.
+ * and cursors made on it resolve, but needn't go on sharing its history. So a
+ * view pinned to heads (on the presented url, or stamped on `cloneUrl`) shows
+ * `cloneUrl ?? url` at those heads, unless only the scratch document has them
+ * (they were read off a view it backs), and then shows the scratch document
+ * at those heads for as long as the descriptor names it.
  *
  * While a view is backed by a scratch document, its overlay repo holds a
  * `repo:scratch-lease` subscription for that document's url, opened before it
  * finds the document and closed once nothing forwards to it (after a swap to
  * another backing, or on dispose). A remapper that made the document can
- * claim those leases to know when it's safe to delete it; one that keeps its
- * scratch documents alive some other way can leave them unclaimed.
+ * claim those leases, but they don't cover the descriptor's trip across the
+ * channel: the view only opens one once the answer arrives. So until then the
+ * remapper keeps the document for its latest answer on each open
+ * subscription, and deletes it when neither an answer nor a lease holds it.
+ * One that keeps its scratch documents alive some other way can leave the
+ * leases unclaimed.
  *
  * The descriptor crosses the `patchwork:subscribe` channel structured-cloned,
  * which is why it carries plain `AutomergeUrl` strings and never a live
@@ -115,6 +122,8 @@ export class OverlayRepo implements RepoLike {
   >();
   // Held `repo:scratch-lease` per presented url backed by a scratch document.
   readonly #leases = new Map<AutomergeUrl, () => void>();
+  // Leases taken for a backing that's still being looked up.
+  readonly #pendingLeases = new Set<() => void>();
   // Progress subscribers per presented url, mapped to their unsubscribe from
   // the current inner; re-wired on swap.
   readonly #progressDispatchers = new Map<
@@ -295,6 +304,8 @@ export class OverlayRepo implements RepoLike {
     // Released only once the wrappers have stopped forwarding.
     for (const release of this.#leases.values()) release();
     this.#leases.clear();
+    for (const release of this.#pendingLeases) release();
+    this.#pendingLeases.clear();
     this.#inner.clear();
     this.#resolving.clear();
     this.#backings.clear();
@@ -344,12 +355,12 @@ export class OverlayRepo implements RepoLike {
         // onto the returned url; honor them, but presented-url heads win.
         const parsedBacking = parseAutomergeUrl(backingRoot);
         const pinned = heads ?? parsedBacking.heads;
-        // A scratch document needn't share the history of what it stands
-        // for, so a pinned view is shown from the stored one.
-        const scratchId =
-          descriptor.scratchUrl && !pinned
-            ? parseAutomergeUrl(descriptor.scratchUrl).documentId
-            : undefined;
+        const scratchId = await this.#scratchToShow(
+          descriptor.scratchUrl,
+          parsedBacking.documentId,
+          pinned
+        );
+        if (mySeq !== seq || this.#disposed) return;
         const repo = scratchId ? getScratchRepo() : this.baseRepo;
         const backingUrl = stringifyAutomergeUrl({
           documentId: scratchId ?? parsedBacking.documentId,
@@ -358,8 +369,8 @@ export class OverlayRepo implements RepoLike {
         const applied = this.#backings.get(presented);
         if (applied?.repo === repo && applied.url === backingUrl) return;
 
-        // Held from before the find, so the remapper never sees a gap between
-        // answering and the backing being in use.
+        // Held from before the find, so nothing lets go of the document
+        // between this answer arriving and the backing being in use.
         const lease = scratchId
           ? subscribe(
               this.#element,
@@ -370,6 +381,7 @@ export class OverlayRepo implements RepoLike {
               () => {}
             )
           : undefined;
+        if (lease) this.#pendingLeases.add(lease);
         let inner: DocumentProgress<T> | undefined;
         let backing: DocHandle<T>;
         try {
@@ -386,6 +398,8 @@ export class OverlayRepo implements RepoLike {
           );
           failedInner = inner as DocumentProgress<unknown> | undefined;
           throw err;
+        } finally {
+          if (lease) this.#pendingLeases.delete(lease);
         }
         if (mySeq !== seq || this.#disposed) {
           lease?.();
@@ -464,6 +478,30 @@ export class OverlayRepo implements RepoLike {
 
     this.#resolving.set(presented, promise as Promise<OverlayHandle<unknown>>);
     return promise;
+  }
+
+  // The scratch document to show, if any. A pinned view shows the stored
+  // document, unless only the scratch one has those heads: they were read
+  // off a view the scratch document backs. A document that can't be found
+  // counts as not having them.
+  async #scratchToShow(
+    scratchUrl: AutomergeUrl | undefined,
+    storedId: DocumentId,
+    pinned: UrlHeads | undefined
+  ): Promise<DocumentId | undefined> {
+    if (!scratchUrl) return undefined;
+    const scratchId = parseAutomergeUrl(scratchUrl).documentId;
+    if (!pinned) return scratchId;
+    const has = async (repo: Repo, documentId: DocumentId) => {
+      try {
+        const handle = await repo.find(stringifyAutomergeUrl({ documentId }));
+        return handle.containsHeads(pinned);
+      } catch {
+        return false;
+      }
+    };
+    if (!(await has(getScratchRepo(), scratchId))) return undefined;
+    return (await has(this.baseRepo, storedId)) ? undefined : scratchId;
   }
 
   // Attach a progress subscriber to the current inner (if any), keeping its
