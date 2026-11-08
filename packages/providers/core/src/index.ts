@@ -209,6 +209,7 @@ export {
   isMarkPatch,
   isPatchStale,
   isPathPatch,
+  isRunPatch,
   isTextPatch,
   landPatch,
   markPatch,
@@ -223,6 +224,7 @@ export {
   type PatchEntry,
   type PatchHighlight,
   type PathPatch,
+  type RunPatch,
   type TextPatch,
 } from "./patch-layers.js";
 export {

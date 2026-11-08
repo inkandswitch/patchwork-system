@@ -14,6 +14,7 @@ import {
   readEntry,
   textPatch,
   type PatchDoc,
+  type RunPatch,
   type TextPatch,
 } from "../src/patch-layers.js";
 
@@ -696,5 +697,92 @@ describe("recording over an older patch", () => {
     layered.handle.change((d) => void (d.n = 7));
     expect(layered.handle.doc().n).toBe(7);
     expect(front.doc().patches).toMatchObject([{ path: ["n"], value: 7 }]);
+  });
+});
+
+describe("run entries", () => {
+  type Grid = { pixels: number[][] };
+  let grid: DocHandle<Grid>;
+
+  beforeEach(() => {
+    grid = repo.create<Grid>({
+      pixels: [
+        [0, 0, 0, 0, 0],
+        [0, 0, 0, 0, 0],
+      ],
+    });
+  });
+
+  const run = (y: number, x: number, values: number[]): RunPatch => ({
+    path: ["pixels", y, x],
+    values,
+  });
+  const layGrid = (...layers: DocHandle<PatchDoc>[]) =>
+    new LayeredDoc(grid, layers, scratch);
+
+  it("puts its values on consecutive items, without writing on the target", () => {
+    const layer = createPatch(repo, grid, [run(1, 1, [2, 3, 4])]);
+    expect(layGrid(layer).handle.doc().pixels).toEqual([
+      [0, 0, 0, 0, 0],
+      [0, 2, 3, 4, 0],
+    ]);
+    expect(grid.doc().pixels[1]).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it("lets the target show through either side of it", () => {
+    const layer = createPatch(repo, grid, [run(0, 1, [7, 7])]);
+    const layered = layGrid(layer);
+    grid.change((d) => {
+      d.pixels[0][0] = 1;
+      d.pixels[0][1] = 1;
+      d.pixels[0][4] = 1;
+    });
+    expect(layered.handle.doc().pixels[0]).toEqual([1, 7, 7, 0, 1]);
+  });
+
+  it("is covered by a run in front only where that one reaches", () => {
+    const back = createPatch(repo, grid, [run(0, 0, [1, 1, 1, 1])]);
+    const front = createPatch(repo, grid, [run(0, 2, [2, 2, 2])]);
+    expect(layGrid(front, back).handle.doc().pixels[0]).toEqual([1, 1, 2, 2, 2]);
+  });
+
+  it("takes a write onto one of its items into that item", () => {
+    const layer = createPatch(repo, grid, [run(1, 0, [5, 5, 5])]);
+    const layered = layGrid(layer);
+    layered.handle.change((d) => void (d.pixels[1][1] = 9));
+    expect(layered.handle.doc().pixels[1]).toEqual([5, 9, 5, 0, 0]);
+    expect(layer.doc().patches).toEqual([run(1, 0, [5, 9, 5])]);
+    expect(grid.doc().pixels[1]).toEqual([0, 0, 0, 0, 0]);
+  });
+
+  it("reads as the stretch of list it puts over, stale once that changes", () => {
+    const layer = createPatch(repo, grid, [run(0, 1, [3, 3])]);
+    const entry = layer.doc().patches[0];
+    expect(readEntry(grid, layer.doc(), entry)).toMatchObject({
+      kind: "put",
+      stale: false,
+      then: [0, 0],
+      now: [0, 0],
+    });
+    grid.change((d) => void (d.pixels[0][2] = 8));
+    expect(readEntry(grid, layer.doc(), entry)).toMatchObject({
+      stale: true,
+      then: [0, 0],
+      now: [0, 8],
+    });
+    grid.change((d) => void (d.pixels[0][3] = 8));
+    expect(isEntryStale(grid, layer.doc(), entry)).toBe(true);
+  });
+
+  it("lands every item on the target", () => {
+    const layer = createPatch(repo, grid, [
+      run(0, 3, [6, 6]),
+      { path: ["pixels", 1, 0], value: 4 },
+    ]);
+    landPatch(grid, layer);
+    expect(grid.doc().pixels).toEqual([
+      [0, 0, 0, 6, 6],
+      [4, 0, 0, 0, 0],
+    ]);
   });
 });

@@ -13,3 +13,5 @@ A list with a patch on one of its indexes is worked out whole from the target's 
 `OverlayRepo` takes an optional third argument, `{ scratchRepo }`, the storage-less repo layered docs live in. Also exported: `createPatch`, `isPatchStale` and `landPatch` (puts a patch on its target for real and empties it).
 
 `@automerge/automerge` is now a peer dependency.
+
+A run entry, `{ path: [...list, start], values }`, puts `values` on consecutive items of a list from `start`: the same as a value entry per item, kept as one. Each item is laid, written through (an edit to one changes its place in `values`) and landed like its own put; `readEntry` reads a run as the stretch of list it covers. `isRunPatch` tells one apart; `isPathPatch` no longer matches runs.

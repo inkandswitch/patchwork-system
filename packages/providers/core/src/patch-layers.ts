@@ -99,7 +99,19 @@ export type MarkPatch = {
   at?: UrlHeads;
 };
 
-export type PatchEntry = PathPatch | TextPatch | MarkPatch;
+/**
+ * Put `values` on consecutive items of a list, starting at the index `path`
+ * ends in: the same as a value entry per item, kept as one. Each item is laid,
+ * written through and landed as its own put would be; an edit to one changes
+ * its place in `values`.
+ */
+export type RunPatch = {
+  path: A.Prop[];
+  values: unknown[];
+  at?: UrlHeads;
+};
+
+export type PatchEntry = PathPatch | TextPatch | MarkPatch | RunPatch;
 
 export type PatchDoc = {
   "@patchwork": { type: "patch" };
@@ -122,8 +134,12 @@ export function isMarkPatch(entry: PatchEntry): entry is MarkPatch {
   return "mark" in entry && !!entry.mark;
 }
 
+export function isRunPatch(entry: PatchEntry): entry is RunPatch {
+  return "values" in entry && Array.isArray(entry.values);
+}
+
 export function isPathPatch(entry: PatchEntry): entry is PathPatch {
-  return !isTextPatch(entry) && !isMarkPatch(entry);
+  return !isTextPatch(entry) && !isMarkPatch(entry) && !isRunPatch(entry);
 }
 
 /**
@@ -186,6 +202,8 @@ type Cover = {
   path: readonly A.Prop[];
   removes: boolean;
   value?: unknown;
+  /** For an item of a run entry: its place in the run's `values`. */
+  item?: number;
 };
 
 // One text or mark entry, as laid. `order` counts from the back.
@@ -460,6 +478,22 @@ export class LayeredDoc<T> {
             index,
             order: order++,
             ...entry.mark,
+          });
+        } else if (isRunPatch(entry)) {
+          // One cover per item, as if each were its own put. A run whose path
+          // doesn't end in an index has no items to put.
+          const start = entry.path[entry.path.length - 1];
+          if (typeof start !== "number") return;
+          const parent = entry.path.slice(0, -1);
+          entry.values.forEach((value, item) => {
+            covers.push({
+              layer,
+              index,
+              item,
+              path: [...parent, start + item],
+              removes: false,
+              value,
+            });
           });
         } else {
           covers.push({
@@ -794,10 +828,20 @@ export class LayeredDoc<T> {
         }
       }
 
-      for (const [cover, at] of dirty) {
+      // Last entry (and last item) first, so splitting a run doesn't move the
+      // entries still to be written.
+      const writes = [...dirty].sort(
+        ([p], [q]) => q.index - p.index || (q.item ?? 0) - (p.item ?? 0)
+      );
+      for (const [cover, at] of writes) {
         const value = getAt(shown, at);
         cover.layer.change((doc) => {
           const entry = doc.patches[cover.index];
+          if (entry && isRunPatch(entry) && cover.item !== undefined) {
+            if (value === undefined) takeFromRun(doc, cover.index, cover.item);
+            else entry.values[cover.item] = plain(value);
+            return;
+          }
           if (!entry || !isPathPatch(entry)) return;
           if (value === undefined) {
             delete entry.value;
@@ -1388,13 +1432,32 @@ export function readEntry<T>(
     ? "text"
     : isMarkPatch(entry)
       ? "mark"
-      : "value" in entry
+      : isRunPatch(entry) || "value" in entry
         ? "put"
         : "remove";
   const at = entry.at ?? patch.at;
   const known = !!at && target.containsHeads(at);
   const nowDoc = target.doc();
   const thenDoc = known ? target.view(at).doc() : undefined;
+
+  // A run reads as the stretch of the list it puts over.
+  if (isRunPatch(entry)) {
+    const start = path[path.length - 1];
+    const stretch = (doc: unknown) => {
+      const list = getAt(doc, path.slice(0, -1));
+      if (!Array.isArray(list) || typeof start !== "number") return undefined;
+      return list.slice(start, start + entry.values.length);
+    };
+    const now = stretch(nowDoc);
+    const then = thenDoc ? stretch(thenDoc) : undefined;
+    return {
+      kind,
+      path,
+      stale: !known || !deepEqual(then, now),
+      ...(then === undefined ? {} : { then }),
+      ...(now === undefined ? {} : { now }),
+    };
+  }
 
   if (kind === "put" || kind === "remove") {
     const now = getAt(nowDoc, path);
@@ -1480,7 +1543,7 @@ export function landPatch<T>(
   layer: DocHandle<PatchDoc>
 ): Map<string, number> {
   const patches = layer.doc()?.patches ?? [];
-  const values = patches.filter(isPathPatch);
+  const values = patches.filter((p) => isPathPatch(p) || isRunPatch(p));
   const marks = patches.filter(isMarkPatch);
 
   // The patch's text, as an overlay laying it alone would show it.
@@ -1506,7 +1569,16 @@ export function landPatch<T>(
   landing.add(layer.url);
   try {
     target.change((doc: A.Doc<T>) => {
-      for (const p of values) putAt(doc, p.path, !("value" in p), p.value);
+      for (const p of values) {
+        if (isRunPatch(p)) {
+          const start = p.path[p.path.length - 1];
+          if (typeof start !== "number") continue;
+          const parent = p.path.slice(0, -1);
+          p.values.forEach((v, i) => putAt(doc, [...parent, start + i], false, v));
+        } else {
+          putAt(doc, p.path, !("value" in p), p.value);
+        }
+      }
     });
     // Where each entry's text ends up, for marks on it.
     landed = new Map<string, number>();
@@ -1987,6 +2059,25 @@ function syncList(doc: unknown, path: readonly A.Prop[], want: unknown[]): void 
 
 // `A.applyPatches`, except that it can delete a map's key (it only deletes
 // from lists and text).
+// A run with one item taken out: the items before it, a removal of it, and
+// the items after it, in its place in the list of patches.
+function takeFromRun(doc: PatchDoc, index: number, item: number): void {
+  const run = doc.patches[index] as RunPatch;
+  const start = run.path[run.path.length - 1] as number;
+  const parent = run.path.slice(0, -1);
+  const values = run.values.map(plain);
+  const at = run.at ? { at: [...run.at] as UrlHeads } : {};
+  const pieces: PatchEntry[] = [];
+  if (item > 0) {
+    pieces.push({ path: [...parent, start], values: values.slice(0, item), ...at });
+  }
+  pieces.push({ path: [...parent, start + item], ...at });
+  if (item < values.length - 1) {
+    pieces.push({ path: [...parent, start + item + 1], values: values.slice(item + 1), ...at });
+  }
+  doc.patches.splice(index, 1, ...pieces);
+}
+
 function applyAll(doc: unknown, patches: readonly A.Patch[]): void {
   for (const patch of patches) {
     const path = patch.path as A.Prop[];
