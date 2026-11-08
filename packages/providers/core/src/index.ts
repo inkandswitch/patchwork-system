@@ -196,4 +196,9 @@ export {
 } from "./repo-provider.js";
 export type { RepoLike } from "./types.js";
 export { OverlayHandle, type OverlayHandleOpts } from "./overlay-handle.js";
-export { OverlayRepo, type DocHandleDescriptor } from "./overlay-repo.js";
+export {
+  OverlayRepo,
+  type DocHandleDescriptor,
+  type OverlayRepoOptions,
+} from "./overlay-repo.js";
+export { getScratchRepo } from "./scratch-repo.js";
