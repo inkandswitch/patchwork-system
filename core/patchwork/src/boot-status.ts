@@ -1,0 +1,174 @@
+import type { BootProgress, BootStage } from "./types.js";
+
+const ELEMENT_ID = "pw-boot-status";
+const STYLE_ID = "pw-boot-status-styles";
+// A return visit boots in about a second, which is no time to read anything.
+const SHOW_AFTER_MS = 1_000;
+
+const STAGE_TEXT: Record<BootStage, string> = {
+  workers: "Starting up",
+  identity: "Opening your identity",
+  // Boot waits here on the account, which on a first visit waits on the public
+  // reader catching up, so it can read the account's datatype.
+  "package-list": "Opening your account",
+  packages: "Loading packages",
+  opening: "Opening",
+};
+
+const CSS = `
+  #${ELEMENT_ID} {
+    position: fixed;
+    right: 12px;
+    bottom: 12px;
+    z-index: 2;
+    max-width: min(22rem, calc(100vw - 24px));
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    background: #fffc;
+    color: #1a1a1a;
+    box-shadow: 0 1px 4px #0002;
+    font: 0.75rem/1.4 system-ui, sans-serif;
+  }
+  #${ELEMENT_ID} p {
+    margin: 0;
+  }
+  #${ELEMENT_ID} .pw-boot-status-detail {
+    color: #555;
+  }
+  #${ELEMENT_ID} button {
+    margin-top: 0.375rem;
+    font: inherit;
+  }
+  @media (prefers-color-scheme: dark) {
+    #${ELEMENT_ID} {
+      background: #111c;
+      color: #eee;
+    }
+    #${ELEMENT_ID} .pw-boot-status-detail {
+      color: #aaa;
+    }
+  }
+`;
+
+export interface BootStatus {
+  /** Boot moved on. */
+  update(progress: BootProgress): void;
+  /** Boot is over, either way: take the box away. */
+  done(): void;
+}
+
+/**
+ * A small box in the corner saying what boot is doing, for a boot slow enough
+ * to notice. Once `stuckAfterMs` passes it says where boot is stuck, with a
+ * reload button, and it still goes away if boot gets there after all.
+ * `onStuck` is told when that happens.
+ */
+export function showBootStatus(options: {
+  stuckAfterMs?: number;
+  draw: boolean;
+  onStuck?: () => void;
+}): BootStatus {
+  let progress: BootProgress = { stage: "workers" };
+  let element: HTMLElement | undefined;
+  let finished = false;
+
+  const render = () => {
+    if (!element) return;
+    const stage = STAGE_TEXT[progress.stage] ?? progress.stage;
+    const lines: HTMLElement[] = [
+      line(
+        progress.stuck
+          ? `Still ${stage.charAt(0).toLowerCase()}${stage.slice(1)} after ${Math.round((options.stuckAfterMs ?? 0) / 1000)}s`
+          : `${stage}…`
+      ),
+    ];
+    const packages = packagesText(progress);
+    if (packages) lines.push(line(packages, "pw-boot-status-detail"));
+    const reader = readerText(progress);
+    if (reader) lines.push(line(reader, "pw-boot-status-detail"));
+    if (progress.stuck) {
+      const reload = document.createElement("button");
+      reload.textContent = "Reload";
+      reload.addEventListener("click", () => location.reload());
+      lines.push(reload);
+    }
+    element.dataset.stage = progress.stage;
+    element.toggleAttribute("data-stuck", !!progress.stuck);
+    element.replaceChildren(...lines);
+  };
+
+  const show = () => {
+    if (finished || element || !options.draw) return;
+    if (!document.getElementById(STYLE_ID)) {
+      const style = document.createElement("style");
+      style.id = STYLE_ID;
+      style.textContent = CSS;
+      document.head.appendChild(style);
+    }
+    element = document.createElement("div");
+    element.id = ELEMENT_ID;
+    element.setAttribute("role", "status");
+    element.setAttribute("aria-live", "polite");
+    (document.body ?? document.documentElement).appendChild(element);
+    render();
+  };
+
+  const showTimer = setTimeout(show, SHOW_AFTER_MS);
+  const stuckTimer =
+    options.stuckAfterMs === undefined
+      ? undefined
+      : setTimeout(() => {
+          console.warn(
+            `patchwork: boot is stuck at "${progress.stage}" after ${options.stuckAfterMs}ms`,
+            progress
+          );
+          options.onStuck?.();
+          show();
+        }, options.stuckAfterMs);
+
+  return {
+    update(next) {
+      progress = next;
+      render();
+    },
+    done() {
+      if (finished) return;
+      finished = true;
+      clearTimeout(showTimer);
+      clearTimeout(stuckTimer);
+      element?.remove();
+      element = undefined;
+    },
+  };
+}
+
+function line(text: string, className?: string): HTMLParagraphElement {
+  const p = document.createElement("p");
+  if (className) p.className = className;
+  p.textContent = text;
+  return p;
+}
+
+function packagesText({ packages }: BootProgress): string | undefined {
+  if (!packages?.total || packages.loaded >= packages.total) return undefined;
+  const count = `Packages: ${packages.loaded} of ${packages.total}`;
+  return packages.latest ? `${count} (${packages.latest})` : count;
+}
+
+function readerText({ publicReader: reader }: BootProgress): string | undefined {
+  if (!reader || reader.phase === "ready") return undefined;
+  const count = (n: number) => n.toLocaleString();
+  switch (reader.phase) {
+    case "waiting":
+      return "Public documents: waiting for the sync server";
+    case "fetching":
+      return `Public documents: fetching ${count(reader.received)} keys`;
+    case "reading":
+      return `Public documents: reading ${count(reader.received)} keys`;
+    default: {
+      // A phase this build doesn't know, with its error if it has one.
+      const error = (reader as { error?: string }).error;
+      return `Public documents: ${reader.phase}${error ? ` (${error})` : ""}`;
+    }
+  }
+}
