@@ -13,7 +13,10 @@ import type {
  * waits for the id factory; `createDocOfDatatype2` uses it), and `handles`.
  */
 export type RepoLike = {
-  find<T>(id: AnyDocumentId): Promise<DocHandle<T>>;
+  find<T>(
+    id: AnyDocumentId,
+    options?: { signal?: AbortSignal }
+  ): Promise<DocHandle<T>>;
   findWithProgress<T>(id: AnyDocumentId): DocumentProgress<T>;
   create<T>(initialValue?: T): DocHandle<T>;
   create2<T>(initialValue?: T): Promise<DocHandle<T>>;
