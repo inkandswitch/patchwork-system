@@ -8,7 +8,6 @@ import {
   type DocumentId,
   type Repo,
 } from "@automerge/vanillajs/slim";
-import { openDocument } from "@inkandswitch/patchwork-elements";
 import {
   type AccountDoc,
   type DatatypeDescription,
@@ -87,47 +86,20 @@ export function createRouter({
   siteTitle,
   frameToolId,
 }: RouterParams): Router {
-  const route = async () => {
-    // The first call seeds the root view's tool/doc so it can mount; later
-    // calls reconcile the mounted view with the hash.
-    if (!rootElement.hasAttribute("tool-id")) {
-      const params = new URLSearchParams(location.hash.slice(1));
-      const frame = params.get("frame");
-      const toolId =
-        frame ??
-        accountDocHandle.doc().frameToolId ??
-        frameToolId ??
-        registeredFrameToolId();
-      if (!toolId) {
-        console.error("patchwork: no frame tool registered, nothing to mount");
-        return;
-      }
-      rootElement.setAttribute("tool-id", toolId);
-      rootElement.setAttribute(
-        "doc-url",
-        (frame && docParamToUrl(params.get("doc"))) || accountDocHandle.url
-      );
-      return;
-    }
+  const tabTitle = createTitle(repo, siteTitle);
+  // The frame the root shows when the hash names none, picked at the first
+  // route, so going Back past a `frame=` link puts it back.
+  let homeFrameToolId: string | undefined;
 
+  const route = async () => {
     const hash = window.location.hash.slice(1);
 
-    // Legacy big-patchwork link: normalize to `#doc=automerge:<docId>` and let
-    // routing re-run on the resulting hashchange.
-    const legacyDocId = BIG_PATCHWORK_HASH_REGEX.exec(hash)?.groups?.docId;
-    if (legacyDocId && isValidDocumentId(legacyDocId)) {
-      window.location.hash = serializeHashParams(
-        new URLSearchParams({
-          doc: stringifyAutomergeUrl({ documentId: legacyDocId as DocumentId }),
-        })
-      );
-      return;
-    }
-
-    // Bare automerge URL: /#automerge:<documentId>
-    if (isValidAutomergeUrl(hash as AutomergeUrl)) {
-      window.location.hash = "";
-      openDocument(rootElement, hash as AutomergeUrl);
+    // An older link shape is rewritten in place rather than pushed, so Back
+    // steps over it instead of landing on a link that rewrites itself forward
+    // again. The rewrite's hashchange routes the result.
+    const rewritten = canonicalHash(hash);
+    if (rewritten !== undefined) {
+      location.replace(`#${rewritten}`);
       return;
     }
 
@@ -135,32 +107,49 @@ export function createRouter({
     const docUrl = docParamToUrl(params.get("doc"));
     const frame = params.get("frame");
 
-    if (frame) {
-      const frameDocUrl = docUrl ?? accountDocHandle.url;
-      if (
-        rootElement.getAttribute("tool-id") !== frame ||
-        rootElement.getAttribute("doc-url") !== frameDocUrl
-      ) {
-        rootElement.setAttribute("tool-id", frame);
-        rootElement.setAttribute("doc-url", frameDocUrl);
-      }
+    homeFrameToolId ??=
+      accountDocHandle.doc().frameToolId ??
+      frameToolId ??
+      registeredFrameToolId();
+    const toolId = frame ?? homeFrameToolId;
+    if (!toolId) {
+      console.error("patchwork: no frame tool registered, nothing to mount");
+      return;
+    }
+    const frameDocUrl = (frame && docUrl) || accountDocHandle.url;
+
+    // The first call seeds the root view so it can mount; it's routed again
+    // once mounted, when the frame can hear which document to open.
+    const seeding = !rootElement.hasAttribute("tool-id");
+    if (
+      rootElement.getAttribute("tool-id") !== toolId ||
+      rootElement.getAttribute("doc-url") !== frameDocUrl
+    ) {
+      rootElement.setAttribute("tool-id", toolId);
+      rootElement.setAttribute("doc-url", frameDocUrl);
+    }
+    if (seeding) return;
+
+    // No document in the hash (Back to the bare site, say), so none is open.
+    // The frame clears its own selection on the same hashchange.
+    if (!docUrl) {
+      tabTitle.clear();
+      return;
     }
 
-    if (docUrl) {
-      rootElement.dispatchEvent(
-        new CustomEvent("patchwork:open-document", {
-          detail: {
-            url: docUrl,
-            toolId: params.get("tool"),
-            title: params.get("title"),
-            type: params.get("type"),
-          },
-        })
-      );
-    }
+    rootElement.dispatchEvent(
+      new CustomEvent("patchwork:open-document", {
+        detail: {
+          url: docUrl,
+          toolId: params.get("tool"),
+          title: params.get("title"),
+          type: params.get("type"),
+        },
+      })
+    );
   };
 
-  rootElement.addEventListener("patchwork:open-document", async (event) => {
+  rootElement.addEventListener("patchwork:open-document", (event) => {
     const { url, toolId, type, title } = event.detail as {
       url: AutomergeUrl;
       toolId?: string;
@@ -192,30 +181,117 @@ export function createRouter({
       else params.delete(key);
     }
     window.location.hash = serializeHashParams(params);
-
-    try {
-      const docHandle = await repo.find<{ "@patchwork"?: { type?: string } }>(
-        url
-      );
-      const doc = docHandle.doc();
-      const docType = type || doc?.["@patchwork"]?.type;
-      if (!docType) return;
-      const datatype =
-        await getRegistry<DatatypeDescription>("patchwork:datatype").load(
-          docType
-        );
-      if (!datatype) return;
-      const docTitle = (datatype.module as DatatypeImplementation).getTitle(
-        doc
-      );
-      if (docTitle) document.title = `${docTitle} | ${siteTitle}`;
-    } catch (e) {
-      console.error("Failed to update document title", e);
-    }
+    void tabTitle.follow(url, type);
   });
 
   window.addEventListener("hashchange", route);
   void route();
 
   return { route };
+}
+
+/**
+ * The `#doc=` form of an older link shape — a big-patchwork
+ * `<slug>--<documentId>` link, or a bare `automerge:<documentId>` URL — or
+ * undefined when `hash` is neither.
+ */
+function canonicalHash(hash: string): string | undefined {
+  const legacyDocId = BIG_PATCHWORK_HASH_REGEX.exec(hash)?.groups?.docId;
+  if (legacyDocId && isValidDocumentId(legacyDocId)) {
+    const doc = stringifyAutomergeUrl({
+      documentId: legacyDocId as DocumentId,
+    });
+    return serializeHashParams(new URLSearchParams({ doc }));
+  }
+  if (isValidAutomergeUrl(hash as AutomergeUrl)) {
+    return serializeHashParams(new URLSearchParams({ doc: hash }));
+  }
+  return undefined;
+}
+
+type TitledDoc = { "@patchwork"?: { type?: string } };
+
+/**
+ * The tab's title follows the open document: `"<doc title> | <site>"`, kept
+ * current as the doc changes (a rename), or just the site's title when no
+ * document is open, or the open one has no title (yet). Only the latest
+ * navigation writes it: a slow lookup for a document that's no longer open is
+ * dropped.
+ */
+function createTitle(repo: Repo, siteTitle: string) {
+  let following: { url: AutomergeUrl; type?: string | null } | undefined;
+  let stopFollowing: (() => void) | undefined;
+  let navigation = 0;
+
+  const show = (docTitle?: string) => {
+    const next = docTitle ? `${docTitle} | ${siteTitle}` : siteTitle;
+    if (document.title !== next) document.title = next;
+  };
+
+  const leave = () => {
+    navigation++;
+    stopFollowing?.();
+    stopFollowing = undefined;
+    following = undefined;
+  };
+
+  return {
+    clear() {
+      leave();
+      show();
+    },
+
+    async follow(url: AutomergeUrl, type?: string | null) {
+      // An open-document both bubbles here and comes back from the hashchange
+      // it causes; the second is the same navigation.
+      if (following?.url === url && following.type === type) return;
+      const previous = following;
+      leave();
+      following = { url, type };
+      const mine = navigation;
+      const isCurrent = () => mine === navigation;
+
+      // A tool switch or heads change keeps the title; another document
+      // doesn't get to keep the previous one's while it loads.
+      if (
+        !previous ||
+        parseAutomergeUrl(previous.url).documentId !==
+          parseAutomergeUrl(url).documentId
+      ) {
+        show();
+      }
+
+      try {
+        const handle = await repo.find<TitledDoc>(url);
+        if (!isCurrent()) return;
+        const docType = type || handle.doc()?.["@patchwork"]?.type;
+        const datatype = docType
+          ? await getRegistry<DatatypeDescription>("patchwork:datatype").load(
+              docType
+            )
+          : undefined;
+        if (!isCurrent()) return;
+        if (!datatype) {
+          show();
+          return;
+        }
+        const { getTitle } = datatype.module as DatatypeImplementation;
+        const update = () => {
+          try {
+            show(getTitle(handle.doc()));
+          } catch (error) {
+            console.error(`patchwork: couldn't read the title of ${url}`, error);
+          }
+        };
+        update();
+        handle.on("change", update);
+        stopFollowing = () => handle.off("change", update);
+      } catch (error) {
+        if (!isCurrent()) return;
+        // Forget it, so opening it again tries again.
+        following = undefined;
+        console.error(`patchwork: couldn't title ${url}`, error);
+      }
+    },
+  };
 }
