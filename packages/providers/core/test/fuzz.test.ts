@@ -36,6 +36,9 @@ const seeds = ONLY
 
 const scratch = getScratchRepo();
 const EVENTS = ["change", "heads-changed", "delete"] as const;
+// Peer traffic, heard from the stored document rather than a scratch one.
+const PEER = "ephemeral-message";
+const LISTENED = [...EVENTS, PEER] as const;
 const IDS = ["a", "b", "c", "d", "e"];
 
 const initial = (): Note => ({
@@ -162,10 +165,13 @@ describe("fuzz: handles across edits and swaps", () => {
         pool.map(({ handle }) => [
           handle,
           Object.fromEntries(
-            EVENTS.map((ev) => [ev, handle.listenerCount(ev)])
+            LISTENED.map((ev) => [ev, handle.listenerCount(ev)])
           ),
         ])
       );
+      const base = (b: H, ev: string): number =>
+        (baseline.get(b) as any)?.[ev] ?? 0;
+      let pings = 0;
 
       const view = mount(repo);
       let current = r.pick(pool);
@@ -214,7 +220,7 @@ describe("fuzz: handles across edits and swaps", () => {
           expect(h.doc(), `${where}\n  doc of ${h.url}`).toEqual(
             expected.doc()
           );
-          for (const ev of EVENTS) {
+          for (const ev of LISTENED) {
             const ours = recorders.filter(
               (x) => x.owner === t && x.event === ev
             );
@@ -229,13 +235,43 @@ describe("fuzz: handles across edits and swaps", () => {
               (t) =>
                 !t.detached && backingOf(t.h) === b && t.h.listenerCount(ev) > 0
             );
-            const base = (baseline.get(b) as any)?.[ev] ?? 0;
             expect(
               b.listenerCount(ev),
               `${where}\n  listeners for ${ev} on ${b.url}`
-            ).toBe(base + (forwarding ? 1 : 0));
+            ).toBe(base(b, ev) + (forwarding ? 1 : 0));
           }
         }
+        // Peer traffic comes from the stored document under a scratch one,
+        // and from each handle's backing otherwise: one forwarder per
+        // listening handle there, and none anywhere else.
+        const peersOf = (t: Tracked): H =>
+          current.descriptor.scratchUrl ? note : backingOf(t.h);
+        for (const b of new Set([note, ...seenBackings])) {
+          const forwarding = tracked.filter(
+            (t) =>
+              !t.detached && t.h.listenerCount(PEER) > 0 && peersOf(t) === b
+          ).length;
+          expect(
+            b.listenerCount(PEER),
+            `${where}\n  listeners for ${PEER} on ${b.url}`
+          ).toBe(base(b, PEER) + forwarding);
+        }
+        // A ping on that document reaches every listening handle still
+        // attached, once; one on any other document reaches none.
+        const ping = ++pings;
+        const peers = current.descriptor.scratchUrl ? note : current.handle;
+        const heard = recorders.map((x) => x.log.length);
+        peers._receiveInboundEphemeral("fuzz", ping);
+        for (const { handle } of pool) {
+          if (handle !== peers) handle._receiveInboundEphemeral("fuzz", -ping);
+        }
+        recorders.forEach((x, i) => {
+          const hears = x.event === PEER && !x.owner.detached;
+          expect(
+            x.log.slice(heard[i]),
+            `${where}\n  ${x.event} on ${x.owner.h.url} for ping ${ping}`
+          ).toEqual(hears ? [{ self: true, message: ping }] : []);
+        });
         expect(view.openLeases(), where).toBe(
           current.descriptor.scratchUrl ? 1 : 0
         );
@@ -291,7 +327,7 @@ describe("fuzz: handles across edits and swaps", () => {
           label = `change on bystander ${other.handle.url}`;
           other.handle.change((d: Note) => mutate(d, r));
         } else if (op === 5) {
-          const event = r.pick(EVENTS);
+          const event = r.pick(LISTENED);
           label = `listen for ${event} on ${t.h.url}`;
           const recorder: Recorder = {
             owner: t,
@@ -303,6 +339,7 @@ describe("fuzz: handles across edits and swaps", () => {
                 doc: structuredClone(p?.doc),
                 patches: p?.patches,
                 scopeReplaced: p?.scopeReplaced,
+                message: p?.message,
               }),
           };
           t.h.on(event, recorder.fn);
@@ -340,7 +377,7 @@ describe("fuzz: handles across edits and swaps", () => {
           recorders.forEach((x, i) => {
             const fresh = x.log.slice(lengths[i] ?? 0);
             const o = x.owner;
-            if (o.detached || x.event === "delete") {
+            if (o.detached || x.event === "delete" || x.event === PEER) {
               expect(fresh, label).toEqual([]);
               return;
             }
@@ -385,9 +422,9 @@ describe("fuzz: handles across edits and swaps", () => {
       await vi.waitFor(() => expect(view.openLeases()).toBe(0), {
         timeout: 2000,
       });
-      for (const b of seenBackings) {
-        for (const ev of EVENTS) {
-          expect(b.listenerCount(ev)).toBe((baseline.get(b) as any)?.[ev] ?? 0);
+      for (const b of new Set([note, ...seenBackings])) {
+        for (const ev of LISTENED) {
+          expect(b.listenerCount(ev), `${ev} on ${b.url}`).toBe(base(b, ev));
         }
       }
     });

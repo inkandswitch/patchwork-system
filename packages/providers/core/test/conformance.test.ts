@@ -3,7 +3,9 @@
 // its views') is in the presented document's id. Each case runs the same
 // script against a real `DocHandle` and against the overlay and compares what
 // a consumer can observe, in four worlds: an identity remap, a clone backing,
-// a backing that's been swapped in, and a scratch backing.
+// a backing that's been swapped in, and a scratch backing. Peer traffic is
+// the one exception: a scratch backing has no peers, so the overlay's are
+// the stored document's.
 import { next as A } from "@automerge/automerge";
 import {
   Repo,
@@ -53,6 +55,8 @@ type Pair = {
   note: DocHandle<Note>;
   /** The handle the overlay should behave like. */
   real: DocHandle<Note>;
+  /** The handle whose peer traffic the overlay's should be. */
+  peers: DocHandle<Note>;
   /** The overlay's handle for `note.url`. */
   over: DocHandle<Note>;
   /** Where `real` lives. */
@@ -73,13 +77,15 @@ function pairOver(
   note: DocHandle<Note>,
   real: DocHandle<Note>,
   over: DocHandle<Note>,
-  realRepo: Repo = repo
+  realRepo: Repo = repo,
+  peers: DocHandle<Note> = real
 ): Pair {
   return {
     repo,
     view,
     note,
     real,
+    peers,
     over,
     realRepo,
     presented: (url) => rebase(url, note.url),
@@ -154,7 +160,7 @@ const worlds: World[] = [
       const view = mount(repo);
       view.route(note.url, { url: note.url, scratchUrl: laid.url });
       const over = await view.overlay.find<Note>(note.url);
-      return pairOver(repo, view, note, laid, over, scratch);
+      return pairOver(repo, view, note, laid, over, scratch, note);
     },
   },
 ];
@@ -207,6 +213,10 @@ type Recorded = {
   before?: string[];
   after?: string[];
   data?: number[];
+  senderId?: string;
+  message?: unknown;
+  storageId?: string;
+  heads?: string[];
 };
 
 function record(h: H, events: string[]): Recorded[] {
@@ -222,6 +232,10 @@ function record(h: H, events: string[]): Recorded[] {
         before: p?.patchInfo && A.getHeads(p.patchInfo.before),
         after: p?.patchInfo && A.getHeads(p.patchInfo.after),
         data: p?.data && [...p.data],
+        senderId: p?.senderId,
+        message: p?.message,
+        storageId: p?.storageId,
+        heads: p?.heads,
       });
     });
   }
@@ -232,9 +246,12 @@ for (const world of worlds) {
   describe(`conformance: ${world.name}`, () => {
     let p: Pair;
     let old: UrlHeads;
+    // The same, on the handle with the overlay's peers.
+    let peersOld: UrlHeads;
     beforeEach(async () => {
       p = await world.setup();
       old = p.real.heads();
+      peersOld = p.peers.heads();
     });
     afterEach(unmountAll);
 
@@ -431,15 +448,51 @@ for (const world of worlds) {
     });
 
     it("emits outbound ephemeral messages the same way", () => {
-      const realLogs = family(p.real, old).map((h) =>
+      const realLogs = family(p.peers, peersOld).map((h) =>
         record(h, ["ephemeral-message-outbound"])
       );
       const overLogs = family(p.over, old).map((h) =>
         record(h, ["ephemeral-message-outbound"])
       );
       p.over.broadcast({ hello: 1 });
-      p.real.sub("nested").broadcast({ hello: 2 });
+      p.over.sub("nested", "x").broadcast({ hello: 2 });
+      p.peers.sub("nested").broadcast({ hello: 3 });
       expect(overLogs).toEqual(realLogs);
+      expect(realLogs[0]).toHaveLength(3);
+    });
+
+    it("hears inbound ephemeral messages and remote heads the same way", () => {
+      const events = ["ephemeral-message", "remote-heads"];
+      const realLogs = family(p.peers, peersOld).map((h) => record(h, events));
+      const overLogs = family(p.over, old).map((h) => record(h, events));
+      const peer = "peer-1" as Parameters<H["_receiveInboundEphemeral"]>[0];
+      p.peers._receiveInboundEphemeral(peer, { hello: 1 });
+      p.peers.sub("items", 0)._receiveInboundEphemeral(peer, { hello: 2 });
+      // As the repo's sync state tracker does: on the root handle alone.
+      p.peers.emit("remote-heads", {
+        storageId: "server" as never,
+        heads: p.peers.heads(),
+        timestamp: 1,
+      });
+      expect(overLogs).toEqual(realLogs);
+      expect(realLogs[0]).toHaveLength(3);
+      expect(realLogs[1]).toHaveLength(2);
+    });
+
+    it("answers sync info from the same document", () => {
+      // Heads only the peers' document has: a scratch one isn't caught up.
+      p.peers.change((d) => {
+        d.title = "since";
+      });
+      const storageId = "server" as Parameters<H["getSyncInfo"]>[0];
+      const info = { lastHeads: p.peers.heads(), lastSyncTimestamp: 1 };
+      const remote = p.peers.heads();
+      vi.spyOn(p.peers, "getSyncInfo").mockReturnValue(info);
+      vi.spyOn(p.peers, "getRemoteHeads").mockReturnValue(remote);
+      expect(p.over.getSyncInfo(storageId)).toBe(info);
+      expect(p.over.getRemoteHeads(storageId)).toBe(remote);
+      expect(p.over.isCaughtUpWith(storageId)).toBe(true);
+      expect(p.peers.isCaughtUpWith(storageId)).toBe(true);
     });
 
     it("tells every listening handle about a delete", async () => {

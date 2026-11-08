@@ -48,6 +48,15 @@ import type { RepoLike } from "./types.js";
  * (they were read off a view it backs), and then shows the scratch document
  * at those heads for as long as the descriptor names it.
  *
+ * A scratch document has no peers, so a view it backs sends and hears peer
+ * traffic through the stored document (`cloneUrl ?? url`) instead: its
+ * `broadcast`, `getSyncInfo`, `getRemoteHeads` and `isCaughtUpWith`, and its
+ * `ephemeral-message`, `ephemeral-message-outbound` and `remote-heads`
+ * events, are those of the realm repo's handle for that document, once it's
+ * found. Messages go as they are: peers on the stored document can't tell
+ * they came from a view of a computed one, and any position in them (a
+ * cursor, an index) is one in the scratch document.
+ *
  * While a view is backed by a scratch document, its overlay repo holds a
  * `repo:scratch-lease` subscription for that document's url, opened before it
  * finds the document and closed once nothing forwards to it (after a swap to
@@ -115,11 +124,15 @@ export class OverlayRepo implements RepoLike {
   >();
   // Live descriptor subscriptions, one per presented url.
   readonly #subscriptions = new Map<AutomergeUrl, () => void>();
-  // Applied backing per presented url; skips no-op re-emissions.
+  // Applied backing per presented url; skips no-op re-emissions. `stored` is
+  // the document a scratch backing stands for, whose peers it uses.
   readonly #backings = new Map<
     AutomergeUrl,
-    { repo: Repo; url: AutomergeUrl }
+    { repo: Repo; url: AutomergeUrl; stored?: DocumentId }
   >();
+  // Per presented url, the wait for a stored document that wasn't loaded yet;
+  // stopped when the backing moves on, or on dispose.
+  readonly #storedWaits = new Map<AutomergeUrl, AbortController>();
   // Held `repo:scratch-lease` per presented url backed by a scratch document.
   readonly #leases = new Map<AutomergeUrl, () => void>();
   // Leases taken for a backing that's still being looked up.
@@ -196,8 +209,7 @@ export class OverlayRepo implements RepoLike {
       const failure = self.#failures.get(presented);
       if (failure) return failure as QueryState<T>;
       const inner = self.#inner.get(presented) as
-        | DocumentProgress<T>
-        | undefined;
+        DocumentProgress<T> | undefined;
       if (!inner) return { state: "loading", sources: {} };
       const innerState = inner.peek();
       if (innerState.state !== "ready") return innerState;
@@ -236,7 +248,8 @@ export class OverlayRepo implements RepoLike {
         // a later retry's success reaches subscribers that were waiting. The
         // registry also lets a backing swap re-wire this subscriber onto the
         // new inner.
-        if (!self.#disposed) self.#registerProgressDispatcher(presented, dispatch);
+        if (!self.#disposed)
+          self.#registerProgressDispatcher(presented, dispatch);
         return () => {
           closed = true;
           self.#unregisterProgressDispatcher(presented, dispatch);
@@ -293,6 +306,8 @@ export class OverlayRepo implements RepoLike {
     }
     for (const stop of this.#recoveries.values()) stop();
     this.#recoveries.clear();
+    for (const wait of this.#storedWaits.values()) wait.abort();
+    this.#storedWaits.clear();
     for (const unsubscribe of this.#subscriptions.values()) unsubscribe();
     this.#subscriptions.clear();
     for (const dispatchers of this.#progressDispatchers.values()) {
@@ -366,8 +381,19 @@ export class OverlayRepo implements RepoLike {
           documentId: scratchId ?? parsedBacking.documentId,
           heads: pinned,
         });
+        const storedId = scratchId ? parsedBacking.documentId : undefined;
         const applied = this.#backings.get(presented);
-        if (applied?.repo === repo && applied.url === backingUrl) return;
+        if (applied?.repo === repo && applied.url === backingUrl) {
+          // The same scratch document can stand for another stored one (a new
+          // `cloneUrl`), and its peer traffic goes with that.
+          if (applied.stored !== storedId) {
+            applied.stored = storedId;
+            this.#wrapped
+              .get(presented)
+              ?.setSyncHandle(this.#routeSync(presented, applied));
+          }
+          return;
+        }
 
         // Held from before the find, so nothing lets go of the document
         // between this answer arriving and the backing being in use.
@@ -406,7 +432,8 @@ export class OverlayRepo implements RepoLike {
           return;
         }
 
-        this.#backings.set(presented, { repo, url: backingUrl });
+        const appliedNow = { repo, url: backingUrl, stored: storedId };
+        this.#backings.set(presented, appliedNow);
         this.#failures.delete(presented);
         this.#setInner(presented, inner as DocumentProgress<unknown>);
         // The previous lease goes only once nothing forwards to its
@@ -415,15 +442,17 @@ export class OverlayRepo implements RepoLike {
         if (lease) this.#leases.set(presented, lease);
         else this.#leases.delete(presented);
 
+        const sync = this.#routeSync(presented, appliedNow);
+
         const wrapped = this.#wrapped.get(presented) as
-          | OverlayHandle<T>
-          | undefined;
+          OverlayHandle<T> | undefined;
         if (wrapped) {
-          wrapped.swapBackingDocHandle(backing);
+          wrapped.swapBackingDocHandle(backing, sync);
         } else {
           const created = new OverlayHandle<T>({
             presentedUrl: presented,
             backing,
+            sync,
           });
           this.#wrapped.set(presented, created as OverlayHandle<unknown>);
           this.#rejecters.delete(presented);
@@ -472,7 +501,8 @@ export class OverlayRepo implements RepoLike {
         this.#notifyProgress(presented);
         this.#subscriptions.get(presented)?.();
         this.#subscriptions.delete(presented);
-        if (failedInner && !this.#disposed) this.#watchForRecovery(presented, failedInner);
+        if (failedInner && !this.#disposed)
+          this.#watchForRecovery(presented, failedInner);
       }
     });
 
@@ -502,6 +532,45 @@ export class OverlayRepo implements RepoLike {
     };
     if (!(await has(getScratchRepo(), scratchId))) return undefined;
     return (await has(this.baseRepo, storedId)) ? undefined : scratchId;
+  }
+
+  // Where a scratch-backed view's peer traffic goes: the realm repo's handle
+  // for the stored document `applied` stands for. That's almost always loaded
+  // already (it's what the scratch one was made from), so it's returned to be
+  // routed with the swap; if not, it's routed once it's found, unless the
+  // backing has moved on by then. Undefined leaves peer traffic on the
+  // backing. Stops the wait an earlier backing left.
+  #routeSync(
+    presented: AutomergeUrl,
+    applied: { stored?: DocumentId }
+  ): DocHandle<unknown> | undefined {
+    this.#storedWaits.get(presented)?.abort();
+    this.#storedWaits.delete(presented);
+    const storedId = applied.stored;
+    if (!storedId) return undefined;
+    const stored = this.baseRepo.findWithProgress(
+      stringifyAutomergeUrl({ documentId: storedId })
+    );
+    const state = stored.peek();
+    if (state.state === "ready") return state.handle;
+    const wait = new AbortController();
+    this.#storedWaits.set(presented, wait);
+    const done = () => {
+      if (this.#storedWaits.get(presented) === wait) {
+        this.#storedWaits.delete(presented);
+      }
+    };
+    stored.whenReady({ signal: wait.signal }).then(
+      (handle) => {
+        done();
+        if (this.#backings.get(presented) !== applied) return;
+        if (applied.stored !== storedId) return;
+        this.#wrapped.get(presented)?.setSyncHandle(handle);
+      },
+      // Not found, or stopped: peer traffic stays where it is.
+      done
+    );
+    return undefined;
   }
 
   // Attach a progress subscriber to the current inner (if any), keeping its
