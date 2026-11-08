@@ -62,14 +62,6 @@ export type DocHandleDescriptor = {
   scratchUrl?: AutomergeUrl;
 };
 
-export type OverlayRepoOptions = {
-  /**
-   * Where `scratchUrl` backings are found. Defaults to the realm's
-   * {@link getScratchRepo}.
-   */
-  scratchRepo?: Repo;
-};
-
 // The only members whose behavior an overlay repo changes; everything else
 // (create/create2/clone/delete, the EventEmitter surface, ...) forwards to the
 // realm-local base repo.
@@ -91,8 +83,8 @@ const OVERLAY_REPO_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
  * `find`/`findWithProgress` open a persistent `repo:handle-descriptor`
  * subscription for the requested url and resolve the returned
  * `cloneUrl ?? url` against the realm-local `baseRepo` (or `scratchUrl`
- * against the scratch repo), then hand back an
- * {@link OverlayHandle} that keeps reporting the *original* url. Follow-up
+ * against {@link getScratchRepo}), then hand back an {@link OverlayHandle}
+ * that keeps reporting the *original* url. Follow-up
  * descriptor emissions re-point the live wrapper via `swapBackingDocHandle`.
  * Every other method (`create`, `create2`, `clone`, `delete`, the
  * EventEmitter surface, ...) forwards to `baseRepo` unchanged — created docs
@@ -115,13 +107,13 @@ export class OverlayRepo implements RepoLike {
   >();
   // Live descriptor subscriptions, one per presented url.
   readonly #subscriptions = new Map<AutomergeUrl, () => void>();
-  // Applied backing per presented url (its url, marked when it's in the
-  // scratch repo); skips no-op re-emissions.
-  readonly #backingUrls = new Map<AutomergeUrl, string>();
-  // The `repo:scratch-lease` held for each presented url backed by a scratch
-  // document.
+  // Applied backing per presented url; skips no-op re-emissions.
+  readonly #backings = new Map<
+    AutomergeUrl,
+    { repo: Repo; url: AutomergeUrl }
+  >();
+  // Held `repo:scratch-lease` per presented url backed by a scratch document.
   readonly #leases = new Map<AutomergeUrl, () => void>();
-  readonly #scratchRepo: Repo | undefined;
   // Progress subscribers per presented url, mapped to their unsubscribe from
   // the current inner; re-wired on swap.
   readonly #progressDispatchers = new Map<
@@ -130,14 +122,9 @@ export class OverlayRepo implements RepoLike {
   >();
   #disposed = false;
 
-  constructor(
-    baseRepo: Repo,
-    element: HTMLElement,
-    options: OverlayRepoOptions = {}
-  ) {
+  constructor(baseRepo: Repo, element: HTMLElement) {
     this.baseRepo = baseRepo;
     this.#element = element;
-    this.#scratchRepo = options.scratchRepo;
     return forwardingProxy<OverlayRepo>(this, baseRepo, OVERLAY_REPO_OWNED);
   }
 
@@ -291,7 +278,7 @@ export class OverlayRepo implements RepoLike {
     this.#leases.clear();
     this.#inner.clear();
     this.#resolving.clear();
-    this.#backingUrls.clear();
+    this.#backings.clear();
   }
 
   // De-dupes concurrent resolutions: the first caller opens the persistent
@@ -330,13 +317,14 @@ export class OverlayRepo implements RepoLike {
           descriptor.scratchUrl && !pinned
             ? parseAutomergeUrl(descriptor.scratchUrl).documentId
             : undefined;
+        const repo = scratchId ? getScratchRepo() : this.baseRepo;
         const backingUrl = stringifyAutomergeUrl({
           documentId: scratchId ?? parsedBacking.documentId,
           segments,
           heads: pinned,
         });
-        const backingKey = scratchId ? `scratch:${backingUrl}` : backingUrl;
-        if (this.#backingUrls.get(presented) === backingKey) return;
+        const applied = this.#backings.get(presented);
+        if (applied?.repo === repo && applied.url === backingUrl) return;
 
         // Held from before the find, so the remapper never sees a gap between
         // answering and the backing being in use.
@@ -350,42 +338,42 @@ export class OverlayRepo implements RepoLike {
               () => {}
             )
           : undefined;
-        let committed = false;
+        let inner: DocumentProgress<T>;
+        let backing: DocHandle<T>;
         try {
-          const repo = scratchId
-            ? (this.#scratchRepo ?? getScratchRepo())
-            : this.baseRepo;
-          const inner = repo.findWithProgress<T>(backingUrl);
-          const backing = await repo.find<T>(backingUrl);
-          if (mySeq !== seq || this.#disposed) return;
-          committed = true;
+          inner = repo.findWithProgress<T>(backingUrl);
+          backing = await repo.find<T>(backingUrl);
+        } catch (err) {
+          lease?.();
+          throw err;
+        }
+        if (mySeq !== seq || this.#disposed) {
+          lease?.();
+          return;
+        }
 
-          this.#backingUrls.set(presented, backingKey);
-          this.#setInner(presented, inner as DocumentProgress<unknown>);
-          // The previous lease goes only once nothing forwards to its
-          // document, so the remapper deleting it can't reach consumers.
-          const previous = this.#leases.get(presented);
-          if (lease) this.#leases.set(presented, lease);
-          else this.#leases.delete(presented);
+        this.#backings.set(presented, { repo, url: backingUrl });
+        this.#setInner(presented, inner as DocumentProgress<unknown>);
+        // The previous lease goes only once nothing forwards to its
+        // document, so the remapper deleting it can't reach consumers.
+        const previous = this.#leases.get(presented);
+        if (lease) this.#leases.set(presented, lease);
+        else this.#leases.delete(presented);
 
-          const wrapped = this.#wrapped.get(presented) as
-            | OverlayHandle<T>
-            | undefined;
-          if (wrapped) {
-            wrapped.swapBackingDocHandle(backing);
-            previous?.();
-            return;
-          }
-          previous?.();
+        const wrapped = this.#wrapped.get(presented) as
+          | OverlayHandle<T>
+          | undefined;
+        if (wrapped) {
+          wrapped.swapBackingDocHandle(backing);
+        } else {
           const created = new OverlayHandle<T>({
             presentedUrl: presented,
             backing,
           });
           this.#wrapped.set(presented, created as OverlayHandle<unknown>);
           resolve(created);
-        } finally {
-          if (!committed) lease?.();
         }
+        previous?.();
       };
 
       const unsubscribe = subscribe<DocHandleDescriptor>(

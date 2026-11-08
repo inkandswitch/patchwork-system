@@ -17,14 +17,13 @@ import {
 
 type Note = { title: string };
 
+const scratch = getScratchRepo();
 let repo: Repo;
-let scratch: Repo;
 let note: DocHandle<Note>;
 const teardowns: (() => void)[] = [];
 
 beforeEach(() => {
   repo = new Repo();
-  scratch = new Repo();
   note = repo.create<Note>({ title: "note" });
 });
 
@@ -33,16 +32,18 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-// A fork of `of` made in `into`, the way a remapper computing a view would.
-function forkInto<T>(into: Repo, of: DocHandle<T>): DocHandle<T> {
-  const fork = into.create<T>();
-  fork.update(() => A.clone(of.doc()));
-  return fork;
+// A fork of `note` in the scratch repo, the way a remapper computing a view
+// would make one.
+function fork(): DocHandle<Note> {
+  const handle = scratch.create<Note>();
+  handle.update(() => A.clone(note.doc()));
+  return handle;
 }
 
 // remapper > consumer. The remapper answers `note`'s descriptor with whatever
-// it was last told to, and claims every scratch lease, counting them.
-function mount(options: { scratchRepo?: Repo } = { scratchRepo: scratch }) {
+// it was last told to, and claims every scratch lease, logging each hold and
+// release.
+function mount({ onRelease }: { onRelease?: (url: AutomergeUrl) => void } = {}) {
   const remapperEl = document.createElement("div");
   const consumer = document.createElement("div");
   remapperEl.append(consumer);
@@ -50,9 +51,8 @@ function mount(options: { scratchRepo?: Repo } = { scratchRepo: scratch }) {
 
   let current: DocHandleDescriptor = { url: note.url };
   const responders = new Set<(d: DocHandleDescriptor) => void>();
-  const held = new Map<AutomergeUrl, number>();
   const log: string[] = [];
-  const released: ((url: AutomergeUrl) => void)[] = [];
+  const count = (entry: string) => log.filter((e) => e === entry).length;
 
   remapperEl.addEventListener("patchwork:subscribe", (event: SubscribeEvent) => {
     const { selector } = event.detail;
@@ -65,41 +65,36 @@ function mount(options: { scratchRepo?: Repo } = { scratchRepo: scratch }) {
     } else if (selector.type === "repo:scratch-lease") {
       const url = selector.url as AutomergeUrl;
       accept(event, () => {
-        held.set(url, (held.get(url) ?? 0) + 1);
         log.push(`hold ${url}`);
         return () => {
-          held.set(url, held.get(url)! - 1);
           log.push(`release ${url}`);
-          for (const fn of released) fn(url);
+          onRelease?.(url);
         };
       });
     }
   });
 
-  const overlay = new OverlayRepo(repo, consumer, options);
+  const overlay = new OverlayRepo(repo, consumer);
   teardowns.push(() => overlay.dispose());
   return {
     overlay,
     log,
-    leases: (url: AutomergeUrl) => held.get(url) ?? 0,
+    leases: (url: AutomergeUrl) => count(`hold ${url}`) - count(`release ${url}`),
     answer(descriptor: DocHandleDescriptor) {
       current = descriptor;
       for (const respond of responders) respond(descriptor);
-    },
-    onRelease(fn: (url: AutomergeUrl) => void) {
-      released.push(fn);
     },
   };
 }
 
 describe("scratch backings", () => {
   it("finds a scratch backing in the scratch repo, under the original url", async () => {
-    const fork = forkInto(scratch, note);
-    fork.change((d) => {
+    const scratchDoc = fork();
+    scratchDoc.change((d) => {
       d.title = "laid";
     });
     const view = mount();
-    view.answer({ url: note.url, scratchUrl: fork.url });
+    view.answer({ url: note.url, scratchUrl: scratchDoc.url });
 
     const handle = await view.overlay.find<Note>(note.url);
     expect(handle.url).toBe(note.url);
@@ -108,20 +103,20 @@ describe("scratch backings", () => {
     handle.change((d) => {
       d.title = "edited";
     });
-    expect(fork.doc().title).toBe("edited");
+    expect(scratchDoc.doc().title).toBe("edited");
     expect(note.doc().title).toBe("note");
-    expect(repo.handles[fork.documentId]).toBeUndefined();
+    expect(repo.handles[scratchDoc.documentId]).toBeUndefined();
   });
 
   it("holds a lease on the scratch document while it backs the view", async () => {
-    const fork = forkInto(scratch, note);
+    const scratchDoc = fork();
     const view = mount();
-    view.answer({ url: note.url, scratchUrl: fork.url });
+    view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     const handle = await view.overlay.find<Note>(note.url);
-    await vi.waitFor(() => expect(view.leases(fork.url)).toBe(1));
+    expect(view.leases(scratchDoc.url)).toBe(1);
 
     view.answer({ url: note.url });
-    await vi.waitFor(() => expect(view.leases(fork.url)).toBe(0));
+    await vi.waitFor(() => expect(view.leases(scratchDoc.url)).toBe(0));
     note.change((d) => {
       d.title = "live";
     });
@@ -129,8 +124,8 @@ describe("scratch backings", () => {
   });
 
   it("takes the new lease before letting the old one go", async () => {
-    const first = forkInto(scratch, note);
-    const second = forkInto(scratch, note);
+    const first = fork();
+    const second = fork();
     second.change((d) => {
       d.title = "second";
     });
@@ -148,30 +143,29 @@ describe("scratch backings", () => {
   });
 
   it("doesn't tell the view about a released scratch document being deleted", async () => {
-    const first = forkInto(scratch, note);
-    const view = mount();
-    view.onRelease((url) => scratch.delete(url));
-    view.answer({ url: note.url, scratchUrl: first.url });
+    const scratchDoc = fork();
+    const view = mount({ onRelease: (url) => scratch.delete(url) });
+    view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     const handle = await view.overlay.find<Note>(note.url);
     const deleted = vi.fn();
     handle.on("delete", deleted);
 
     view.answer({ url: note.url });
-    await vi.waitFor(() => expect(view.leases(first.url)).toBe(0));
+    await vi.waitFor(() => expect(view.leases(scratchDoc.url)).toBe(0));
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(deleted).not.toHaveBeenCalled();
     expect(handle.doc().title).toBe("note");
   });
 
   it("lets its leases go on dispose", async () => {
-    const fork = forkInto(scratch, note);
+    const scratchDoc = fork();
     const view = mount();
-    view.answer({ url: note.url, scratchUrl: fork.url });
+    view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     await view.overlay.find<Note>(note.url);
-    await vi.waitFor(() => expect(view.leases(fork.url)).toBe(1));
+    expect(view.leases(scratchDoc.url)).toBe(1);
 
     view.overlay.dispose();
-    await vi.waitFor(() => expect(view.leases(fork.url)).toBe(0));
+    await vi.waitFor(() => expect(view.leases(scratchDoc.url)).toBe(0));
   });
 
   it("holds no lease for a backing in the realm repo", async () => {
@@ -179,7 +173,6 @@ describe("scratch backings", () => {
     const view = mount();
     view.answer({ url: note.url, cloneUrl: clone.url });
     await view.overlay.find<Note>(note.url);
-    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(view.log).toEqual([]);
   });
 
@@ -218,22 +211,9 @@ describe("scratch backings", () => {
     });
     const handle = await view.overlay.find<Note>(note.url);
     expect(handle.doc().title).toBe("note");
-    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(view.log).toEqual([]);
 
     view.answer({ url: note.url, cloneUrl: clone.url, scratchUrl: computed.url });
     await vi.waitFor(() => expect(handle.doc().title).toBe("laid"));
-  });
-
-  it("defaults to the realm's scratch repo", async () => {
-    expect(getScratchRepo()).toBe(getScratchRepo());
-    const fork = forkInto(getScratchRepo(), note);
-    fork.change((d) => {
-      d.title = "laid";
-    });
-    const view = mount({});
-    view.answer({ url: note.url, scratchUrl: fork.url });
-    const handle = await view.overlay.find<Note>(note.url);
-    expect(handle.doc().title).toBe("laid");
   });
 });
