@@ -6,6 +6,7 @@ body {
   height: 100%;
   height: 100vh;
   height: 100dvh;
+  margin: 0;
 
   @media all and (display-mode: standalone) {
     height: 100lvh;
