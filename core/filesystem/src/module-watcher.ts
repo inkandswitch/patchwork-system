@@ -137,6 +137,10 @@ export class ModuleWatcher {
   #announceGenerations = new Map<string, number>();
   #retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #lastAnnounced = new Map<string, string>();
+  // The url each module was last handed to `onLoad` from. A branches doc's
+  // default branch is a different document from the settings entry, so this is
+  // what an unload has to name for its plugins to be found.
+  #loadedUrls = new Map<string, string>();
   #activeModules = new Set<string>();
   #disposed = false;
 
@@ -147,7 +151,13 @@ export class ModuleWatcher {
    * when it goes away.
    */
   onLoad: (name: string, mod: any, moduleKey: string) => void;
-  onUnload?: (name: string) => void;
+  /**
+   * Told a module's stable identity, and the url it was last loaded from,
+   * when it goes away: either because it left the settings, or because a
+   * reload came from a different document than the last load did (a branches
+   * doc's default branch moved), whose plugins the new load won't replace.
+   */
+  onUnload?: (moduleKey: string, importUrl: string) => void;
   /** Told every module the settings list, whenever it (re)reads them. */
   onModules?: (modules: string[]) => void;
   /**
@@ -167,7 +177,7 @@ export class ModuleWatcher {
     repo: Repo,
     urls: Record<string, string>,
     callback: (name: string, mod: any, moduleKey: string) => void,
-    onUnload?: (name: string) => void,
+    onUnload?: (moduleKey: string, importUrl: string) => void,
     importAutomergePackage: (urlAtHeads: string) => Promise<any> = (url) =>
       importPackageFromFolderDocUrl(url as AutomergeUrl),
     tracker: PackageTracker = trackPackagesInRepo(repo)
@@ -329,6 +339,8 @@ export class ModuleWatcher {
       if (!current()) return;
       if (mod) {
         this.#lastAnnounced.set(moduleKey, versionKey);
+        this.unloadIfDocumentChanged(moduleKey, importUrl);
+        this.#loadedUrls.set(moduleKey, importUrl);
         return this.onLoad(importUrl, mod, moduleKey);
       }
       const delay = RETRY_DELAYS_MS[attemptIndex];
@@ -477,6 +489,23 @@ export class ModuleWatcher {
     );
   }
 
+  /**
+   * A reload from another document than the last load's (a branches doc's
+   * default branch was pointed elsewhere) leaves the old document's plugins
+   * registered, since registering only replaces what the same document made.
+   */
+  private unloadIfDocumentChanged(moduleKey: string, importUrl: string) {
+    const previous = this.#loadedUrls.get(moduleKey);
+    if (
+      previous &&
+      isValidAutomergeUrl(previous) &&
+      isValidAutomergeUrl(importUrl) &&
+      stripHeads(previous) !== stripHeads(importUrl)
+    ) {
+      this.onUnload?.(moduleKey, previous);
+    }
+  }
+
   private detachDocWatcher(importName: string) {
     const watched = this.#watchedModules.get(importName);
     if (!watched) return;
@@ -501,7 +530,9 @@ export class ModuleWatcher {
     this.detachDocWatcher(entry);
     this.cancelAnnounce(entry);
     this.#lastAnnounced.delete(entry);
-    this.onUnload?.(entry);
+    const loadedUrl = this.#loadedUrls.get(entry) ?? entry;
+    this.#loadedUrls.delete(entry);
+    this.onUnload?.(entry, loadedUrl);
   }
 
   dispose() {
