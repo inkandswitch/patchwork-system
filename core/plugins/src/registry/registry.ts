@@ -76,22 +76,23 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
    * which ships with the `patchwork-frame` bundle).
    */
   async loadWhenReady(id: string): Promise<LoadedPlugin<D, I>> {
-    const immediate = await this.load(id);
-    if (immediate) return immediate;
-    return new Promise<LoadedPlugin<D, I>>((resolve, reject) => {
-      const off = this.on("registered", async (plugin) => {
+    for (;;) {
+      const loaded = await this.load(id);
+      if (loaded) return loaded;
+      // `load` also gives up when the plugin was re-registered mid-load, and
+      // that registration has already fired. The new one is loadable now.
+      if (this.has(id)) continue;
+      await this.#registered(id);
+    }
+  }
+
+  /** Resolves on the next registration of `id`, and stops listening then. */
+  #registered(id: string): Promise<void> {
+    return new Promise((resolve) => {
+      const off = this.on("registered", (plugin) => {
         if (plugin.id !== id) return;
         off();
-        try {
-          const loaded = await this.load(id);
-          if (!loaded) {
-            reject(new Error(`Plugin "${id}" registered but failed to load`));
-            return;
-          }
-          resolve(loaded);
-        } catch (error) {
-          reject(error);
-        }
+        resolve();
       });
     });
   }
