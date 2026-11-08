@@ -96,9 +96,10 @@ const OVERLAY_REPO_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
 export class OverlayRepo implements RepoLike {
   readonly baseRepo: Repo;
   readonly #element: HTMLElement;
-  // Keyed by the *presented* url (documentId + path + heads), not just the
-  // documentId, so distinct sub-document paths under the same root document
-  // don't collide.
+  // Keyed by the presented url's *root*: its documentId and any pinned heads,
+  // never a path. A url with a path is that root's `sub(...)`, so it shares
+  // the root's descriptor subscription, swaps with it, and is the same
+  // wrapper as the root's own `sub` of that path, as in the real repo.
   readonly #wrapped = new Map<AutomergeUrl, OverlayHandle<unknown>>();
   readonly #inner = new Map<AutomergeUrl, DocumentProgress<unknown>>();
   readonly #resolving = new Map<
@@ -127,6 +128,10 @@ export class OverlayRepo implements RepoLike {
   readonly #failures = new Map<AutomergeUrl, QueryState<unknown>>();
   // Rejects each still-pending resolution; settles it on dispose.
   readonly #rejecters = new Map<AutomergeUrl, (err: Error) => void>();
+  // After a failed resolution, a watch on the backing it was waiting for: the
+  // real repo's query goes `ready` by itself when the document turns up, so
+  // the overlay retries then rather than waiting for someone to ask again.
+  readonly #recoveries = new Map<AutomergeUrl, () => void>();
   #disposed = false;
 
   constructor(baseRepo: Repo, element: HTMLElement) {
@@ -137,23 +142,28 @@ export class OverlayRepo implements RepoLike {
 
   // Only already-wrapped handles are exposed; unknown ids fall through to
   // `find`/`findWithProgress` so consumers never see an un-wrapped handle.
-  // `#wrapped` is keyed by presented url, so derive the documentId from each
-  // handle; sub-handles of the same root collapse onto a single entry (the
-  // `Record<DocumentId, ...>` shape can't represent paths).
+  // Like the real repo's, these are root handles: never a sub-handle or a
+  // view pinned to heads.
   get handles(): Record<DocumentId, DocHandle<unknown>> {
     const out = {} as Record<DocumentId, DocHandle<unknown>>;
-    for (const wrapped of this.#wrapped.values()) {
+    for (const [root, wrapped] of this.#wrapped) {
+      if (parseAutomergeUrl(root).heads) continue;
       out[wrapped.documentId] = wrapped as unknown as DocHandle<unknown>;
     }
     return out;
   }
 
-  async find<T>(id: AnyDocumentId): Promise<DocHandle<T>> {
-    const presented = presentedUrlOf(id);
-    const cached = this.#wrapped.get(presented);
-    if (cached) return cached as unknown as DocHandle<T>;
-    const wrapped = await this.#resolve<T>(presented);
-    return wrapped as unknown as DocHandle<T>;
+  // `signal` cancels the wait, not the resolution, as in the real repo.
+  async find<T>(
+    id: AnyDocumentId,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<DocHandle<T>> {
+    const { signal } = options;
+    signal?.throwIfAborted();
+    const { root, segments } = splitUrl(presentedUrlOf(id));
+    const wrapped =
+      this.#wrapped.get(root) ?? (await abortable(this.#resolve(root), signal));
+    return scope(wrapped, segments) as DocHandle<T>;
   }
 
   // Mirrors the realm-local repo's progress but reports `loading` until the
@@ -161,14 +171,19 @@ export class OverlayRepo implements RepoLike {
   // consumers would briefly observe the un-wrapped (un-remapped) handle.
   findWithProgress<T>(id: AnyDocumentId): DocumentProgress<T> {
     const self = this;
-    const presented = presentedUrlOf(id);
-    // The reported `documentId` is the root id — `DocumentId` can't encode a
-    // path — but caches are keyed by the full presented url.
+    // Readiness is the root's; a path only scopes the ready handle, as the
+    // real repo's `progressAtPath` does.
+    const { root: presented, segments } = splitUrl(presentedUrlOf(id));
     const documentId = parseAutomergeUrl(presented).documentId;
-    const wrappedPromise = this.#resolve<T>(presented);
-    wrappedPromise.catch(() => {});
+    this.#resolve<T>(presented).catch(() => {});
 
     const peek = (): QueryState<T> => {
+      const state = peekRoot();
+      return state.state === "ready"
+        ? { ...state, handle: scope(state.handle, segments) as DocHandle<T> }
+        : state;
+    };
+    const peekRoot = (): QueryState<T> => {
       const failure = self.#failures.get(presented);
       if (failure) return failure as QueryState<T>;
       const inner = self.#inner.get(presented) as
@@ -218,26 +233,15 @@ export class OverlayRepo implements RepoLike {
           self.#unregisterProgressDispatcher(presented, dispatch);
         };
       },
+      // Read from the current state, not the first resolution's promise: a
+      // progress that failed and has since recovered is ready now.
       whenReady: ({ signal } = {}) => {
-        const handlePromise = wrappedPromise as unknown as Promise<
-          DocHandle<T>
-        >;
         if (signal?.aborted) return Promise.reject(signal.reason);
-        if (!signal) return handlePromise;
-        return new Promise<DocHandle<T>>((resolve, reject) => {
-          const onAbort = () => reject(signal.reason);
-          signal.addEventListener("abort", onAbort, { once: true });
-          handlePromise.then(
-            (handle) => {
-              signal.removeEventListener("abort", onAbort);
-              resolve(handle);
-            },
-            (err) => {
-              signal.removeEventListener("abort", onAbort);
-              reject(err);
-            }
-          );
-        });
+        const state = peek();
+        if (state.state === "ready") return Promise.resolve(state.handle);
+        return abortable(self.#resolve<T>(presented), signal).then(
+          (wrapped) => scope(wrapped, segments) as DocHandle<T>
+        );
       },
       // Deprecated; kept for pre-`peek()` consumers.
       get state() {
@@ -278,6 +282,8 @@ export class OverlayRepo implements RepoLike {
     for (const presented of [...this.#progressDispatchers.keys()]) {
       this.#notifyProgress(presented);
     }
+    for (const stop of this.#recoveries.values()) stop();
+    this.#recoveries.clear();
     for (const unsubscribe of this.#subscriptions.values()) unsubscribe();
     this.#subscriptions.clear();
     for (const dispatchers of this.#progressDispatchers.values()) {
@@ -310,17 +316,21 @@ export class OverlayRepo implements RepoLike {
     }
     // A retry starts from `loading`, as the repo's query does when a source
     // goes pending again.
+    this.#recoveries.get(presented)?.();
+    this.#recoveries.delete(presented);
     if (this.#failures.delete(presented)) this.#notifyProgress(presented);
 
     // The descriptor channel remaps whole documents, so ask about the root
-    // and reapply the original path/heads onto whatever clone comes back.
-    // The clone is a fork of the root, so the same sub-tree exists in it.
-    const { documentId, segments, heads } = parseAutomergeUrl(presented);
+    // and reapply the original heads onto whatever clone comes back. Paths
+    // are applied by the wrapper's `sub`, never here (see `#wrapped`).
+    const { documentId, heads } = parseAutomergeUrl(presented);
     const rootUrl = stringifyAutomergeUrl({ documentId });
 
     // Set by a failed `apply`: the inner's own `unavailable`/`failed` state
-    // when it has one, since that is what the repo would have reported.
+    // when it has one, since that is what the repo would have reported, and
+    // the inner itself, to watch for the document turning up.
     let failure: QueryState<unknown> | undefined;
+    let failedInner: DocumentProgress<unknown> | undefined;
 
     const promise = new Promise<OverlayHandle<T>>((resolve, reject) => {
       this.#rejecters.set(presented, reject);
@@ -343,7 +353,6 @@ export class OverlayRepo implements RepoLike {
         const repo = scratchId ? getScratchRepo() : this.baseRepo;
         const backingUrl = stringifyAutomergeUrl({
           documentId: scratchId ?? parsedBacking.documentId,
-          segments,
           heads: pinned,
         });
         const applied = this.#backings.get(presented);
@@ -368,10 +377,14 @@ export class OverlayRepo implements RepoLike {
           backing = await repo.find<T>(backingUrl);
         } catch (err) {
           lease?.();
+          // A newer descriptor has taken over; its outcome is the one that
+          // counts, so this one mustn't fail the resolution under it.
+          if (mySeq !== seq) return;
           failure = failureOf(
             inner as DocumentProgress<unknown> | undefined,
             err
           );
+          failedInner = inner as DocumentProgress<unknown> | undefined;
           throw err;
         }
         if (mySeq !== seq || this.#disposed) {
@@ -445,6 +458,7 @@ export class OverlayRepo implements RepoLike {
         this.#notifyProgress(presented);
         this.#subscriptions.get(presented)?.();
         this.#subscriptions.delete(presented);
+        if (failedInner && !this.#disposed) this.#watchForRecovery(presented, failedInner);
       }
     });
 
@@ -476,6 +490,26 @@ export class OverlayRepo implements RepoLike {
     dispatchers.get(dispatch)?.();
     dispatchers.delete(dispatch);
     if (dispatchers.size === 0) this.#progressDispatchers.delete(presented);
+  }
+
+  // Retry `presented` once the backing its failed resolution waited for goes
+  // `ready` (an unavailable document arriving later), unless something else
+  // has retried it first.
+  #watchForRecovery(
+    presented: AutomergeUrl,
+    inner: DocumentProgress<unknown>
+  ): void {
+    const retry = () => {
+      stop();
+      if (this.#recoveries.get(presented) !== stop) return;
+      this.#recoveries.delete(presented);
+      this.#resolve(presented).catch(() => {});
+    };
+    const stop = inner.subscribe((state) => {
+      if (state.state === "ready") retry();
+    });
+    this.#recoveries.set(presented, stop);
+    if (inner.peek().state === "ready") retry();
   }
 
   // Tell every progress subscriber of a presented url to re-read its state.
@@ -512,6 +546,43 @@ function failureOf(
   const state = inner?.peek();
   if (state?.state === "unavailable") return state;
   return { state: "failed", error: err, sources: state?.sources ?? {} };
+}
+
+// A presented url's root (documentId and pinned heads) and its path.
+function splitUrl(presented: AutomergeUrl): {
+  root: AutomergeUrl;
+  segments: unknown[];
+} {
+  const { documentId, heads, segments = [] } = parseAutomergeUrl(presented);
+  return { root: stringifyAutomergeUrl({ documentId, heads }), segments };
+}
+
+// The handle at `segments` under a root wrapper.
+function scope(wrapped: object, segments: unknown[]): DocHandle<unknown> {
+  const handle = wrapped as DocHandle<unknown> & {
+    sub: (...s: unknown[]) => DocHandle<unknown>;
+  };
+  return segments.length > 0 ? handle.sub(...segments) : handle;
+}
+
+// `promise`, or `signal`'s reason if it aborts first.
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(signal.reason);
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      }
+    );
+  });
 }
 
 // Canonicalize any id to its *presented* url, preserving the path suffix
