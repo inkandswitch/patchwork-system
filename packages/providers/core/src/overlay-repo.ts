@@ -341,10 +341,10 @@ export class OverlayRepo implements RepoLike {
       return Promise.reject(error);
     }
     // A retry starts from `loading`, as the repo's query does when a source
-    // goes pending again.
+    // goes pending again; subscribers hear so once it's memoized, below.
     this.#recoveries.get(presented)?.();
     this.#recoveries.delete(presented);
-    if (this.#failures.delete(presented)) this.#notifyProgress(presented);
+    const retrying = this.#failures.delete(presented);
 
     // The descriptor channel remaps whole documents, so ask about the root
     // and reapply the original heads onto whatever clone comes back. Paths
@@ -507,6 +507,9 @@ export class OverlayRepo implements RepoLike {
     });
 
     this.#resolving.set(presented, promise as Promise<OverlayHandle<unknown>>);
+    // Only now: a subscriber that finds the url again on hearing `loading`
+    // joins this attempt rather than starting a second one under it.
+    if (retrying) this.#notifyProgress(presented);
     return promise;
   }
 

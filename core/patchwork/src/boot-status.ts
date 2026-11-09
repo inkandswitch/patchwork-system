@@ -59,7 +59,7 @@ export interface BootStatus {
 
 /**
  * A small box in the corner saying what boot is doing, for a boot slow enough
- * to notice. Once `stuckAfterMs` passes it says where boot is stuck, with a
+ * to notice. Once boot as a whole has taken `stuckAfterMs` it says so, with a
  * reload button, and it still goes away if boot gets there after all.
  * `onStuck` is told when that happens.
  */
@@ -70,33 +70,36 @@ export function showBootStatus(options: {
 }): BootStatus {
   let progress: BootProgress = { stage: "workers" };
   let element: HTMLElement | undefined;
+  // The lines are redrawn on every update; the reload button is kept, since
+  // taking it out of the page, even to put it straight back, loses its focus.
+  let text: HTMLElement | undefined;
+  let reload: HTMLButtonElement | undefined;
   let finished = false;
 
   const render = () => {
-    if (!element) return;
-    const stage = STAGE_TEXT[progress.stage] ?? progress.stage;
-    const lines: HTMLElement[] = [
-      line(
-        progress.stuck
-          ? `Still ${stage.charAt(0).toLowerCase()}${stage.slice(1)} after ${Math.round((options.stuckAfterMs ?? 0) / 1000)}s`
-          : `${stage}…`
-      ),
-    ];
+    if (!element || !text) return;
+    const lines = [line(`${STAGE_TEXT[progress.stage] ?? progress.stage}…`)];
+    // Counted from setup(), not from reaching this stage.
+    if (progress.stuck) {
+      const seconds = Math.round((options.stuckAfterMs ?? 0) / 1000);
+      lines.push(line(`Still not ready after ${seconds}s`));
+    }
     const packages = packagesText(progress);
     if (packages) lines.push(line(packages, "pw-boot-status-detail"));
     const reader = readerText(progress);
     if (reader) lines.push(line(reader, "pw-boot-status-detail"));
-    if (progress.stuck) {
-      const reload = document.createElement("button");
+    text.replaceChildren(...lines);
+    if (progress.stuck && !reload) {
+      reload = document.createElement("button");
       reload.textContent = "Reload";
       reload.addEventListener("click", () => location.reload());
-      lines.push(reload);
+      element.append(reload);
+    } else if (!progress.stuck && reload) {
+      reload.remove();
+      reload = undefined;
     }
     element.dataset.stage = progress.stage;
     element.toggleAttribute("data-stuck", !!progress.stuck);
-    const hadFocus = element.contains(document.activeElement);
-    element.replaceChildren(...lines);
-    if (hadFocus) element.querySelector("button")?.focus();
   };
 
   const show = () => {
@@ -111,6 +114,8 @@ export function showBootStatus(options: {
     element.id = ELEMENT_ID;
     element.setAttribute("role", "status");
     element.setAttribute("aria-live", "polite");
+    text = document.createElement("div");
+    element.append(text);
     (document.body ?? document.documentElement).appendChild(element);
     render();
   };
@@ -121,7 +126,7 @@ export function showBootStatus(options: {
       ? undefined
       : setTimeout(() => {
           console.warn(
-            `patchwork: boot is stuck at "${progress.stage}" after ${options.stuckAfterMs}ms`,
+            `patchwork: boot hasn't finished after ${options.stuckAfterMs}ms; it's at "${progress.stage}"`,
             progress
           );
           options.onStuck?.();
@@ -139,7 +144,7 @@ export function showBootStatus(options: {
       clearTimeout(showTimer);
       clearTimeout(stuckTimer);
       element?.remove();
-      element = undefined;
+      element = text = reload = undefined;
     },
   };
 }

@@ -3,6 +3,8 @@ import { next as A } from "@automerge/automerge";
 import {
   Repo,
   cursor,
+  generateAutomergeUrl,
+  stringifyAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
 } from "@automerge/automerge-repo";
@@ -68,6 +70,80 @@ describe("a re-answered descriptor", () => {
     view.route(note.url, { url: note.url });
     await backedBy(handle, note);
     expect(await view.overlay.find(note.url)).toBe(handle);
+  });
+});
+
+describe("a retry", () => {
+  it("is joined, not doubled, by a subscriber that finds again on hearing it start", async () => {
+    const repo = new Repo();
+    const note = repo.create<Note>({ title: "note", text: "" });
+    // Nothing can supply it, so the first attempt fails.
+    const url = generateAutomergeUrl();
+    const view = mount(repo);
+    const progress = view.overlay.findWithProgress<Note>(url);
+    await expect(progress.whenReady()).rejects.toThrow();
+    // An unsubscribe reaches the provider over its port.
+    await settle();
+    expect(view.subscribers(url)).toBe(0);
+
+    view.route(url, { url, cloneUrl: note.url });
+    let nested: Promise<DocHandle<Note>> | undefined;
+    progress.subscribe((state) => {
+      if (state.state === "loading") nested ??= progress.whenReady();
+    });
+    const retry = view.overlay.find<Note>(url);
+    expect(nested).toBeDefined();
+    expect(view.subscribers(url)).toBe(1);
+    const [found, joined] = await Promise.all([retry, nested]);
+    expect(joined).toBe(found);
+    expect(found.doc().title).toBe("note");
+  });
+
+  it("started by a subscriber hearing the failure keeps its own subscription", async () => {
+    const repo = new Repo();
+    const note = repo.create<Note>({ title: "note", text: "" });
+    const url = generateAutomergeUrl();
+    const view = mount(repo);
+    const progress = view.overlay.findWithProgress<Note>(url);
+    // The first attempt has had its answer; the retry's waits for a route.
+    view.silence(url);
+    let retry: Promise<DocHandle<Note>> | undefined;
+    progress.subscribe((state) => {
+      if (state.state === "unavailable") retry ??= view.overlay.find(url);
+    });
+    await expect(progress.whenReady()).rejects.toThrow();
+    expect(retry).toBeDefined();
+    await settle();
+    expect(view.subscribers(url)).toBe(1);
+
+    // Heard only if the retry's subscription is the one still open.
+    view.route(url, { url, cloneUrl: note.url });
+    expect((await retry!).doc().title).toBe("note");
+  });
+});
+
+describe("a remapper's pinned backing", () => {
+  it("still gives views that stay where they were", async () => {
+    const repo = new Repo();
+    const note = repo.create<Note>({ title: "note", text: "" });
+    const pin = () =>
+      stringifyAutomergeUrl({
+        documentId: note.documentId,
+        heads: note.heads(),
+      });
+    const view = mount(repo);
+    view.route(note.url, { url: note.url, cloneUrl: pin() });
+    const handle = await view.overlay.find<Note>(note.url);
+    const snapshot = handle.view(handle.heads());
+    expect(snapshot).not.toBe(handle);
+    expect(snapshot.url).toBe(pin());
+
+    note.change((d) => {
+      d.title = "later";
+    });
+    view.route(note.url, { url: note.url, cloneUrl: pin() });
+    await vi.waitFor(() => expect(handle.doc().title).toBe("later"));
+    expect(snapshot.doc().title).toBe("note");
   });
 });
 
