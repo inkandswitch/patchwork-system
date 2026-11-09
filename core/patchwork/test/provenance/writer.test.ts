@@ -47,6 +47,14 @@ describe("packageRoot", () => {
     expect(packageRoot("http://localhost:5173/lib/x.js", dev)).toBe("http://localhost:5173/main.js");
   });
 
+  it("lets a source whose directory is a whole host claim only its own file", () => {
+    const cdn = { ...ctx, httpSources: () => ["https://esm.sh/tldraw@3", `${ORIGIN}/tool.js`] };
+    expect(packageRoot("https://esm.sh/other@1/x.js", cdn)).toBeUndefined();
+    expect(packageRoot("https://esm.sh/tldraw@3", cdn)).toBe("https://esm.sh/tldraw@3");
+    expect(packageRoot(`${ORIGIN}/assets/index-abc.js`, cdn)).toBe("site");
+    expect(packageRoot(`${ORIGIN}/tool.js`, cdn)).toBe(`${ORIGIN}/tool.js`);
+  });
+
   it("calls a frame on the site's origin the site", () => {
     expect(packageRoot(`${ORIGIN}/assets/index-abc.js`, ctx)).toBe("site");
   });
@@ -65,6 +73,13 @@ describe("findWriter", () => {
   it("names the site when only site frames are on the stack", () => {
     const stack = v8(`${ORIGIN}/assets/index-abc.js`, `${ORIGIN}/assets/main.js`);
     expect(findWriter(stack, ctx)).toEqual({ root: "site@42", key: writerKey("site@42") });
+  });
+
+  it("reads the plugin sources once per stack", () => {
+    let calls = 0;
+    const counted = { ...ctx, httpSources: () => (calls++, []) };
+    findWriter(v8(...Array.from({ length: 20 }, () => `${ORIGIN}/assets/index-abc.js`)), counted);
+    expect(calls).toBe(1);
   });
 
   it("finds no writer when no frame is the site's or a package's", () => {

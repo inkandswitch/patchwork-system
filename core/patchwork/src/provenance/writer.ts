@@ -20,6 +20,37 @@ export type WriterContext = {
  * an extension).
  */
 export function packageRoot(url: string, ctx: WriterContext): string | "site" | undefined {
+  return rootIn(url, ctx.siteOrigin, sourceDirs(ctx.httpSources()));
+}
+
+type SourceDir = { source: string; dir: string };
+
+const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * Each source with the prefix its frames start with: the source's directory.
+ * A source whose directory is a whole host (`https://esm.sh/tldraw@3`,
+ * `https://site/tool.js`) would claim every frame on that host, shared code
+ * and the site's own included, so it claims only its own file. A loopback dev
+ * server is the exception: the whole host is that tool.
+ */
+function sourceDirs(sources: readonly string[]): SourceDir[] {
+  const dirs: SourceDir[] = [];
+  for (const source of sources) {
+    let url: URL;
+    try {
+      url = new URL(source);
+    } catch {
+      continue;
+    }
+    const dir = source.slice(0, source.lastIndexOf("/") + 1);
+    const wholeHost = dir.length <= url.origin.length + 1;
+    dirs.push({ source, dir: wholeHost && !LOOPBACK.has(url.hostname) ? source : dir });
+  }
+  return dirs;
+}
+
+function rootIn(url: string, siteOrigin: string, dirs: readonly SourceDir[]): string | "site" | undefined {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -38,15 +69,14 @@ export function packageRoot(url: string, ctx: WriterContext): string | "site" | 
   }
   let best: string | undefined;
   let bestDir = "";
-  for (const source of ctx.httpSources()) {
-    const dir = source.slice(0, source.lastIndexOf("/") + 1);
+  for (const { source, dir } of dirs) {
     if (dir.length > bestDir.length && url.startsWith(dir)) {
       best = source;
       bestDir = dir;
     }
   }
   if (best) return best;
-  if (parsed.origin === ctx.siteOrigin) return "site";
+  if (parsed.origin === siteOrigin) return "site";
   return undefined;
 }
 
@@ -56,8 +86,9 @@ export function packageRoot(url: string, ctx: WriterContext): string | "site" | 
  */
 export function findWriter(stack: string, ctx: WriterContext): Writer | null {
   let site = false;
+  const dirs = sourceDirs(ctx.httpSources());
   for (const url of frameUrls(stack)) {
-    const root = packageRoot(url, ctx);
+    const root = rootIn(url, ctx.siteOrigin, dirs);
     if (root === "site") site = true;
     else if (root !== undefined) return { root, key: writerKey(root) };
   }

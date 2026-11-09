@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as A from "@automerge/automerge/slim";
 import {
   encodeHeads,
@@ -233,6 +233,49 @@ describe("installProvenance", () => {
     expect(messages(h).at(-1)).toBeNull();
     expect(h.doc().x).toBe(2);
     expect(Error.stackTraceLimit).toBe(limit);
+  });
+
+  it("a stack that isn't a string leaves the change unstamped", () => {
+    const h = make();
+    stackSource = () => [] as unknown as string;
+    h.change((d) => (d.x = 1));
+    expect(h.doc().x).toBe(1);
+    expect(messages(h).at(-1)).toBeNull();
+  });
+
+  it("a failure finding the writer leaves the change unstamped", () => {
+    uninstall!();
+    uninstall = installProvenance({
+      siteOrigin: ORIGIN,
+      siteRoot: "site@test",
+      httpSources: () => {
+        throw new Error("registry gone");
+      },
+      stack: () => stackSource(),
+    });
+    const h = make();
+    h.change((d) => (d.x = 1));
+    expect(h.doc().x).toBe(1);
+    expect(messages(h).at(-1)).toBeNull();
+  });
+
+  it("a sub of a sub made before install writes no record into the subtree", () => {
+    uninstall!();
+    uninstall = undefined;
+    const h = make({ "@patchwork": { type: "test" }, items: { inner: {} } });
+    const items = h.sub("items");
+    install();
+    items.sub("inner").change((d: Doc) => (d.a = 1));
+    expect(h.doc().items).toEqual({ inner: { a: 1 } });
+    expect(messages(h)).toContain(`pw:${KEY_A}`);
+  });
+
+  it("a second copy of the module can't install over the first", async () => {
+    vi.resetModules();
+    const again = await import("../../src/provenance/stamp.js");
+    expect(() =>
+      again.installProvenance({ siteOrigin: ORIGIN, siteRoot: "site@test", httpSources: () => [] }),
+    ).toThrow("provenance already installed");
   });
 
   it("nested changes both stamp", () => {

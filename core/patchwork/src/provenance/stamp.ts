@@ -13,6 +13,13 @@ export type ProvenanceOptions = WriterContext & {
 export const WRITERS = "writers";
 const PATCHWORK = "@patchwork";
 
+let warned = false;
+function warnOnce(error: unknown) {
+  if (warned) return;
+  warned = true;
+  console.warn("patchwork provenance: a change went unstamped or unrecorded", error);
+}
+
 export function composeMessage(message: string | undefined, key: string): string {
   return message ? `${message}\npw:${key}` : `pw:${key}`;
 }
@@ -40,17 +47,18 @@ type Proto = {
   sub: AnyHandle["sub"];
 };
 
-let installed = false;
+/** Marks the shared prototype, so a second copy of this module can't wrap it again. */
+const INSTALLED = Symbol.for("@inkandswitch/patchwork/provenance");
 
 /**
  * Wraps `DocHandle.prototype.change`, `changeAt` and `sub` once for the tab.
  * Returns an uninstall that puts the originals back.
  */
 export function installProvenance(options: ProvenanceOptions): () => void {
-  if (installed) throw new Error("provenance already installed");
-  installed = true;
+  const proto = DocHandle.prototype as unknown as Proto & { [INSTALLED]?: true };
+  if (proto[INSTALLED]) throw new Error("provenance already installed");
+  proto[INSTALLED] = true;
 
-  const proto = DocHandle.prototype as unknown as Proto;
   const original: Proto = { change: proto.change, changeAt: proto.changeAt, sub: proto.sub };
   const stack = options.stack ?? captureStack;
   /** A sub-handle's root handle. Repo hands out only roots, so every sub comes from `sub`. */
@@ -59,13 +67,8 @@ export function installProvenance(options: ProvenanceOptions): () => void {
   const keys = new Map<string, string>();
 
   const writer = () => {
-    let text: string | undefined;
-    try {
-      text = stack();
-    } catch {
-      return null;
-    }
-    return text ? findWriter(text, options) : null;
+    const text = stack();
+    return typeof text === "string" && text ? findWriter(text, options) : null;
   };
 
   const keyFor = (handle: AnyHandle, root: string, short: string): string => {
@@ -123,12 +126,29 @@ export function installProvenance(options: ProvenanceOptions): () => void {
     opts: A.ChangeOptions<any> | undefined,
     run: (opts: A.ChangeOptions<any> | undefined) => R,
   ): R => {
-    const found = handle.isReadOnly() ? null : writer();
+    // Provenance never stops a write: any failure here leaves it unstamped,
+    // or (after it landed) unrecorded.
+    let found: { root: string; key: string } | null = null;
+    let before = "";
+    try {
+      if (!handle.isReadOnly()) {
+        const writer_ = writer();
+        if (writer_) {
+          found = { root: writer_.root, key: keyFor(handle, writer_.root, writer_.key) };
+          before = A.getHeads(handle.fullDoc()).join();
+        }
+      }
+    } catch (error) {
+      warnOnce(error);
+      found = null;
+    }
     if (!found) return run(opts);
-    const key = keyFor(handle, found.root, found.key);
-    const before = A.getHeads(handle.fullDoc()).join();
-    const result = run({ ...opts, message: composeMessage(opts?.message, key) });
-    if (A.getHeads(handle.fullDoc()).join() !== before) record(handle, key, found.root);
+    const result = run({ ...opts, message: composeMessage(opts?.message, found.key) });
+    try {
+      if (A.getHeads(handle.fullDoc()).join() !== before) record(handle, found.key, found.root);
+    } catch (error) {
+      warnOnce(error);
+    }
     return result;
   };
 
@@ -140,7 +160,10 @@ export function installProvenance(options: ProvenanceOptions): () => void {
   };
   proto.sub = function (this: AnyHandle, ...segments: any[]) {
     const sub = (original.sub as (...s: any[]) => AnyHandle).apply(this, segments);
-    if (sub !== this) roots.set(sub, roots.get(this) ?? this);
+    if (sub !== this) {
+      const root = rootOf(this);
+      if (root) roots.set(sub, root);
+    }
     return sub;
   } as Proto["sub"];
 
@@ -148,6 +171,6 @@ export function installProvenance(options: ProvenanceOptions): () => void {
     proto.change = original.change;
     proto.changeAt = original.changeAt;
     proto.sub = original.sub;
-    installed = false;
+    delete proto[INSTALLED];
   };
 }
