@@ -117,7 +117,8 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
   const done = doSetup(options, progress, report, () => {
     // A site's own stuck screen goes on hearing it isn't any more.
     if (progress.stuck) report({ stuck: false });
-    status.done();
+    // The box stays up while the rest of the packages load.
+    status.mounted();
   });
   void done.then(
     () => log("patchwork setup complete"),
