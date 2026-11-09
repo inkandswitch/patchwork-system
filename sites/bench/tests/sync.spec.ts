@@ -7,6 +7,7 @@ import {
   online,
   openTab,
   record,
+  said,
   serverConfirmed,
   setField,
   strangerSees,
@@ -17,14 +18,6 @@ const TABS = 3;
 const EDITS = 10;
 const RACE_TIMEOUT_MS = 5_000;
 const EDIT_TIMEOUT_MS = 5_000;
-
-// A thrown error's first line, without Playwright's prefix, and with hashes cut
-// short enough to read.
-const said = (error: unknown) =>
-  String(error instanceof Error ? error.message : error)
-    .split("\n")[0]
-    .replace(/^.*?Error: /, "")
-    .replace(/\b(\w{8})\w{24,}/g, "$1…");
 
 // Tab A creates and edits; tabs B.. find and watch. Each latency is a median
 // over EDITS rounds.

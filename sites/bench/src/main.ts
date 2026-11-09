@@ -46,14 +46,17 @@ const mark = (name: string) => (marks[name] ??= performance.now());
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const serverHeads = new Map<string, string[]>();
-// When the server was first seen holding each document's current heads, as
-// epoch ms, so serverConfirmed reports the event rather than when it polled.
-const serverHeadsAt = new Map<string, number>();
+// When the server was first seen listing each head of each document, as epoch
+// ms, so serverConfirmed reports the event rather than when it polled.
+const serverHeadSeenAt = new Map<string, Map<string, number>>();
 function noteServerHeads(documentId: string, heads: string[]) {
   const previous = serverHeads.get(documentId);
   if (previous && sameHeads(previous, heads)) return;
   serverHeads.set(documentId, heads);
-  serverHeadsAt.set(documentId, performance.timeOrigin + performance.now());
+  const now = performance.timeOrigin + performance.now();
+  let seenAt = serverHeadSeenAt.get(documentId);
+  if (!seenAt) serverHeadSeenAt.set(documentId, (seenAt = new Map()));
+  for (const head of heads) if (!seenAt.has(head)) seenAt.set(head, now);
 }
 let serverPeerIds = new Set<string>();
 const online = Promise.withResolvers<number>();
@@ -416,21 +419,43 @@ window.bench = {
   serverBytes: () => (bareTabMode && serverUrl !== "none" ? serverBytes : null),
   storageWrites: () => (bareTabMode ? storageWrites : null),
   syncRounds: () => syncRounds,
-  // Resolves with the epoch time the server was seen holding exactly the heads
-  // the document has right now: when its heads event arrived (noteServerHeads),
-  // even if that was before this was called. Polled only to wait for it.
+  // Resolves with the epoch time the server was seen listing every head the
+  // document has right now: when the heads event carrying the last of them
+  // arrived (noteServerHeads), even if that was before this was called.
+  // Polled only to wait for it.
+  //
+  // Every one of ours among the server's heads, not the two sets equal: once
+  // a document's history reaches a fragment boundary (a commit id with a
+  // leading zero byte, about one commit in 256), subduction's server goes on
+  // listing the commit before the boundary as a head beside the real one,
+  // for good. It holds everything; the extra head is one of ours from
+  // further back, which the failure message below calls "n back".
   async serverConfirmed(url, timeoutMs = 30_000) {
     const { handle } = await find(url);
-    const target = [...handle.heads()];
+    const target: string[] = [...handle.heads()];
     const deadline = performance.now() + timeoutMs;
     for (;;) {
       const seen = serverHeads.get(handle.documentId);
-      if (seen && sameHeads(seen, target)) {
-        return serverHeadsAt.get(handle.documentId)!;
+      if (seen && target.every((head) => seen.includes(head))) {
+        const seenAt = serverHeadSeenAt.get(handle.documentId)!;
+        return Math.max(...target.map((head) => seenAt.get(head)!));
       }
       if (performance.now() > deadline) {
+        // Each server head the tab didn't ask about, placed in the tab's own
+        // history: n back from its newest change, or a change it never got.
+        const history: string[] = handle.history().map(([head]) => head);
+        const placed = (seen ?? [])
+          .filter((head) => !target.includes(head))
+          .map((head) => {
+            const at = history.indexOf(head);
+            return at < 0
+              ? `${head} unknown to the tab`
+              : `${head} the tab's change ${history.length - 1 - at} back`;
+          });
         throw new Error(
-          `server never confirmed ${url}: it holds heads ${seen ?? "none"}, the tab ${target}`
+          `server never confirmed ${url}: it holds heads ${seen ?? "none"}, the tab ${target}` +
+            (placed.length ? ` (${placed.join("; ")})` : "") +
+            `; the tab now ${handle.heads()}`
         );
       }
       await sleep(10);

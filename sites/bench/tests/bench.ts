@@ -52,6 +52,16 @@ export function record(result: Result): void {
   appendFileSync(RESULTS, JSON.stringify({ ...result, browser }) + "\n");
 }
 
+/**
+ * A thrown error's first line, without Playwright's prefix, and with hashes
+ * cut short enough to read: for a failed check's note.
+ */
+export const said = (error: unknown): string =>
+  String(error instanceof Error ? error.message : error)
+    .split("\n")[0]
+    .replace(/^.*?Error: /, "")
+    .replace(/\b(\w{8})\w{24,}/g, "$1…");
+
 export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
