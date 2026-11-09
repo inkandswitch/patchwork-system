@@ -216,7 +216,7 @@ footer { font: 13px/1.55 var(--ui); color: var(--soft); padding-top: 4px; }
 <pre><code>doc["@patchwork"].writers["4kQx9TmB"] = { url: "automerge:2jaGJcuHPpLmFzRxxyAQ4kZPQ5mu#7hZ5RYdE…" }</code></pre>
   <ul>
     <li>A change of its own, not part of the tool’s change: sub-handles call <code>A.change</code> themselves and never pass through the root handle’s <code>change</code>, so no wrapper sees the root doc inside their callback <span class="ref">automerge-repo DocHandle.js:382-391</span>. It also leaves a tool’s empty change empty. Revised while planning; the first draft wrote it in the same change.</li>
-    <li>Written only when the tool’s change landed (the heads moved), and only when <code>doc["@patchwork"]</code> is already an object whose <code>writers</code>, if present, is an object. A doc without <code>@patchwork</code> gets the message and no record, since adding <code>@patchwork</code> would make it look like a typed patchwork doc.</li>
+    <li>Written only when the tool’s change landed (the heads moved). A doc without <code>@patchwork</code> gets <code>{ writers: { … } }</code> created there. When <code>@patchwork</code> or its <code>writers</code> is present but not an object, the value is left as it is: the message, no record. A created <code>@patchwork</code> has no <code>type</code>. The only visible effect is in <code>patchwork-view</code>’s error for a doc no tool opens, which says “no tool for …” instead of “missing @patchwork metadata” <span class="ref">core/elements/src/legacy-impl.ts:631</span>. Revised after review; the first draft left these docs without a record.</li>
     <li>Every form is stamped and recorded the same way: the callback and value forms of <code>change</code>, <code>changeAt</code>, and sub-handles, whose record goes through their root handle. A sub-handle’s <code>remove()</code> takes no options and stays unstamped.</li>
     <li>An existing record under the key with a different <code>url</code> is a collision. The writer’s key then takes one more hash character until it is free, cached per doc.</li>
     <li>A dev loop that rebuilds a package adds one record per rebuild that writes to the doc, about 150 B each. Accepted.</li>
@@ -234,7 +234,7 @@ explainSummary(handle): { writer, count, first, last }[]</code></pre>
       <thead><tr><th><code>writer</code></th><th>When</th></tr></thead>
       <tbody>
         <tr><td><code>{ url }</code></td><td>The key resolved through <code>@patchwork.writers</code></td></tr>
-        <tr><td><code>"unrecorded"</code></td><td>A key with no record, because the doc has no <code>@patchwork</code></td></tr>
+        <tr><td><code>"unrecorded"</code></td><td>A key with no record, because the doc’s <code>@patchwork</code> or <code>writers</code> isn’t an object</td></tr>
         <tr><td><code>null</code></td><td>No key: made before this landed, or by an unstamped writer</td></tr>
       </tbody>
     </table>
@@ -255,7 +255,7 @@ explainSummary(handle): { writer, count, first, last }[]</code></pre>
       </tbody>
     </table>
   </div>
-  <p>Installed from tab setup, beside the <code>Repo</code> construction in <code>core/patchwork/src/repo.ts</code>. <code>@inkandswitch/patchwork-plugins</code> gains <code>pluginImportUrls()</code>, so the stamp can tell a dev server’s tool frames from other http frames. One changeset, <code>patch</code> for <code>@inkandswitch/patchwork</code> and <code>@inkandswitch/patchwork-plugins</code>: changes made in a tab now carry <code>pw:</code> keys, docs with <code>@patchwork</code> gain <code>@patchwork.writers</code>, and <code>explain</code> and <code>explainSummary</code> are new exports.</p>
+  <p>Installed from tab setup, beside the <code>Repo</code> construction in <code>core/patchwork/src/repo.ts</code>. <code>@inkandswitch/patchwork-plugins</code> gains <code>pluginImportUrls()</code>, so the stamp can tell a dev server’s tool frames from other http frames. One changeset, <code>patch</code> for <code>@inkandswitch/patchwork</code> and <code>@inkandswitch/patchwork-plugins</code>: changes made in a tab now carry <code>pw:</code> keys, docs gain <code>@patchwork.writers</code>, and <code>explain</code> and <code>explainSummary</code> are new exports.</p>
 </section>
 
 <section class="sheet" id="testing">
@@ -265,7 +265,7 @@ explainSummary(handle): { writer, count, first, last }[]</code></pre>
     <li><b>First, a stack-capture microbench.</b> The budget is under 20 µs per change, against a ~730 µs sync round trip. Over budget, the writer gets cached per call site before anything else is built.</li>
     <li><code>frames.ts</code>: captured stack strings from all three engines, including frames of shared externals and the site bundle.</li>
     <li><code>writer.ts</code>: each URL form (main, <code>/@/</code>, http dev source, site), key stability, the collision suffix.</li>
-    <li><code>stamp.ts</code>, against a real in-memory <code>Repo</code> with the frame source injected so a test chooses the stack: a package’s first write records it and later writes don’t; a caller’s message is kept; the value shorthand gets a message and no record; <code>changeAt</code> and sub-handles; a doc without <code>@patchwork</code> gets no record; handle identity unchanged.</li>
+    <li><code>stamp.ts</code>, against a real in-memory <code>Repo</code> with the frame source injected so a test chooses the stack: a package’s first write records it and later writes don’t; a caller’s message is kept; the value shorthand, <code>changeAt</code> and sub-handles are stamped and recorded; a doc without <code>@patchwork</code> gets one holding only <code>writers</code>; a non-object <code>@patchwork</code> or <code>writers</code> is left alone; handle identity unchanged.</li>
     <li><code>explain.ts</code>: a doc with mixed writers, changes from before this landed, <code>since</code> and <code>limit</code>.</li>
   </ul>
 </section>
@@ -276,10 +276,10 @@ explainSummary(handle): { writer, count, first, last }[]</code></pre>
     <li><b>First reader:</b> debugging, “which tool broke this doc”. A console reader is enough.</li>
     <li><b>Record home:</b> in the doc, so collaborators can resolve keys their own tools didn’t write. Written in a change of its own right after the writer’s first change, revised while planning because sub-handles never reach the root’s <code>change</code>.</li>
     <li><b>Attribution:</b> one wrap of the shared <code>DocHandle</code> prototype, with the writer read from the stack.</li>
-    <li><b>Docs without <code>@patchwork</code>:</b> the message, no record.</li>
+    <li><b>Docs without <code>@patchwork</code>:</b> the record creates it, holding only <code>writers</code>.</li>
     <li><b>Granularity:</b> a package version, not a single tool.</li>
   </ul>
 </section>
 
-<footer>Next: an implementation plan from this spec, starting with the stack-capture microbench.</footer>
+<footer>Plan: <code>docs/superpowers/plans/2026-11-09-change-provenance.md</code>, starting with the stack-capture microbench.</footer>
 </div>

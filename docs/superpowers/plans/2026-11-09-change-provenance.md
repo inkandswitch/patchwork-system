@@ -17,7 +17,7 @@
 - `core/patchwork/src/provenance/*` imports nothing from other workspace packages (only `@automerge/automerge-repo/slim` and `@automerge/automerge/slim`), so its tests run without building the workspace.
 - Message: exactly `pw:<key>`, or `<caller message>\npw:<key>` when the caller passed one.
 - Key: base58 alphabet `123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz`, 8 characters, one more per collision. Reader pattern: `/(?:^|\n)pw:([1-9A-HJ-NP-Za-km-z]{8,})$/`.
-- Record: `doc["@patchwork"].writers[key] = { url: <package root> }`, written only when `doc["@patchwork"]` is a plain object and `writers` is absent or a plain object.
+- Record: `doc["@patchwork"].writers[key] = { url: <package root> }`, written when `doc["@patchwork"]` is absent (created as `{ writers: { [key]: { url } } }`, no `type`) or a plain object whose `writers` is absent or a plain object. A non-object `@patchwork` or `writers` is left as it is.
 - Site writer root: `site@<buildId>`, `buildId` read from the `__BUILD_ID__` define the way `doSetup` reads `__SITE_TITLE__` (`typeof __BUILD_ID__ === "number" ? __BUILD_ID__ : undefined`); `site@dev` when undefined.
 - Stack-capture budget: under 20 µs per change in node.
 - Unit tests and typechecks only on this machine. No e2e, no preview servers, no full `pnpm build`.
@@ -115,7 +115,7 @@ Behaviour of the wrapped `change(callbackOrValue, options = {})` and `changeAt(h
 1. Find the writer. None: call the original unchanged.
 2. Pick this doc's key: start from the cached key for `documentId` + root, else `writerKey(root)`. While `fullDoc()["@patchwork"]?.writers?.[key]` exists with a different `url`, grow it one character (`writerKey(root, n + 1)`). Cache the result per `documentId` + root.
 3. Heads before; call the original with `{ ...options, message: composeMessage(options.message, key) }`; heads after.
-4. Heads unchanged: done. Otherwise the root handle (itself if `handle.path.length === 0`, else from the `sub` map) reads `fullDoc()["@patchwork"]`. If it is a plain object, its `writers` is absent or a plain object, and `writers[key]` is absent: the original root `change` writes `{ url: root }` there (creating `writers` if absent), message `pw:<key>`.
+4. Heads unchanged: done. Otherwise the root handle (itself if `handle.path.length === 0`, else from the `sub` map) reads `fullDoc()["@patchwork"]`. If it is absent, or a plain object whose `writers` is absent or a plain object, and `writers[key]` is absent: the original root `change` writes `{ url: root }` there (creating `@patchwork` and `writers` as needed), message `pw:<key>`.
 - The wrapped `sub(...segments)` calls the original and maps the returned handle to its root (`this` when `this.path.length === 0`, else the root mapped for `this`) in a `WeakMap`.
 
 - [ ] **Step 1: Write the failing tests.** Each test makes `new Repo({})`, installs with `stack` returning a fixture chosen by the test (helper `stackFor(root)` building a V8 stack with one package frame), and uninstalls in `afterEach`. A doc starts as `{ "@patchwork": { type: "test" }, text: "" }` unless the test says otherwise. Read messages with `A.getChangesMetaSince(handle.doc(), [])`.
@@ -126,7 +126,8 @@ Behaviour of the wrapped `change(callbackOrValue, options = {})` and `changeAt(h
   - `value form`: `handle.sub("text").change("hi")` is stamped and recorded through the root.
   - `changeAt`: stamped and recorded.
   - `sub-handle`: `handle.sub("items").change(d => …)` is stamped; the record lands on the root doc.
-  - `no @patchwork, no record`: a doc `{ text: "" }` gets the stamp and keeps no `@patchwork` key.
+  - `no @patchwork, one is created`: a doc `{ text: "" }` gets the stamp, and `@patchwork` deep-equals `{ writers: { [key]: { url: root } } }`.
+  - `@patchwork not an object`: `@patchwork` set to `"x"` is left as `"x"`; the change is still stamped.
   - `writers not an object`: `@patchwork.writers` set to `"x"` is left as `"x"`.
   - `a collision grows the key`: pre-write `writers[writerKey(rootA)] = { url: "other" }`; a change from rootA is stamped with `writerKey(rootA, 9)` and recorded under it.
   - `handle identity`: `repo.find(url)` returns the same object before and after install, and `handle.sub("x") === handle.sub("x")`.
@@ -155,7 +156,7 @@ Behaviour of the wrapped `change(callbackOrValue, options = {})` and `changeAt(h
 
 - [ ] **Step 1: Write the failing tests.**
   - `parseMessage("pw:4kQx9TmB")` → `{ message: null, key: "4kQx9TmB" }`; `"rename layer\npw:4kQx9TmB"` → `{ message: "rename layer", key: "4kQx9TmB" }`; `"pw:4kQx"` (too short) → `{ message: "pw:4kQx", key: null }`; `null` → both null.
-  - A doc with: one change made before install (no key), three from rootA, one from rootB, one on a doc without `@patchwork` for the `"unrecorded"` case. `explain` gives newest first, `writer` `{ url: rootA }` / `{ url: rootB }` / `null` as made; the record changes themselves show their writer too.
+  - A doc with: one change made before install (no key), three from rootA, one from rootB, one on a doc whose `@patchwork` is `"x"` for the `"unrecorded"` case. `explain` gives newest first, `writer` `{ url: rootA }` / `{ url: rootB }` / `null` as made; the record changes themselves show their writer too.
   - `limit: 2` returns two rows; `since: <heads after the first change>` leaves the first change out.
   - `explainSummary`: rootA's row has `count` equal to its tool changes plus its record change, and `first <= last`; the pre-install change's row has `key: null`.
 - [ ] **Step 2:** Run `pnpm --dir core/patchwork exec vitest run test/provenance/explain.test.ts`. Expected: FAIL.
@@ -188,7 +189,7 @@ Behaviour of the wrapped `change(callbackOrValue, options = {})` and `changeAt(h
 "@inkandswitch/patchwork-plugins": patch
 ---
 
-Changes made in a patchwork tab now say which package version made them. Each change's message carries `pw:<key>` (after the caller's own message, if it gave one), and the first change a package version makes to a doc with `@patchwork` is followed by one that records the key under `@patchwork.writers`. `explain(handle)` and `explainSummary(handle)` read it back, and `setup()`'s result has both, taking a url or a handle. `@inkandswitch/patchwork-plugins` exports `pluginImportUrls()`.
+Changes made in a patchwork tab now say which package version made them. Each change's message carries `pw:<key>` (after the caller's own message, if it gave one), and the first change a package version makes to a doc is followed by one that records the key under `@patchwork.writers`, creating `@patchwork` when the doc has none. `explain(handle)` and `explainSummary(handle)` read it back, and `setup()`'s result has both, taking a url or a handle. `@inkandswitch/patchwork-plugins` exports `pluginImportUrls()`.
 ```
 
 - [ ] **Step 5:** Typecheck: `pnpm --filter @inkandswitch/patchwork... build`. Expected: exit 0. If that pulls in more than the core packages, or memory runs short, stop and let CI build, per the global constraints.
