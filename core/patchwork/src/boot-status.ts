@@ -4,6 +4,10 @@ const ELEMENT_ID = "pw-boot-status";
 const STYLE_ID = "pw-boot-status-styles";
 // A return visit boots in about a second, which is no time to read anything.
 const SHOW_AFTER_MS = 1_000;
+// Once the first view is up, the rest of the packages get this long to load
+// before the box gives up saying so. A package that keeps failing would
+// otherwise hold it up for good.
+const REST_MAX_MS = 30_000;
 
 const STAGE_TEXT: Record<BootStage, string> = {
   workers: "Starting up",
@@ -53,6 +57,12 @@ const CSS = `
 export interface BootStatus {
   /** Boot moved on. */
   update(progress: BootProgress): void;
+  /**
+   * The first view is on screen, so boot isn't stuck, but packages may still
+   * be loading behind it: the box stays up, saying how many, until they all
+   * have.
+   */
+  mounted(): void;
   /** Boot is over, either way: take the box away. */
   done(): void;
 }
@@ -61,7 +71,8 @@ export interface BootStatus {
  * A small box in the corner saying what boot is doing, for a boot slow enough
  * to notice. Once boot as a whole has taken `stuckAfterMs` it says so, with a
  * reload button, and it still goes away if boot gets there after all.
- * `onStuck` is told when that happens.
+ * `onStuck` is told when that happens. Once the first view is up it goes on
+ * counting the packages still loading, and goes when they're all in.
  */
 export function showBootStatus(options: {
   stuckAfterMs?: number;
@@ -75,9 +86,24 @@ export function showBootStatus(options: {
   let text: HTMLElement | undefined;
   let reload: HTMLButtonElement | undefined;
   let finished = false;
+  let isMounted = false;
+  let restTimer: ReturnType<typeof setTimeout> | undefined;
 
   const render = () => {
+    if (isMounted && !packagesText(progress)) {
+      done();
+      return;
+    }
     if (!element || !text) return;
+    if (isMounted) {
+      text.replaceChildren(
+        line(`${STAGE_TEXT.packages}…`),
+        line(packagesText(progress)!, "pw-boot-status-detail")
+      );
+      element.dataset.stage = progress.stage;
+      element.toggleAttribute("data-mounted", true);
+      return;
+    }
     const lines = [line(`${STAGE_TEXT[progress.stage] ?? progress.stage}…`)];
     // Counted from setup(), not from reaching this stage.
     if (progress.stuck) {
@@ -133,19 +159,31 @@ export function showBootStatus(options: {
           show();
         }, options.stuckAfterMs);
 
+  const done = () => {
+    if (finished) return;
+    finished = true;
+    clearTimeout(showTimer);
+    clearTimeout(stuckTimer);
+    clearTimeout(restTimer);
+    element?.remove();
+    element = text = reload = undefined;
+  };
+
   return {
     update(next) {
       progress = next;
       render();
     },
-    done() {
-      if (finished) return;
-      finished = true;
-      clearTimeout(showTimer);
+    mounted() {
+      if (finished || isMounted) return;
+      isMounted = true;
       clearTimeout(stuckTimer);
-      element?.remove();
-      element = text = reload = undefined;
+      reload?.remove();
+      reload = undefined;
+      restTimer = setTimeout(done, REST_MAX_MS);
+      render();
     },
+    done,
   };
 }
 
