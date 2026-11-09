@@ -62,6 +62,7 @@ import { watchDocument } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 import { showBootStatus } from "./boot-status.js";
+import { loadFolderTree } from "./folder-tree.js";
 import {
   hashTools,
   planLoadOrder,
@@ -71,6 +72,9 @@ import {
 } from "./load-order.js";
 
 const log = debug("patchwork:setup");
+
+// How long the account's packages wait on its folders before loading anyway.
+const FOLDER_TREE_TIMEOUT_MS = 3_000;
 
 declare const __SITE_TITLE__: string;
 
@@ -275,6 +279,15 @@ async function doSetup(
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
+
+  // The account's folders, every one of them but none of the files, before
+  // any of its packages.
+  const rootFolderUrl = accountDocHandle.doc()?.rootFolderUrl;
+  if (rootFolderUrl) {
+    await loadFolderTree(repo, rootFolderUrl, {
+      timeoutMs: FOLDER_TREE_TIMEOUT_MS,
+    });
+  }
 
   // Once the account's packages are listed too, the list is whole, and a
   // package that's left it since last visit is forgotten.
