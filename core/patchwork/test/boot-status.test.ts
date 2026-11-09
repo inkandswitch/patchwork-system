@@ -53,12 +53,28 @@ describe("the boot status box", () => {
     vi.advanceTimersByTime(30_000);
     expect(onStuck).toHaveBeenCalledOnce();
     expect(box()?.hasAttribute("data-stuck")).toBe(true);
-    expect(box()?.textContent).toContain(
-      "Still opening your account after 30s"
-    );
+    expect(box()?.textContent).toContain("Opening your account…");
+    expect(box()?.textContent).toContain("Still not ready after 30s");
     expect(box()?.querySelector("button")?.textContent).toBe("Reload");
     status.done();
     expect(box()).toBe(null);
+  });
+
+  it("keeps the reload button, and its focus, as boot moves on", () => {
+    const status = showBootStatus({ draw: true, stuckAfterMs: 30_000 });
+    status.update({ stage: "packages", stuck: true });
+    vi.advanceTimersByTime(1_000);
+    const reload = box()!.querySelector("button")!;
+    reload.focus();
+    status.update({
+      stage: "packages",
+      stuck: true,
+      packages: { loaded: 3, total: 7 },
+    });
+    expect(box()?.textContent).toContain("3 of 7");
+    expect(box()?.querySelector("button")).toBe(reload);
+    expect(document.activeElement).toBe(reload);
+    status.done();
   });
 
   it("draws nothing for a site that shows progress itself, but still says it's stuck", () => {

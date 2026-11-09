@@ -156,6 +156,25 @@ describe("respawning", () => {
     vi.advanceTimersByTime(60_000);
     expect(instances()).toHaveLength(5);
   });
+
+  it("still says a silently lost worker is gone when spawning early", () => {
+    const onGone = vi.fn();
+    const h = sharedWorkerHandle("test", () => "/worker.js", {
+      debugging: false,
+      onMessage() {},
+      onGone,
+    });
+    h.get();
+    for (let n = 0; n < 3; n++) closeItself(n);
+    // The fourth goes without a word, so the replacement waits and is owed.
+    instances()[3].port.fireClose();
+    expect(h.state.phase).toBe("waiting");
+    expect(onGone).not.toHaveBeenCalled();
+
+    h.get();
+    expect(instances()).toHaveLength(5);
+    expect(onGone).toHaveBeenCalledOnce();
+  });
 });
 
 describe("state", () => {
