@@ -178,14 +178,15 @@ footer { font: 13px/1.55 var(--ui); color: var(--soft); padding-top: 4px; }
     <li><span>A tool calls <code>handle.change(fn)</code>, directly or through a shared external such as solid-automerge.</span></li>
     <li><span>The wrapper raises <code>Error.stackTraceLimit</code>, captures <code>new Error().stack</code>, and restores the limit.</span></li>
     <li><span>It walks the frames for the first URL that belongs to a package, which skips the frames of shared externals.</span></li>
-    <li><span>That package root maps to a cached key. The change runs with <code>pw:&lt;key&gt;</code> in its message, and records the key if this doc hasn’t seen it.</span></li>
+    <li><span>That package root maps to a cached key. The change runs with <code>pw:&lt;key&gt;</code> in its message.</span></li>
+    <li><span>If the change landed and the doc has no record for the key yet, a second change, with the same message, writes the record.</span></li>
   </ol>
   <div class="scroll">
     <table>
       <thead><tr><th>Frame URL</th><th>Package root</th></tr></thead>
       <tbody>
         <tr><td><code>${origin}/automerge%3A&lt;id&gt;%23&lt;heads&gt;/…</code> (main)</td><td><code>automerge:&lt;id&gt;#&lt;heads&gt;</code></td></tr>
-        <tr><td><code>${origin}/@/&lt;pinned path&gt;/…</code> (paths-design)</td><td>the pinned container path</td></tr>
+        <tr><td><code>${origin}/@/&lt;pinned path&gt;/…</code> (paths-design)</td><td>the pinned container path, added once paths-design is on main; until then these frames are skipped</td></tr>
         <tr><td>an http(s) URL a plugin was registered from (dev servers)</td><td>that source, through the registry’s <code>sourceOf</code></td></tr>
         <tr><td>only site frames</td><td><code>site@&lt;buildId&gt;</code></td></tr>
         <tr><td>no site or package frame (an extension, <code>eval</code>)</td><td>no stamp</td></tr>
@@ -211,11 +212,12 @@ footer { font: 13px/1.55 var(--ui); color: var(--soft); padding-top: 4px; }
 
 <section class="sheet" id="record">
   <h2>The record</h2>
-  <p>On a package version’s first write to a doc, the same change also writes its record:</p>
+  <p>Right after a package version’s first change to a doc, a change of its own, carrying the same <code>pw:&lt;key&gt;</code> message, writes its record:</p>
 <pre><code>doc["@patchwork"].writers["4kQx9TmB"] = { url: "automerge:2jaGJcuHPpLmFzRxxyAQ4kZPQ5mu#7hZ5RYdE…" }</code></pre>
   <ul>
-    <li>Written only when <code>doc["@patchwork"]</code> is already an object. A doc without it gets the message and no record, since adding <code>@patchwork</code> would make it look like a typed patchwork doc.</li>
-    <li>Written only where the wrapper sees the root doc: the callback form of <code>change</code>, <code>changeAt</code>, and sub-handle changes if they reach the root handle’s <code>change</code> with a root callback. The plan checks the sub-handle path. The value shorthand of <code>change</code> gets the message and no record.</li>
+    <li>A change of its own, not part of the tool’s change: sub-handles call <code>A.change</code> themselves and never pass through the root handle’s <code>change</code>, so no wrapper sees the root doc inside their callback <span class="ref">automerge-repo DocHandle.js:382-391</span>. It also leaves a tool’s empty change empty. Revised while planning; the first draft wrote it in the same change.</li>
+    <li>Written only when the tool’s change landed (the heads moved), and only when <code>doc["@patchwork"]</code> is already an object whose <code>writers</code>, if present, is an object. A doc without <code>@patchwork</code> gets the message and no record, since adding <code>@patchwork</code> would make it look like a typed patchwork doc.</li>
+    <li>Every form is stamped and recorded the same way: the callback and value forms of <code>change</code>, <code>changeAt</code>, and sub-handles, whose record goes through their root handle. A sub-handle’s <code>remove()</code> takes no options and stays unstamped.</li>
     <li>An existing record under the key with a different <code>url</code> is a collision. The writer’s key then takes one more hash character until it is free, cached per doc.</li>
     <li>A dev loop that rebuilds a package adds one record per rebuild that writes to the doc, about 150 B each. Accepted.</li>
   </ul>
@@ -253,7 +255,7 @@ explainSummary(handle): { writer, count, first, last }[]</code></pre>
       </tbody>
     </table>
   </div>
-  <p>Installed from tab setup, beside the <code>Repo</code> construction in <code>core/patchwork/src/repo.ts</code>. One changeset, <code>patch</code> for <code>@inkandswitch/patchwork</code>: changes made in a tab now carry <code>pw:</code> keys, docs with <code>@patchwork</code> gain <code>@patchwork.writers</code>, and <code>explain</code> and <code>explainSummary</code> are new exports.</p>
+  <p>Installed from tab setup, beside the <code>Repo</code> construction in <code>core/patchwork/src/repo.ts</code>. <code>@inkandswitch/patchwork-plugins</code> gains <code>pluginImportUrls()</code>, so the stamp can tell a dev server’s tool frames from other http frames. One changeset, <code>patch</code> for <code>@inkandswitch/patchwork</code> and <code>@inkandswitch/patchwork-plugins</code>: changes made in a tab now carry <code>pw:</code> keys, docs with <code>@patchwork</code> gain <code>@patchwork.writers</code>, and <code>explain</code> and <code>explainSummary</code> are new exports.</p>
 </section>
 
 <section class="sheet" id="testing">
@@ -272,7 +274,7 @@ explainSummary(handle): { writer, count, first, last }[]</code></pre>
   <h2>Decided on 2026-11-09</h2>
   <ul class="decided">
     <li><b>First reader:</b> debugging, “which tool broke this doc”. A console reader is enough.</li>
-    <li><b>Record home:</b> in the doc, in the same change, so collaborators can resolve keys their own tools didn’t write.</li>
+    <li><b>Record home:</b> in the doc, so collaborators can resolve keys their own tools didn’t write. Written in a change of its own right after the writer’s first change, revised while planning because sub-handles never reach the root’s <code>change</code>.</li>
     <li><b>Attribution:</b> one wrap of the shared <code>DocHandle</code> prototype, with the writer read from the stack.</li>
     <li><b>Docs without <code>@patchwork</code>:</b> the message, no record.</li>
     <li><b>Granularity:</b> a package version, not a single tool.</li>
