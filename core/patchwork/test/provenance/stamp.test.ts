@@ -1,0 +1,260 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import * as A from "@automerge/automerge/slim";
+import {
+  encodeHeads,
+  generateAutomergeUrl,
+  Repo,
+  type DocHandle,
+} from "@automerge/automerge-repo/slim";
+import { composeMessage, installProvenance } from "../../src/provenance/stamp.js";
+import { writerKey } from "../../src/provenance/writer.js";
+
+const ORIGIN = "https://pw.test";
+const heads = encodeHeads(A.getHeads(A.from({ a: 1 })));
+const ROOT_A = `${generateAutomergeUrl()}#${heads.join("|")}`;
+const ROOT_B = `${generateAutomergeUrl()}#${heads.join("|")}`;
+const stackFor = (root: string) =>
+  `Error\n    at wrapped (${ORIGIN}/assets/index.js:1:1)\n    at onClick (${ORIGIN}/${encodeURIComponent(root)}/dist/index.js:3:9)`;
+
+let current: string | undefined;
+let stackSource: () => string | undefined = () => current;
+let uninstall: (() => void) | undefined;
+let repo: Repo;
+
+function install() {
+  uninstall = installProvenance({
+    siteOrigin: ORIGIN,
+    siteRoot: "site@test",
+    httpSources: () => [],
+    stack: () => stackSource(),
+  });
+}
+
+beforeEach(() => {
+  current = stackFor(ROOT_A);
+  stackSource = () => current;
+  repo = new Repo({});
+  install();
+});
+
+afterEach(() => {
+  uninstall?.();
+  uninstall = undefined;
+});
+
+type Doc = Record<string, any>;
+const make = (init: Doc = { "@patchwork": { type: "test" }, text: "" }) => repo.create<Doc>(init);
+const messages = (h: DocHandle<any>) =>
+  A.getChangesMetaSince(h.fullDoc(), []).map((c) => c.message);
+const count = (h: DocHandle<any>) => A.getChangesMetaSince(h.fullDoc(), []).length;
+const writers = (h: DocHandle<any>) => h.fullDoc()["@patchwork"]?.writers;
+
+describe("composeMessage", () => {
+  it("is the key alone, or the caller's message and the key on its own line", () => {
+    expect(composeMessage(undefined, "4kQx9TmB")).toBe("pw:4kQx9TmB");
+    expect(composeMessage("rename layer", "4kQx9TmB")).toBe("rename layer\npw:4kQx9TmB");
+  });
+});
+
+describe("installProvenance", () => {
+  const KEY_A = writerKey(ROOT_A);
+
+  it("stamps a change", () => {
+    const h = make();
+    h.change((d) => (d.x = 1));
+    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(messages(h).at(-1)).toBe(`pw:${KEY_A}`);
+  });
+
+  it("keeps a caller's message", () => {
+    const h = make();
+    h.change((d) => (d.x = 1), { message: "rename layer" });
+    expect(messages(h)).toContain(`rename layer\npw:${KEY_A}`);
+  });
+
+  it("records a writer once", () => {
+    const h = make();
+    const before = count(h);
+    h.change((d) => (d.x = 1));
+    h.change((d) => (d.x = 2));
+    expect(writers(h)).toEqual({ [KEY_A]: { url: ROOT_A } });
+    expect(count(h) - before).toBe(3);
+  });
+
+  it("records two writers", () => {
+    const h = make();
+    h.change((d) => (d.x = 1));
+    current = stackFor(ROOT_B);
+    h.change((d) => (d.x = 2));
+    expect(writers(h)).toEqual({
+      [KEY_A]: { url: ROOT_A },
+      [writerKey(ROOT_B)]: { url: ROOT_B },
+    });
+  });
+
+  it("value form", () => {
+    const h = make();
+    h.sub("text").change("hi");
+    expect(h.doc().text).toBe("hi");
+    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(writers(h)).toEqual({ [KEY_A]: { url: ROOT_A } });
+  });
+
+  it("changeAt", () => {
+    const h = make();
+    h.changeAt(h.heads(), (d) => (d.y = 1));
+    expect(h.doc().y).toBe(1);
+    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(writers(h)).toEqual({ [KEY_A]: { url: ROOT_A } });
+  });
+
+  it("sub-handle", () => {
+    const h = make({ "@patchwork": { type: "test" }, items: {} });
+    h.sub("items").change((d: Doc) => (d.a = 1));
+    expect(h.doc().items).toEqual({ a: 1 });
+    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(writers(h)).toEqual({ [KEY_A]: { url: ROOT_A } });
+    expect(h.doc().items["@patchwork"]).toBeUndefined();
+  });
+
+  it("no @patchwork, one is created", () => {
+    const h = make({ text: "" });
+    h.change((d) => (d.x = 1));
+    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(h.doc()["@patchwork"]).toEqual({ writers: { [KEY_A]: { url: ROOT_A } } });
+  });
+
+  it("@patchwork not an object", () => {
+    const h = make({ "@patchwork": "x" });
+    h.change((d) => (d.y = 1));
+    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(h.doc()["@patchwork"]).toBe("x");
+  });
+
+  it("writers not an object", () => {
+    const h = make({ "@patchwork": { type: "test", writers: "x" } });
+    h.change((d) => (d.y = 1));
+    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(writers(h)).toBe("x");
+  });
+
+  it("a collision grows the key", () => {
+    const h = make({ "@patchwork": { type: "test", writers: { [KEY_A]: { url: "other" } } } });
+    h.change((d) => (d.y = 1));
+    const grown = writerKey(ROOT_A, 9);
+    expect(messages(h)).toContain(`pw:${grown}`);
+    expect(writers(h)[grown]).toEqual({ url: ROOT_A });
+    expect(writers(h)[KEY_A]).toEqual({ url: "other" });
+  });
+
+  it("handle identity", async () => {
+    uninstall!();
+    uninstall = undefined;
+    const h = make();
+    const before = await repo.find(h.url);
+    install();
+    expect(await repo.find(h.url)).toBe(before);
+    expect(h.sub("x")).toBe(h.sub("x"));
+  });
+
+  it("uninstall restores", () => {
+    uninstall!();
+    uninstall = undefined;
+    const h = make();
+    h.change((d) => (d.x = 1));
+    expect(messages(h).at(-1)).toBeNull();
+  });
+
+  it("a second install throws", () => {
+    expect(() => install()).toThrow("provenance already installed");
+  });
+
+  it("a site-only stack is recorded as the site", () => {
+    current = `Error\n    at f (${ORIGIN}/assets/index.js:1:1)`;
+    const h = make();
+    h.change((d) => (d.x = 1));
+    expect(writers(h)).toEqual({ [writerKey("site@test")]: { url: "site@test" } });
+  });
+
+  it("a stack with no site or package frame is left unstamped", () => {
+    current = "Error\n    at f (https://esm.sh/x.js:1:1)";
+    const h = make();
+    h.change((d) => (d.x = 1));
+    expect(messages(h).at(-1)).toBeNull();
+    expect(writers(h)).toBeUndefined();
+  });
+
+  // Review Focus
+
+  it("a throwing callback writes no record", () => {
+    const h = make();
+    const before = count(h);
+    const boom = new Error("boom");
+    let caught: unknown;
+    try {
+      h.change(() => {
+        throw boom;
+      });
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBe(boom);
+    expect(count(h)).toBe(before);
+    expect(writers(h)).toBeUndefined();
+    h.change((d) => (d.x = 1));
+    expect(messages(h)).toContain(`pw:${KEY_A}`);
+  });
+
+  it("an empty change makes no record", () => {
+    const h = make();
+    const before = count(h);
+    h.change(() => {});
+    expect(count(h)).toBe(before);
+    expect(writers(h)).toBeUndefined();
+  });
+
+  it("a fixed-heads handle still throws", () => {
+    const h = make();
+    const before = count(h);
+    expect(() => h.view(h.heads()).change((d: Doc) => (d.x = 1))).toThrow();
+    expect(count(h)).toBe(before);
+  });
+
+  it("an unreadable stack leaves the change unstamped", () => {
+    const limit = Error.stackTraceLimit;
+    const h = make();
+    stackSource = () => undefined;
+    h.change((d) => (d.x = 1));
+    expect(messages(h).at(-1)).toBeNull();
+    stackSource = () => {
+      throw new Error("no stack");
+    };
+    h.change((d) => (d.x = 2));
+    expect(messages(h).at(-1)).toBeNull();
+    expect(h.doc().x).toBe(2);
+    expect(Error.stackTraceLimit).toBe(limit);
+  });
+
+  it("nested changes both stamp", () => {
+    const a = make();
+    const b = make();
+    a.change((d) => {
+      d.x = 1;
+      b.change((e) => (e.x = 1));
+    });
+    expect(messages(a)).toContain(`pw:${KEY_A}`);
+    expect(messages(b)).toContain(`pw:${KEY_A}`);
+    expect(writers(a)).toEqual({ [KEY_A]: { url: ROOT_A } });
+    expect(writers(b)).toEqual({ [KEY_A]: { url: ROOT_A } });
+  });
+});
+
+describe("the default stack source", () => {
+  it("restores Error.stackTraceLimit", () => {
+    uninstall!();
+    uninstall = installProvenance({ siteOrigin: ORIGIN, siteRoot: "site@test", httpSources: () => [] });
+    const limit = Error.stackTraceLimit;
+    make().change((d) => (d.x = 1));
+    expect(Error.stackTraceLimit).toBe(limit);
+  });
+});
