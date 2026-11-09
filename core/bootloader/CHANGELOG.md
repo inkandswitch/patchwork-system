@@ -1,5 +1,26 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.9.7
+
+### Patch Changes
+
+- c96c4f1: A hard reload no longer hangs boot. It loads the page past a service worker that's already active, which won't activate (and claim the page) again, so setup waited forever for a `controllerchange`. Setup now asks the active worker to claim the page; if that doesn't take within 3s (a worker from a build that doesn't know `claim`), the page reloads once, normally, which the worker does control. A second failure within 30s fails boot instead of reloading again.
+- 9cf7799: The module-loader worker is replaced when it errors. It used to be kept after an `error`, so later package discoveries went to a dead worker and never answered. Now an error fails the requests that were waiting on it and the next request starts a fresh worker; a request that hasn't been answered in 60s fails on its own.
+- 66b30ec: A batch of keyhive events the public reader fails to ingest is tried again rather than dropped. It used to be lost, with the reader's status stuck at `reading`, so public docs waiting on those keys never opened. It's retried up to five times over about 3s, in order ahead of newer events; past that `PublicReaderStatus.phase` is `failed` with the reason in `error`, and the events are tried again when more arrive.
+- 3f93b87: A tab's handle on a shared worker (the automerge worker, the public reader) is one state now — `none`, `running`, `winding-down` or `waiting` — readable as `handle.state` with the reason and since when. Two bugs went with the old scattered fields: a worker that died while winding down for a restart left every later message held forever, never reaching its replacement; and a worker that failed on every start was respawned as fast as it could boot. The first three quick restarts in a row still respawn at once; after that the respawn waits, doubling from 500ms to 10s, and the count starts over once an instance stays up for 30s. Messages posted meanwhile are delivered to the replacement.
+- Updated dependencies [a7bf755]
+- Updated dependencies [8ee14a5]
+- Updated dependencies [e7de26b]
+- Updated dependencies [d61277c]
+- Updated dependencies [9f5930b]
+- Updated dependencies [a2a7862]
+- Updated dependencies [a8c7202]
+- Updated dependencies [594d83b]
+  - @inkandswitch/patchwork-filesystem@0.2.19
+  - @inkandswitch/patchwork-plugins@1.2.7
+  - @inkandswitch/patchwork-providers@0.5.5
+  - @inkandswitch/patchwork-elements@6.2.1
+
 ## 0.9.6
 
 ### Patch Changes
