@@ -73,13 +73,13 @@ export function installProvenance(options: ProvenanceOptions): () => void {
     const cached = keys.get(cacheKey);
     if (cached) return cached;
     const recorded = (handle.fullDoc() as any)?.[PATCHWORK]?.[WRITERS];
+    const takenByOther = (key: string) => {
+      if (!isPlainObject(recorded)) return false;
+      const record = recorded[key];
+      return isPlainObject(record) && record.url !== root;
+    };
     let key = short;
-    while (
-      key.length < MAX_KEY_LENGTH &&
-      isPlainObject(recorded) &&
-      isPlainObject(recorded[key]) &&
-      recorded[key].url !== root
-    ) {
+    while (key.length < MAX_KEY_LENGTH && takenByOther(key)) {
       key = writerKey(root, key.length + 1);
     }
     keys.set(cacheKey, key);

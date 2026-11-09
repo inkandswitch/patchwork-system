@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import { PluginRegistry } from "../src/registry/registry.js";
 import {
   getRegistry,
+  pluginImportUrls,
   registerPlugins,
   unregisterPlugins,
 } from "../src/registry/index.js";
@@ -130,6 +131,25 @@ describe("registerPlugins and unregisterPlugins", () => {
 
     expect(registry.get("shared")?.importUrl).toBe(at(OTHER, v1));
     unregisterPlugins(`automerge:${OTHER}`);
+  });
+});
+
+describe("pluginImportUrls", () => {
+  it("lists every registered plugin's import url once, across registries", () => {
+    const dev = "http://localhost:5173/src/main.tsx";
+    registerPlugins(
+      [plugin("test:urls-a", "a"), plugin("test:urls-b", "b")],
+      dev
+    );
+    registerPlugins([plugin("test:urls-a", "c")], at(ID, v1));
+
+    const urls = pluginImportUrls();
+    expect(urls.filter((url) => url === dev)).toHaveLength(1);
+    expect(urls).toContain(at(ID, v1));
+
+    unregisterPlugins(dev);
+    unregisterPlugins(`automerge:${ID}`);
+    expect(pluginImportUrls()).not.toContain(dev);
   });
 });
 

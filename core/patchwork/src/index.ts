@@ -25,6 +25,7 @@ import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerg
 
 import {
   ModuleWatcher,
+  isHttpUrl,
   trackPackagesViaServiceWorker,
 } from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
@@ -36,6 +37,7 @@ import {
   type LoadedDatatype,
   createDocOfDatatype2,
   getRegistry,
+  pluginImportUrls,
   registerPlugins,
   resolveAccountHandle,
   unregisterPlugins,
@@ -62,6 +64,7 @@ import { watchDocument } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 import { showBootStatus } from "./boot-status.js";
+import { explain, explainSummary, installProvenance } from "./provenance/index.js";
 import {
   hashTools,
   planLoadOrder,
@@ -73,6 +76,9 @@ import {
 const log = debug("patchwork:setup");
 
 declare const __SITE_TITLE__: string;
+declare const __BUILD_ID__: number;
+
+let provenanceInstalled = false;
 
 declare global {
   interface Window {
@@ -168,6 +174,19 @@ async function doSetup(
     // requests, and leaves them to the automerge worker until now. A site's
     // own Repo isn't asked: it may not be able to find them.
     resolveHandoffsWith(repo);
+  }
+
+  // Every change made in this tab from here on names the package version
+  // that made it. Once per tab: a second setup keeps the first install.
+  if (!provenanceInstalled) {
+    const buildId =
+      typeof __BUILD_ID__ === "number" ? __BUILD_ID__ : undefined;
+    installProvenance({
+      siteOrigin: location.origin,
+      siteRoot: `site@${buildId ?? "dev"}`,
+      httpSources: () => pluginImportUrls().filter(isHttpUrl),
+    });
+    provenanceInstalled = true;
   }
 
   // Loaded tools and e2e read these. `window.patchwork` is the caller's to set.
@@ -329,6 +348,14 @@ async function doSetup(
     signer: signerIdentity,
     packages: moduleWatcher,
     plugins,
+    async explain(target, options) {
+      const handle = typeof target === "string" ? await repo.find(target) : target;
+      return explain(handle, options);
+    },
+    async explainSummary(target) {
+      const handle = typeof target === "string" ? await repo.find(target) : target;
+      return explainSummary(handle);
+    },
     sw: {
       connectClassicSync: (server) => connectClassicSync(repo, server),
       subscribeSyncState: (documentId, listener) =>
@@ -515,6 +542,14 @@ function subscribeSyncState(
 export { createRepo, initWasm } from "./repo.js";
 export { watchDocument } from "./watch-document.js";
 export { createRouter } from "./router.js";
+export {
+  explain,
+  explainSummary,
+  parseMessage,
+  type ExplainedChange,
+  type ExplainedWriter,
+  type WriterSummary,
+} from "./provenance/index.js";
 export {
   showLoadingAnimation,
   hideLoadingAnimation,
