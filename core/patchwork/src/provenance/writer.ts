@@ -70,7 +70,10 @@ function rootIn(url: string, siteOrigin: string, dirs: readonly SourceDir[]): st
   let best: string | undefined;
   let bestDir = "";
   for (const { source, dir } of dirs) {
-    if (dir.length > bestDir.length && url.startsWith(dir)) {
+    if (
+      dir.length > bestDir.length &&
+      (dir.endsWith("/") ? url.startsWith(dir) : url === dir)
+    ) {
       best = source;
       bestDir = dir;
     }
