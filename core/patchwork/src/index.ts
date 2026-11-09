@@ -286,6 +286,7 @@ async function doSetup(
   if (rootFolderUrl) {
     await loadFolderTree(repo, rootFolderUrl, {
       timeoutMs: FOLDER_TREE_TIMEOUT_MS,
+      onProgress: (folders) => report({ folders }),
     });
   }
 

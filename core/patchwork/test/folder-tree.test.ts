@@ -28,6 +28,21 @@ describe("loadFolderTree", () => {
     expect(found).toEqual([root.url, inner.url, deep.url]);
   });
 
+  it("says how many it's found as it goes, and when it's done", async () => {
+    const repo = new Repo();
+    const inner = folder(repo);
+    const root = folder(repo, [
+      { name: "inner", type: "folder", url: inner.url },
+    ]);
+    const onProgress = vi.fn();
+    await loadFolderTree(repo, root.url, { onProgress });
+    expect(onProgress.mock.calls.map(([p]) => p)).toEqual([
+      { found: 1, done: false },
+      { found: 2, done: false },
+      { found: 2, done: true },
+    ]);
+  });
+
   it("goes round a cycle once", async () => {
     const repo = new Repo();
     const root = folder(repo);

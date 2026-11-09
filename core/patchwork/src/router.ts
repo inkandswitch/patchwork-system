@@ -50,7 +50,9 @@ function serializeHashParams(params: URLSearchParams): string {
  * Coerce a `doc=` hash param to a full automerge URL. Accepts a full URL
  * (`automerge:<id>[#heads]`) or a bare document id, for older links.
  */
-export function docParamToUrl(docParam: string | null): AutomergeUrl | undefined {
+export function docParamToUrl(
+  docParam: string | null
+): AutomergeUrl | undefined {
   if (!docParam) return undefined;
   if (isValidAutomergeUrl(docParam as AutomergeUrl)) {
     return docParam as AutomergeUrl;
@@ -167,7 +169,8 @@ export function createRouter({
     const prevDoc = docParamToUrl(params.get("doc"));
     if (
       prevDoc &&
-      parseAutomergeUrl(prevDoc).documentId !== parseAutomergeUrl(url).documentId
+      parseAutomergeUrl(prevDoc).documentId !==
+        parseAutomergeUrl(url).documentId
     ) {
       params.delete("draft");
     }

@@ -90,6 +90,22 @@ describe("the boot status box", () => {
     status.done();
   });
 
+  it("counts the account's folders while it finds them", () => {
+    const status = showBootStatus({ draw: true, stuckAfterMs: 30_000 });
+    vi.advanceTimersByTime(1_000);
+    status.update({
+      stage: "package-list",
+      folders: { found: 12, done: false },
+    });
+    expect(box()?.textContent).toContain("Your folders: 12 loaded so far");
+    status.update({
+      stage: "package-list",
+      folders: { found: 14, done: true },
+    });
+    expect(box()?.textContent).not.toContain("folders");
+    status.done();
+  });
+
   it("goes on counting the packages still loading once the first view is up", () => {
     const status = showBootStatus({ draw: true, stuckAfterMs: 30_000 });
     status.update({
