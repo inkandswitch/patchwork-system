@@ -49,9 +49,10 @@ function rows(handle: DocHandle<unknown>, since: A.Heads): ExplainedChange[] {
     const record = writers?.[key];
     return isPlainObject(record) && typeof record.url === "string" ? { url: record.url } : "unrecorded";
   };
-  // Changes come oldest first in causal order; reversed, they read newest first.
+  // Sort concurrent changes by time, keeping reverse causal order for ties.
   return A.getChangesMetaSince(doc, since)
     .reverse()
+    .sort((a, b) => b.time - a.time)
     .map((change) => {
       const { message, key } = parseMessage(change.message);
       return {
