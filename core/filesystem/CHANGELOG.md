@@ -1,5 +1,21 @@
 # @inkandswitch/patchwork-filesystem
 
+## 0.2.19
+
+### Patch Changes
+
+- a7bf755: Boot loads first the packages for what's about to be on screen. Each visit stores in localStorage (`patchwork:load-order:<accountKey>`) which tools and components every settings entry provided, and which ones the mounted `<patchwork-view>`s showed, by depth from the outermost. The next boot loads the packages behind the hash's `frame` and `tool` first, then the root view's, then the views inside it, and so on, one batch at a time, then everything else. It starts loading each of those tools as soon as it registers, and opens the root view once they've all registered, without waiting for the rest of the site's packages. If a package fails, comes back without a tool it was expected to provide, or a batch takes more than 3s, everything still held back loads at once, and the root view waits for all of the site's packages as before. With nothing stored, or a hash naming a tool no package provided last time, boot works as it did.
+
+  `ModuleWatcher` gets `prioritize(batches)`, with the new `LoadBatch` and `PluginRef` types. Call it straight after constructing the watcher. While a plan is running, `addUrl` waits only for the constructor's sources to be read, not for their packages to load, since the plan may want the new source's packages first.
+
+  The tab's title now names a document whose datatype registers after the document opened. Before, it stayed on the site's name.
+
+- 9f5930b: Removing a package from settings now removes its tools and datatypes. They were registered under the heads-pinned url they were loaded from and unregistered by the bare settings entry, so nothing matched until a reload. `unregisterPlugins` now removes everything from the same package at any heads, and `registerPlugins` first removes whatever an earlier version of the same package registered that the new one no longer provides (a renamed or dropped id); ids the new version still provides are replaced in place, so a mounted view reloads once.
+
+  `ModuleWatcher`'s `onUnload` is now called with `(moduleKey, importUrl)`: the settings entry, and the url the module was last loaded from. A package published as a branches doc loads from its default branch, a different document, so unregister by `importUrl`. When the default branch moves to another document, the old branch's plugins are unloaded before the new ones register.
+
+  A package whose first lookup failed (the service worker or automerge worker still booting) is now looked up again on the import retry schedule; it used to stay unloaded until the package changed twice. And a module listed as a service-worker url for a file inside a package (`…/automerge%3A<id>/path/entry.js`) now reloads that same file at the new heads; since September 2025 a reload had imported the package's root entry point instead.
+
 ## 0.2.18
 
 ### Patch Changes

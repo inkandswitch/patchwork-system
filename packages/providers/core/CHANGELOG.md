@@ -1,5 +1,42 @@
 # @inkandswitch/patchwork-providers
 
+## 0.5.5
+
+### Patch Changes
+
+- e7de26b: `OverlayRepo` and `OverlayHandle` now behave like automerge-repo's `Repo` and `DocHandle` wherever a tool can tell the difference. Conformance tests run the same operations against both and compare the results, and seeded fuzz tests check the same properties across random edits, backing swaps and descriptor races.
+
+  Handles:
+
+  - Handles from `sub` and `view` follow automerge-repo's identity rules. The same url gives the same wrapper however it was reached: `h.sub("a").sub("b") === h.sub("a", "b")`, `h.sub() === h`, and `find(url/with/path)` returns the root's own `sub` of that path. Derived wrappers are held weakly, as automerge-repo holds sub-handles, so the cursor sub-handle an editor makes on every selection change is no longer kept for the life of the view.
+  - `view(heads)` returns a wrapper under the presented url instead of the backing (clone or scratch) handle.
+  - A backing swap re-bases each derived handle from its url, so a cursor range keeps its cursors instead of being re-placed by index, and one handle that can't be re-made no longer stops the swap. A view at heads the new backing doesn't have keeps showing its snapshot and stops forwarding events. The swap emits `heads-changed` (when the heads move) before `change`, and `change.patchInfo.before`/`after` are whole documents, as automerge-repo's are.
+  - `equals` compares the presented url, so it agrees with a real handle on the same url in either direction. `diff` accepts an overlay handle. `off(event)` with no listener removes them all, and `listenerCount`, `listeners` and `eventNames` report the overlay handle's own listeners, not the backing's.
+  - A url under a root whose remapper pinned it to heads no longer carries those heads into its sub-handles' urls. The sub's url now matches the root's.
+
+  Repo:
+
+  - `find(id, { signal })` honours the signal, which cancels the wait but not the resolution, as in automerge-repo.
+  - `handles` lists only root handles, never a sub-handle or a pinned view.
+  - A descriptor answer that fails after a newer answer has arrived no longer fails the `find` waiting on the newer one. Before, it also left a wrapper behind that no later answer could re-point.
+  - After a resolution fails, `findWithProgress` subscribers see `ready` once the document turns up, without anyone calling `find` again. `whenReady()` reads the current state, so a progress that has recovered resolves.
+  - `RepoLike.find` takes the optional `options` argument.
+
+- d61277c: `OverlayRepo.findWithProgress` reports failure the way the realm-local repo does. It used to say `loading` forever once a resolution failed. Now `peek()` and subscribers see `unavailable` (the document isn't there yet) or `failed` with its `error`, and a later retry moves them back through `loading` to `ready`. A subscriber that calls `find` or `whenReady()` as it hears the failure, or the retry starting, joins that retry rather than opening a second resolution beside it. As in the repo, `subscribe` reports transitions only. `dispose()` now rejects every `find` still pending, with "OverlayRepo disposed", instead of leaving it unsettled.
+- a2a7862: A remapper can now back a view with a document that's never saved or synced. `DocHandleDescriptor` gains `scratchUrl`, naming a document in the realm's scratch repo (a storage-less, network-less `Repo`, from the new `getScratchRepo()`) to show in place of `cloneUrl ?? url` while the view is live. This is for remappers that compute what a document shows rather than store it. A view pinned to heads (on the presented url, or stamped on `cloneUrl`) shows `cloneUrl ?? url` at those heads, since a scratch document needn't keep sharing the history of what it stands for. Heads only the scratch document has, read off a view it backs, are shown from the scratch document for as long as the descriptor names it.
+
+  While a view is backed by a scratch document, its `OverlayRepo` holds a `repo:scratch-lease` subscription for that document's url, released once nothing forwards to it. A remapper that made the document can claim those leases. They don't cover the descriptor's trip to the view, so the remapper also keeps the document for its latest answer on each open subscription, and deletes it once neither holds it.
+
+- a8c7202: A view backed by a scratch document now sends and hears peer traffic through the stored document it's computed from (`cloneUrl ?? url`), instead of through the scratch document, which has no peers. Before, a tool on a scratch-backed view couldn't see anyone's presence and nobody could see its own, and its sync info was always empty.
+
+  - `broadcast`, `getSyncInfo`, `getRemoteHeads` and `isCaughtUpWith` go to the realm repo's handle for the stored document, on the root and on every handle derived from it. So `isCaughtUpWith` says whether this tab holds what a peer last advertised for the stored document, which the scratch document's own history can't answer.
+  - `ephemeral-message` and `ephemeral-message-outbound` come from the stored document, re-stamped with the overlay handle as usual. `remote-heads` comes from it to the view's root alone, as automerge-repo emits it on a document's root handle and nowhere else.
+  - The stored document is almost always loaded already, so the routing happens with the swap. If it isn't, peer traffic stays on the scratch document until the stored one is found, and stays there if it never is.
+
+  Messages go out unchanged, so a peer on the stored document can't tell they came from a computed view, and any position in them (a cursor, an index) is one in the scratch document.
+
+  `OverlayHandle` gains `setSyncHandle(handle)` (internal, like `swapBackingDocHandle`, which now takes the sync handle as an optional second argument).
+
 ## 0.5.4
 
 ### Patch Changes

@@ -1,5 +1,46 @@
 # @inkandswitch/patchwork
 
+## 0.10.0
+
+### Minor Changes
+
+- c39ed0e: Boot says what it's doing. A site that doesn't pass `onProgress` gets a small box in the corner, shown once boot has taken a second, naming the step boot is on, how many packages have loaded, and what the public reader is doing; it goes away when the root view mounts (or, with `routing: false`, when `setup()` resolves). A site that passes `onProgress` draws its own and gets no box.
+
+  `timeout` no longer rejects `setup()`. A boot that passes it, counted from `setup()`, is reported as stuck instead — `BootProgress.stuck` is `true`, and the box says it's still not ready, under the step boot is on, with a reload button — and it carries on. If it gets there after all, the box goes away and `onProgress` hears `stuck: false`, rather than the site's error screen sitting over a working app. `setup()` still rejects for a boot that actually fails.
+
+### Patch Changes
+
+- a7bf755: Boot loads first the packages for what's about to be on screen. Each visit stores in localStorage (`patchwork:load-order:<accountKey>`) which tools and components every settings entry provided, and which ones the mounted `<patchwork-view>`s showed, by depth from the outermost. The next boot loads the packages behind the hash's `frame` and `tool` first, then the root view's, then the views inside it, and so on, one batch at a time, then everything else. It starts loading each of those tools as soon as it registers, and opens the root view once they've all registered, without waiting for the rest of the site's packages. If a package fails, comes back without a tool it was expected to provide, or a batch takes more than 3s, everything still held back loads at once, and the root view waits for all of the site's packages as before. With nothing stored, or a hash naming a tool no package provided last time, boot works as it did.
+
+  `ModuleWatcher` gets `prioritize(batches)`, with the new `LoadBatch` and `PluginRef` types. Call it straight after constructing the watcher. While a plan is running, `addUrl` waits only for the constructor's sources to be read, not for their packages to load, since the plan may want the new source's packages first.
+
+  The tab's title now names a document whose datatype registers after the document opened. Before, it stayed on the site's name.
+
+- 9f5930b: Removing a package from settings now removes its tools and datatypes. They were registered under the heads-pinned url they were loaded from and unregistered by the bare settings entry, so nothing matched until a reload. `unregisterPlugins` now removes everything from the same package at any heads, and `registerPlugins` first removes whatever an earlier version of the same package registered that the new one no longer provides (a renamed or dropped id); ids the new version still provides are replaced in place, so a mounted view reloads once.
+
+  `ModuleWatcher`'s `onUnload` is now called with `(moduleKey, importUrl)`: the settings entry, and the url the module was last loaded from. A package published as a branches doc loads from its default branch, a different document, so unregister by `importUrl`. When the default branch moves to another document, the old branch's plugins are unloaded before the new ones register.
+
+  A package whose first lookup failed (the service worker or automerge worker still booting) is now looked up again on the import retry schedule; it used to stay unloaded until the package changed twice. And a module listed as a service-worker url for a file inside a package (`…/automerge%3A<id>/path/entry.js`) now reloads that same file at the new heads; since September 2025 a reload had imported the package's root entry point instead.
+
+- f0851d4: The tab's title now follows the open document: it updates when the document is renamed, a slow lookup for a document you've already left can no longer overwrite the title of the one you're on, and the previous document's title isn't kept while the next one loads. Going Back to a hash with no document puts the site's title back, and going Back past a `frame=` link puts the home frame back. Older link shapes (`#automerge:<id>` and big-patchwork `<slug>--<id>`) are rewritten in place, so Back steps over them instead of landing on a link that rewrites itself forward again.
+- Updated dependencies [a7bf755]
+- Updated dependencies [c96c4f1]
+- Updated dependencies [8ee14a5]
+- Updated dependencies [9cf7799]
+- Updated dependencies [e7de26b]
+- Updated dependencies [d61277c]
+- Updated dependencies [9f5930b]
+- Updated dependencies [66b30ec]
+- Updated dependencies [a2a7862]
+- Updated dependencies [a8c7202]
+- Updated dependencies [3f93b87]
+- Updated dependencies [594d83b]
+  - @inkandswitch/patchwork-filesystem@0.2.19
+  - @inkandswitch/patchwork-bootloader@0.9.7
+  - @inkandswitch/patchwork-plugins@1.2.7
+  - @inkandswitch/patchwork-providers@0.5.5
+  - @inkandswitch/patchwork-elements@6.2.1
+
 ## 0.9.7
 
 ### Patch Changes
