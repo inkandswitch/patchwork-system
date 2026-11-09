@@ -181,11 +181,15 @@ async function doSetup(
   if (!provenanceInstalled) {
     const buildId =
       typeof __BUILD_ID__ === "number" ? __BUILD_ID__ : undefined;
-    installProvenance({
-      siteOrigin: location.origin,
-      siteRoot: `site@${buildId ?? "dev"}`,
-      httpSources: () => pluginImportUrls().filter(isHttpUrl),
-    });
+    try {
+      installProvenance({
+        siteOrigin: location.origin,
+        siteRoot: `site@${buildId ?? "dev"}`,
+        httpSources: () => pluginImportUrls().filter(isHttpUrl),
+      });
+    } catch (error) {
+      console.warn("patchwork provenance: not installed", error);
+    }
     provenanceInstalled = true;
   }
 
