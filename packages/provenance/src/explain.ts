@@ -40,15 +40,20 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> => {
   return proto === Object.prototype || proto === null;
 };
 
-function rows(handle: DocHandle<unknown>, since: A.Heads): ExplainedChange[] {
-  const doc = handle.fullDoc() as any;
-  const meta = doc?.["@patchwork"];
+/** A lookup from key to writer, against `doc`'s `@patchwork.writers` as it is now. */
+export function writerResolver(doc: unknown): (key: string | null) => ExplainedWriter {
+  const meta = (doc as any)?.["@patchwork"];
   const writers = isPlainObject(meta) && isPlainObject(meta.writers) ? meta.writers : undefined;
-  const resolve = (key: string | null): ExplainedWriter => {
+  return (key) => {
     if (key === null) return null;
-    const record = writers?.[key];
+    const record = writers && Object.hasOwn(writers, key) ? writers[key] : undefined;
     return isPlainObject(record) && typeof record.url === "string" ? { url: record.url } : "unrecorded";
   };
+}
+
+function rows(handle: DocHandle<unknown>, since: A.Heads): ExplainedChange[] {
+  const doc = handle.fullDoc() as any;
+  const resolve = writerResolver(doc);
   // Sort concurrent changes by time, keeping reverse causal order for ties.
   return A.getChangesMetaSince(doc, since)
     .reverse()

@@ -6,5 +6,5 @@ export {
   type ExplainedChange,
   type ExplainedWriter,
   type WriterSummary,
-} from "./explain.js";
+} from "@inkandswitch/patchwork-provenance";
 export { findWriter, packageRoot, writerKey, type Writer, type WriterContext } from "./writer.js";

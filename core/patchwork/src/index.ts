@@ -65,6 +65,7 @@ import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 import { showBootStatus } from "./boot-status.js";
 import { explain, explainSummary, installProvenance } from "./provenance/index.js";
+import { plugins as provenancePlugins } from "@inkandswitch/patchwork-provenance";
 import {
   hashTools,
   planLoadOrder,
@@ -79,6 +80,22 @@ declare const __SITE_TITLE__: string;
 declare const __BUILD_ID__: number;
 
 let provenanceInstalled = false;
+
+const PROVENANCE_PACKAGE = "@inkandswitch/patchwork-provenance";
+
+/**
+ * Where the page's importmap serves `name`, made absolute: the isolated
+ * iframe imports a plugin by its import url, and it shares this importmap.
+ */
+function importmapUrl(name: string): string | undefined {
+  try {
+    const script = document.querySelector('script[type="importmap"]');
+    const path = JSON.parse(script?.textContent ?? "{}")?.imports?.[name];
+    return typeof path === "string" ? new URL(path, document.baseURI).href : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 declare global {
   interface Window {
@@ -181,11 +198,16 @@ async function doSetup(
   if (!provenanceInstalled) {
     const buildId =
       typeof __BUILD_ID__ === "number" ? __BUILD_ID__ : undefined;
+    // The Writers sidebar ships with every site rather than in a package
+    // list. Its url isn't a plugin source a writer could be found under.
+    const writersUrl = importmapUrl(PROVENANCE_PACKAGE) ?? PROVENANCE_PACKAGE;
+    registerPlugins(provenancePlugins, writersUrl);
     try {
       installProvenance({
         siteOrigin: location.origin,
         siteRoot: `site@${buildId ?? "dev"}`,
-        httpSources: () => pluginImportUrls().filter(isHttpUrl),
+        httpSources: () =>
+          pluginImportUrls().filter((url) => isHttpUrl(url) && url !== writersUrl),
       });
     } catch (error) {
       console.warn("patchwork provenance: not installed", error);

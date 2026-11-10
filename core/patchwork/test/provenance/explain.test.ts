@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as A from "@automerge/automerge/slim";
 import { encodeHeads, generateAutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
-import { explain, explainSummary, parseMessage } from "../../src/provenance/explain.js";
+import { explain, explainSummary, parseMessage } from "@inkandswitch/patchwork-provenance";
 import { installProvenance } from "../../src/provenance/stamp.js";
 import { writerKey } from "../../src/provenance/writer.js";
 
