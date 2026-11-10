@@ -25,6 +25,7 @@ import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerg
 
 import {
   ModuleWatcher,
+  isHttpUrl,
   trackPackagesViaServiceWorker,
 } from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
@@ -36,6 +37,7 @@ import {
   type LoadedDatatype,
   createDocOfDatatype2,
   getRegistry,
+  pluginImportUrls,
   registerPlugins,
   resolveAccountHandle,
   unregisterPlugins,
@@ -62,6 +64,8 @@ import { watchDocument } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 import { showBootStatus } from "./boot-status.js";
+import { explain, explainSummary, installProvenance } from "./provenance/index.js";
+import { plugins as provenancePlugins } from "@inkandswitch/patchwork-provenance";
 import {
   hashTools,
   planLoadOrder,
@@ -73,6 +77,38 @@ import {
 const log = debug("patchwork:setup");
 
 declare const __SITE_TITLE__: string;
+declare const __BUILD_ID__: number;
+
+let provenanceInstalled = false;
+/** The account whose contact card this tab's changes name, once setup has it. */
+let provenanceAccount: DocHandle<AccountDoc> | undefined;
+
+/**
+ * This device's key in hex: the tab's sync signer, which every tab on the
+ * origin shares, or else the keyhive individual it acts as.
+ */
+function deviceKey(signer: SignerIdentity | undefined, hive: AutomergeRepoKeyhive | undefined): string | undefined {
+  if (signer?.verifyingKey) return signer.verifyingKey.toLowerCase();
+  const bytes = (hive as any)?.active?.individual?.id?.toBytes?.();
+  if (!(bytes instanceof Uint8Array)) return undefined;
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+const PROVENANCE_PACKAGE = "@inkandswitch/patchwork-provenance";
+
+/**
+ * Where the page's importmap serves `name`, made absolute: the isolated
+ * iframe imports a plugin by its import url, and it shares this importmap.
+ */
+function importmapUrl(name: string): string | undefined {
+  try {
+    const script = document.querySelector('script[type="importmap"]');
+    const path = JSON.parse(script?.textContent ?? "{}")?.imports?.[name];
+    return typeof path === "string" ? new URL(path, document.baseURI).href : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 declare global {
   interface Window {
@@ -168,6 +204,39 @@ async function doSetup(
     // requests, and leaves them to the automerge worker until now. A site's
     // own Repo isn't asked: it may not be able to find them.
     resolveHandoffsWith(repo);
+  }
+
+  // Every change made in this tab from here on names the package version
+  // that made it. Once per tab: a second setup keeps the first install.
+  if (!provenanceInstalled) {
+    const buildId =
+      typeof __BUILD_ID__ === "number" ? __BUILD_ID__ : undefined;
+    // The Writers sidebar ships with every site rather than in a package
+    // list. Its url isn't a plugin source a writer could be found under.
+    const writersUrl = importmapUrl(PROVENANCE_PACKAGE) ?? PROVENANCE_PACKAGE;
+    registerPlugins(provenancePlugins, writersUrl);
+    try {
+      installProvenance({
+        siteOrigin: location.origin,
+        siteRoot: `site@${buildId ?? "dev"}`,
+        httpSources: () =>
+          pluginImportUrls().filter((url) => isHttpUrl(url) && url !== writersUrl),
+        // Says who's writing: the device, and the account's contact card once
+        // the account has loaded. Self-reported, not signed.
+        author: (() => {
+          let device: string | undefined | null = null;
+          return () => {
+            if (device === null) device = deviceKey(signerIdentity, hive);
+            if (!device || device.length < 16) return undefined;
+            const contact = provenanceAccount?.doc()?.contactUrl;
+            return { id: device.slice(0, 16), device, ...(contact ? { contact } : {}) };
+          };
+        })(),
+      });
+    } catch (error) {
+      console.warn("patchwork provenance: not installed", error);
+    }
+    provenanceInstalled = true;
   }
 
   // Loaded tools and e2e read these. `window.patchwork` is the caller's to set.
@@ -274,6 +343,7 @@ async function doSetup(
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
+  provenanceAccount ??= accountDocHandle;
 
   // Once the account's packages are listed too, the list is whole, and a
   // package that's left it since last visit is forgotten.
@@ -329,6 +399,14 @@ async function doSetup(
     signer: signerIdentity,
     packages: moduleWatcher,
     plugins,
+    async explain(target, options) {
+      const handle = typeof target === "string" ? await repo.find(target) : target;
+      return explain(handle, options);
+    },
+    async explainSummary(target) {
+      const handle = typeof target === "string" ? await repo.find(target) : target;
+      return explainSummary(handle);
+    },
     sw: {
       connectClassicSync: (server) => connectClassicSync(repo, server),
       subscribeSyncState: (documentId, listener) =>
@@ -515,6 +593,14 @@ function subscribeSyncState(
 export { createRepo, initWasm } from "./repo.js";
 export { watchDocument } from "./watch-document.js";
 export { createRouter } from "./router.js";
+export {
+  explain,
+  explainSummary,
+  parseMessage,
+  type ExplainedChange,
+  type ExplainedWriter,
+  type WriterSummary,
+} from "./provenance/index.js";
 export {
   showLoadingAnimation,
   hideLoadingAnimation,

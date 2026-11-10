@@ -1,0 +1,285 @@
+<title>Change provenance</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,400;0,700;1,400&family=Merriweather+Sans:wght@300;400;600&display=swap">
+<style>
+/* Layout: one centred column of white sheets on a grey ground, one idea per sheet (Patchwork write-ups). */
+:root {
+  --page: #f9fafb; --paper: #ffffff; --chrome: #f3f4f6;
+  --ink: #374151; --strong: #111827; --soft: #5f6672; --rule: #e5e7eb; --accent: #2563eb;
+  --added: #dcfce7; --on-added: #166534; --removed: #fee2e2; --on-removed: #991b1b;
+  --highlight: #fef9c3; --on-highlight: #374151;
+  --serif: Merriweather, Georgia, "Times New Roman", serif;
+  --sans: "Merriweather Sans", "Helvetica Neue", Arial, sans-serif;
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --shadow: 0 1px 2px rgba(17,24,39,0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --page: #111318; --paper: #1a1d23; --chrome: #23272f;
+    --ink: #d1d5db; --strong: #f3f4f6; --soft: #9ca3af; --rule: #2f343d; --accent: #60a5fa;
+    --added: #133b24; --on-added: #86efac; --removed: #3f1d1d; --on-removed: #fca5a5;
+    --highlight: #3d3510; --on-highlight: #f3f4f6;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --page: #111318; --paper: #1a1d23; --chrome: #23272f;
+  --ink: #d1d5db; --strong: #f3f4f6; --soft: #9ca3af; --rule: #2f343d; --accent: #60a5fa;
+  --added: #133b24; --on-added: #86efac; --removed: #3f1d1d; --on-removed: #fca5a5;
+  --highlight: #3d3510; --on-highlight: #f3f4f6;
+  color-scheme: dark;
+}
+body { background: var(--page); color: var(--ink); font: 16.5px/1.75 var(--serif); }
+.wrap {
+  max-width: 54rem; margin: 0 auto;
+  padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: flex; flex-direction: column; gap: 20px;
+}
+header { display: flex; flex-direction: column; gap: 10px; padding-bottom: 8px; }
+.label { font: 600 11.5px/1.4 var(--ui); letter-spacing: 0.06em; text-transform: uppercase; color: var(--soft); }
+h1 { font: 300 44px/1.18 var(--sans); letter-spacing: -0.01em; color: var(--strong); margin: 0; text-wrap: balance; }
+.lede { font: 18px/1.75 var(--serif); max-width: 62ch; margin: 0; }
+.byline { font: 13px/1.55 var(--ui); color: var(--soft); }
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(10.5rem, 1fr)); gap: 14px; margin-top: 10px; }
+.stat { background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; box-shadow: var(--shadow); padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; }
+.stat b { font: 300 30px/1.15 var(--sans); color: var(--strong); font-variant-numeric: tabular-nums; }
+.stat span { font: 13px/1.55 var(--ui); color: var(--soft); }
+section.sheet {
+  background: var(--paper); border: 1px solid var(--rule); border-radius: 8px; box-shadow: var(--shadow);
+  padding: 28px 44px; display: flex; flex-direction: column; gap: 14px; min-width: 0;
+}
+@media (max-width: 640px) { section.sheet { padding: 22px 18px; } h1 { font-size: 34px; } }
+h2 { font: 400 24px/32px var(--sans); color: var(--strong); margin: 0; text-wrap: balance; }
+h3 { font: 600 16.5px/1.5 var(--sans); color: var(--strong); margin: 6px 0 0; }
+p, ul, ol { margin: 0; max-width: 66ch; }
+ul, ol { padding-left: 1.3em; display: flex; flex-direction: column; gap: 4px; }
+a { color: var(--accent); }
+code { font: 13.5px/1.5 var(--mono); background: var(--chrome); color: var(--strong); padding: 1px 5px; border-radius: 3px; overflow-wrap: anywhere; }
+pre { margin: 0; background: var(--chrome); border-radius: 6px; padding: 12px 14px; overflow-x: auto; font: 13px/1.6 var(--mono); color: var(--strong); }
+pre code { background: none; padding: 0; overflow-wrap: normal; }
+.scroll { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font: 13px/1.55 var(--ui); font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+th { color: var(--soft); font-weight: 600; background: var(--chrome); }
+td.n, th.n { text-align: right; white-space: nowrap; }
+td code { font-size: 12.5px; }
+.add { background: var(--added); color: var(--on-added); border-radius: 3px; padding: 0 4px; }
+.rem { background: var(--removed); color: var(--on-removed); border-radius: 3px; padding: 0 4px; }
+.ref { font: 12px/1.4 var(--mono); color: var(--soft); }
+.cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr)); gap: 14px; }
+.panel { background: var(--chrome); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.panel h3 { margin: 0; }
+.panel ul { font: 14px/1.6 var(--ui); }
+.callout { background: var(--chrome); border-radius: 8px; padding: 12px 16px; font: 14px/1.6 var(--ui); max-width: none; }
+figure { margin: 0; background: var(--page); border: 1px solid var(--rule); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 8px; }
+figcaption { font: 13px/1.55 var(--ui); color: var(--soft); }
+.bars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 6px 12px; align-items: center; font: 13px/1.4 var(--ui); font-variant-numeric: tabular-nums; }
+.bars .k { color: var(--ink); }
+.bars .v { color: var(--strong); text-align: right; }
+.track { height: 14px; display: flex; border-radius: 3px; overflow: hidden; background: var(--chrome); }
+.track i { display: block; height: 100%; background: var(--soft); }
+.track i.extra { background: var(--on-removed); }
+.track i.small { background: var(--on-added); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font: 12px/1.4 var(--ui); color: var(--soft); }
+.legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; background: var(--c); }
+.flow { display: flex; flex-direction: column; gap: 0; counter-reset: s; }
+.flow li { list-style: none; display: grid; grid-template-columns: 1.8rem 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--rule); font: 14.5px/1.6 var(--ui); }
+.flow li:last-child { border-bottom: 0; }
+.flow li::before { counter-increment: s; content: counter(s); font: 300 20px/1.2 var(--sans); color: var(--soft); }
+.flow { padding: 0; }
+.decided { display: flex; flex-direction: column; gap: 8px; padding: 0; }
+.decided li { list-style: none; font: 14.5px/1.6 var(--ui); padding-left: 0; }
+.decided li b { color: var(--strong); font-weight: 600; }
+footer { font: 13px/1.55 var(--ui); color: var(--soft); padding-top: 4px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<div class="wrap">
+<header>
+  <div class="label">Spec · 2026-11-09 · branch change-provenance</div>
+  <h1>Change provenance</h1>
+  <p class="lede">Every Automerge change made in a patchwork tab says which package version made it, so a developer can answer “which tool broke this doc?” from the doc alone.</p>
+  <div class="byline">Taken from ermine, where every write carries its actor, frame and site, and <code>explain()</code> reads them back. Approved in conversation with chee; this page replaces the markdown draft.</div>
+  <div class="stats">
+    <div class="stat"><b>+6 B</b><span>per change on the wire, for the short key</span></div>
+    <div class="stat"><b>~150 B</b><span>once per doc per package version, for the record</span></div>
+    <div class="stat"><b>~1 µs</b><span>extra <code>change()</code> time from the message</span></div>
+    <div class="stat"><b>&lt;20 µs</b><span>budget for stack capture, not yet measured</span></div>
+  </div>
+</header>
+
+<section class="sheet" id="goal">
+  <h2>Goal and scope</h2>
+  <p>The first reader is a developer debugging a doc. They need a list of a doc’s changes with the package version that made each one, from the console. Nothing is built for anyone else yet.</p>
+  <div class="cols">
+    <div class="panel">
+      <h3>In</h3>
+      <ul>
+        <li>A short key on every change a tab makes</li>
+        <li>The key’s full record, inside the doc</li>
+        <li><code>explain</code> and <code>explainSummary</code> on <code>window.patchwork</code></li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>Out</h3>
+      <ul>
+        <li>Blame per field or text span</li>
+        <li>Any UI</li>
+        <li>Reverting one writer’s changes</li>
+        <li>Stamping changes made inside workers</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section class="sheet" id="cost">
+  <h2>What a message costs</h2>
+  <p>Measured on astrobleme with <code>@automerge/automerge</code> 3.5.0, the version patchwork pins: 5 rounds with the order reversed every other round, one process per run, medians shown. Each change was synced to a second copy one at a time, as live editing does.</p>
+  <figure>
+    <div class="bars" role="img" aria-label="Sync bytes per typing change: no message 262, short key 268, full JSON 414">
+      <span class="k">No message</span><div class="track"><i style="width:63.3%"></i></div><span class="v">262 B</span>
+      <span class="k">Short key</span><div class="track"><i style="width:63.3%"></i><i class="small" style="width:1.4%"></i></div><span class="v">268 B</span>
+      <span class="k">~150 B JSON</span><div class="track"><i style="width:63.3%"></i><i class="extra" style="width:36.7%"></i></div><span class="v">414 B</span>
+    </div>
+    <div class="legend">
+      <span style="--c: var(--soft)">change without a message</span>
+      <span style="--c: var(--on-added)">short key</span>
+      <span style="--c: var(--on-removed)">full record in the message</span>
+    </div>
+    <figcaption>Sync bytes per change, 5000 one-character typing changes. Incremental saves show the same gap: 108 B, 114 B, 259 B.</figcaption>
+  </figure>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Per change, 5000 typing changes</th><th class="n">No message</th><th class="n"><code>"tldraw"</code></th><th class="n">~150 B JSON</th></tr></thead>
+      <tbody>
+        <tr><td><code>change()</code></td><td class="n">22.3 µs</td><td class="n">22.7 µs</td><td class="n">23.3 µs</td></tr>
+        <tr><td>Sync round trip</td><td class="n">730 µs</td><td class="n">723 µs</td><td class="n">730 µs</td></tr>
+        <tr><td>Incremental save</td><td class="n">108 B</td><td class="n">114 B</td><td class="n"><span class="rem">259 B</span></td></tr>
+        <tr><td>Sync bytes</td><td class="n">262 B</td><td class="n">268 B</td><td class="n"><span class="rem">414 B</span></td></tr>
+        <tr><td>Compacted <code>save()</code>, whole doc</td><td class="n">242 B</td><td class="n">255 B</td><td class="n">399 B</td></tr>
+        <tr><td><code>load()</code>, whole doc</td><td class="n">5.7 ms</td><td class="n">5.7 ms</td><td class="n">7.8 ms</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Compacted saves deduplicate messages, so 5000 identical full messages cost 157 B. Incremental chunks and sync messages carry each change’s message whole. Hence a short key in the message and the full record written once per doc.</p>
+  <p class="ref">astrobleme ~/tmp/ambench/provenance.mjs · results prov.jsonl</p>
+</section>
+
+<section class="sheet" id="attribution">
+  <h2>Finding the writer</h2>
+  <p>At tab setup, before any package loads, <code>DocHandle.prototype.change</code> and <code>changeAt</code> are wrapped once. <code>@automerge/automerge-repo</code> is a single external per realm, so the wrap covers tools, components writing through the base repo, and handles shared between views. Handle identity is untouched.</p>
+  <p>Wrapping handles per view was rejected. Components receive the base repo, not the view’s overlay <span class="ref">core/elements/src/patchwork-view.ts:536</span>, and <code>repo.find</code> returns one shared handle per doc.</p>
+  <ol class="flow">
+    <li><span>A tool calls <code>handle.change(fn)</code>, directly or through a shared external such as solid-automerge.</span></li>
+    <li><span>The wrapper raises <code>Error.stackTraceLimit</code>, captures <code>new Error().stack</code>, and restores the limit.</span></li>
+    <li><span>It walks the frames for the first URL that belongs to a package, which skips the frames of shared externals.</span></li>
+    <li><span>That package root maps to a cached key. The change runs with <code>pw:&lt;key&gt;</code> in its message.</span></li>
+    <li><span>If the change landed and the doc has no record for the key yet, a second change, with the same message, writes the record.</span></li>
+  </ol>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Frame URL</th><th>Package root</th></tr></thead>
+      <tbody>
+        <tr><td><code>${origin}/automerge%3A&lt;id&gt;%23&lt;heads&gt;/…</code> (main)</td><td><code>automerge:&lt;id&gt;#&lt;heads&gt;</code></td></tr>
+        <tr><td><code>${origin}/@/&lt;pinned path&gt;/…</code> (paths-design)</td><td>the pinned container path, added once paths-design is on main; until then these frames are skipped</td></tr>
+        <tr><td>an http(s) URL a plugin was registered from (dev servers)</td><td>that source, through the registry’s <code>sourceOf</code></td></tr>
+        <tr><td>only site frames</td><td><code>site@&lt;buildId&gt;</code></td></tr>
+        <tr><td>no site or package frame (an extension, <code>eval</code>)</td><td>no stamp</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>The record names a package version, not a tool. A frame shows which package wrote, not which of its plugins.</p>
+</section>
+
+<section class="sheet" id="message">
+  <h2>What a change carries</h2>
+  <ul>
+    <li><b>Key:</b> the first 8 base58 characters of a hash of the package root, computed once per root and cached.</li>
+    <li><b>Message:</b> <code>pw:&lt;key&gt;</code>. When the caller passes its own message, the key goes on a new line after it.</li>
+    <li><b>Matching:</b> readers use <code>/(?:^|\n)pw:([1-9A-HJ-NP-Za-km-z]{8,})$/</code>. The key can be longer after a collision.</li>
+  </ul>
+<pre><code>// no message from the tool
+"pw:4kQx9TmB"
+
+// the tool passed { message: "rename layer" }
+"rename layer\npw:4kQx9TmB"</code></pre>
+</section>
+
+<section class="sheet" id="record">
+  <h2>The record</h2>
+  <p>Right after a package version’s first change to a doc, a change of its own, carrying the same <code>pw:&lt;key&gt;</code> message, writes its record:</p>
+<pre><code>doc["@patchwork"].writers["4kQx9TmB"] = { url: "automerge:2jaGJcuHPpLmFzRxxyAQ4kZPQ5mu#7hZ5RYdE…" }</code></pre>
+  <ul>
+    <li>A change of its own, not part of the tool’s change: sub-handles call <code>A.change</code> themselves and never pass through the root handle’s <code>change</code>, so no wrapper sees the root doc inside their callback <span class="ref">automerge-repo DocHandle.js:382-391</span>. It also leaves a tool’s empty change empty. Revised while planning; the first draft wrote it in the same change.</li>
+    <li>Written only when the tool’s change landed (the heads moved). A doc without <code>@patchwork</code> gets <code>{ writers: { … } }</code> created there. When <code>@patchwork</code> or its <code>writers</code> is present but not an object, the value is left as it is: the message, no record. A created <code>@patchwork</code> has no <code>type</code>. The only visible effect is in <code>patchwork-view</code>’s error for a doc no tool opens, which says “no tool for …” instead of “missing @patchwork metadata” <span class="ref">core/elements/src/legacy-impl.ts:631</span>. Revised after review; the first draft left these docs without a record.</li>
+    <li>Every form is stamped and recorded the same way: the callback and value forms of <code>change</code>, <code>changeAt</code>, and sub-handles, whose record goes through their root handle. A sub-handle’s <code>remove()</code> takes no options and stays unstamped.</li>
+    <li>An existing record under the key with a different <code>url</code> is a collision. The writer’s key then takes one more hash character until it is free, cached per doc.</li>
+    <li>A dev loop that rebuilds a package adds one record per rebuild that writes to the doc, about 150 B each. Accepted.</li>
+  </ul>
+</section>
+
+<section class="sheet" id="reading">
+  <h2>Reading it back</h2>
+  <p>Two exports from <code>@inkandswitch/patchwork</code>, which sites put on <code>window.patchwork</code> so they work from the console:</p>
+<pre><code>explain(handle, { limit = 50, since?: Heads }): ExplainedChange[]
+explainSummary(handle): { writer, count, first, last }[]</code></pre>
+  <p><code>explain</code> reads <code>A.getChangesMetaSince(doc, since ?? [])</code>, which returns metadata without decoding ops, and lists changes newest first as <code>{ hash, time, actor, message, key, writer }</code>.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th><code>writer</code></th><th>When</th></tr></thead>
+      <tbody>
+        <tr><td><code>{ url }</code></td><td>The key resolved through <code>@patchwork.writers</code></td></tr>
+        <tr><td><code>"unrecorded"</code></td><td>A key with no record, because the doc’s <code>@patchwork</code> or <code>writers</code> isn’t an object</td></tr>
+        <tr><td><code>null</code></td><td>No key: made before this landed, or by an unstamped writer</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p><code>message</code> is the caller’s own text with the <code>pw:</code> line removed, or <code>null</code>. <code>explainSummary</code> groups the rows of the whole history by writer, with a count and the first and last time each one wrote.</p>
+</section>
+
+<section class="sheet" id="placement">
+  <h2>Where it lives</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>File, under <code>core/patchwork/src/provenance/</code></th><th>Does</th></tr></thead>
+      <tbody>
+        <tr><td><code>frames.ts</code></td><td>Stack string to frame URLs, for V8, SpiderMonkey and JavaScriptCore formats</td></tr>
+        <tr><td><code>writer.ts</code></td><td>Frame URL to package root and key; the key cache</td></tr>
+        <tr><td><code>stamp.ts</code></td><td>The prototype wrap, the message and the record</td></tr>
+        <tr><td><code>explain.ts</code></td><td>The reader</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p>Installed from tab setup, beside the <code>Repo</code> construction in <code>core/patchwork/src/repo.ts</code>. <code>@inkandswitch/patchwork-plugins</code> gains <code>pluginImportUrls()</code>, so the stamp can tell a dev server’s tool frames from other http frames. One changeset, <code>patch</code> for <code>@inkandswitch/patchwork</code> and <code>@inkandswitch/patchwork-plugins</code>: changes made in a tab now carry <code>pw:</code> keys, docs gain <code>@patchwork.writers</code>, and <code>explain</code> and <code>explainSummary</code> are new exports.</p>
+</section>
+
+<section class="sheet" id="testing">
+  <h2>Testing</h2>
+  <p>Vitest only. Browser coverage comes from CI’s e2e.</p>
+  <ul>
+    <li><b>First, a stack-capture microbench.</b> The budget is under 20 µs per change, against a ~730 µs sync round trip. Over budget, the writer gets cached per call site before anything else is built.</li>
+    <li><code>frames.ts</code>: captured stack strings from all three engines, including frames of shared externals and the site bundle.</li>
+    <li><code>writer.ts</code>: each URL form (main, <code>/@/</code>, http dev source, site), key stability, the collision suffix.</li>
+    <li><code>stamp.ts</code>, against a real in-memory <code>Repo</code> with the frame source injected so a test chooses the stack: a package’s first write records it and later writes don’t; a caller’s message is kept; the value shorthand, <code>changeAt</code> and sub-handles are stamped and recorded; a doc without <code>@patchwork</code> gets one holding only <code>writers</code>; a non-object <code>@patchwork</code> or <code>writers</code> is left alone; handle identity unchanged.</li>
+    <li><code>explain.ts</code>: a doc with mixed writers, changes from before this landed, <code>since</code> and <code>limit</code>.</li>
+  </ul>
+</section>
+
+<section class="sheet" id="decided">
+  <h2>Decided on 2026-11-09</h2>
+  <ul class="decided">
+    <li><b>First reader:</b> debugging, “which tool broke this doc”. A console reader is enough.</li>
+    <li><b>Record home:</b> in the doc, so collaborators can resolve keys their own tools didn’t write. Written in a change of its own right after the writer’s first change, revised while planning because sub-handles never reach the root’s <code>change</code>.</li>
+    <li><b>Attribution:</b> one wrap of the shared <code>DocHandle</code> prototype, with the writer read from the stack.</li>
+    <li><b>Docs without <code>@patchwork</code>:</b> the record creates it, holding only <code>writers</code>.</li>
+    <li><b>Granularity:</b> a package version, not a single tool.</li>
+  </ul>
+</section>
+
+<footer>Plan: <code>docs/superpowers/plans/2026-11-09-change-provenance.md</code>, starting with the stack-capture microbench.</footer>
+</div>
