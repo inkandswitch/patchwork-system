@@ -54,10 +54,18 @@ describe("composeMessage", () => {
     expect(composeMessage(undefined, "4kQx9TmB")).toBe("pw:4kQx9TmB");
     expect(composeMessage("rename layer", "4kQx9TmB")).toBe("rename layer\npw:4kQx9TmB");
   });
+
+  it("puts where the write came from after the key", () => {
+    expect(composeMessage("rename layer", "4kQx9TmB", "dist/index.js:3:9")).toBe(
+      "rename layer\npw:4kQx9TmB dist/index.js:3:9",
+    );
+  });
 });
 
 describe("installProvenance", () => {
   const KEY_A = writerKey(ROOT_A);
+  /** A change stamped from `stackFor(ROOT_A)`: the key, and where in the package it came from. */
+  const STAMP_A = `pw:${KEY_A} dist/index.js:3:9`;
 
   it("stamps a change", () => {
     const h = make();
@@ -69,7 +77,7 @@ describe("installProvenance", () => {
   it("keeps a caller's message", () => {
     const h = make();
     h.change((d) => (d.x = 1), { message: "rename layer" });
-    expect(messages(h)).toContain(`rename layer\npw:${KEY_A}`);
+    expect(messages(h)).toContain(`rename layer\n${STAMP_A}`);
   });
 
   it("records a writer once", () => {
@@ -127,14 +135,14 @@ describe("installProvenance", () => {
   it("@patchwork not an object", () => {
     const h = make({ "@patchwork": "x" });
     h.change((d) => (d.y = 1));
-    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(messages(h)).toContain(STAMP_A);
     expect(h.doc()["@patchwork"]).toBe("x");
   });
 
   it("writers not an object", () => {
     const h = make({ "@patchwork": { type: "test", writers: "x" } });
     h.change((d) => (d.y = 1));
-    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(messages(h)).toContain(STAMP_A);
     expect(writers(h)).toBe("x");
   });
 
@@ -267,7 +275,7 @@ describe("installProvenance", () => {
     install();
     items.sub("inner").change((d: Doc) => (d.a = 1));
     expect(h.doc().items).toEqual({ inner: { a: 1 } });
-    expect(messages(h)).toContain(`pw:${KEY_A}`);
+    expect(messages(h)).toContain(STAMP_A);
   });
 
   it("a second copy of the module can't install over the first", async () => {
@@ -289,6 +297,77 @@ describe("installProvenance", () => {
     expect(messages(b)).toContain(`pw:${KEY_A}`);
     expect(writers(a)).toEqual({ [KEY_A]: { url: ROOT_A } });
     expect(writers(b)).toEqual({ [KEY_A]: { url: ROOT_A } });
+  });
+});
+
+describe("authors", () => {
+  const DEVICE = "a1b2c3d4e5f60718".repeat(4);
+  const ID = DEVICE.slice(0, 16);
+  const CONTACT = generateAutomergeUrl();
+  let author: { id: string; device: string; contact?: string } | undefined;
+
+  beforeEach(() => {
+    uninstall!();
+    author = { id: ID, device: DEVICE, contact: CONTACT };
+    uninstall = installProvenance({
+      siteOrigin: ORIGIN,
+      siteRoot: "site@test",
+      httpSources: () => [],
+      stack: () => stackSource(),
+      author: () => author,
+    });
+  });
+
+  const metas = (h: DocHandle<any>) => A.getChangesMetaSince(h.fullDoc(), []);
+
+  it("marks every change with the author, and records who that is once, with the writer", () => {
+    const h = make();
+    const before = count(h);
+    h.change((d) => (d.x = 1));
+    h.change((d) => (d.x = 2));
+    expect(count(h) - before).toBe(3);
+    expect(metas(h).slice(before).map((m) => m.author)).toEqual([ID, ID, ID]);
+    expect(h.doc()["@patchwork"].authors).toEqual({ [ID]: { device: DEVICE, contact: CONTACT } });
+    expect(writers(h)).toEqual({ [writerKey(ROOT_A)]: { url: ROOT_A } });
+  });
+
+  it("adds the contact card once it's known", () => {
+    author = { id: ID, device: DEVICE };
+    const h = make();
+    h.change((d) => (d.x = 1));
+    expect(h.doc()["@patchwork"].authors).toEqual({ [ID]: { device: DEVICE } });
+    author = { id: ID, device: DEVICE, contact: CONTACT };
+    const before = count(h);
+    h.change((d) => (d.x = 2));
+    expect(count(h) - before).toBe(2);
+    expect(h.doc()["@patchwork"].authors[ID]).toEqual({ device: DEVICE, contact: CONTACT });
+    h.change((d) => (d.x = 3));
+    expect(count(h) - before).toBe(3);
+  });
+
+  it("ignores an author id that isn't 16 hex characters", () => {
+    author = { id: "nope", device: DEVICE };
+    const h = make();
+    h.change((d) => (d.x = 1));
+    expect(metas(h).at(-1)!.author).toBeNull();
+    expect(h.doc()["@patchwork"].authors).toBeUndefined();
+  });
+
+  it("an author that throws leaves the change stamped, without an author", () => {
+    uninstall!();
+    uninstall = installProvenance({
+      siteOrigin: ORIGIN,
+      siteRoot: "site@test",
+      httpSources: () => [],
+      stack: () => stackSource(),
+      author: () => {
+        throw new Error("no account yet");
+      },
+    });
+    const h = make();
+    h.change((d) => (d.x = 1));
+    expect(h.doc().x).toBe(1);
+    expect(writers(h)).toEqual({ [writerKey(ROOT_A)]: { url: ROOT_A } });
   });
 });
 

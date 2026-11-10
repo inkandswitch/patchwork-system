@@ -67,12 +67,29 @@ describe("packageRoot", () => {
 describe("findWriter", () => {
   it("takes the first package frame, skipping site frames above it", () => {
     const stack = v8(`${ORIGIN}/assets/index-abc.js`, served(ROOT_A), `${ORIGIN}/assets/solid.js`);
-    expect(findWriter(stack, ctx)).toEqual({ root: ROOT_A, key: writerKey(ROOT_A) });
+    expect(findWriter(stack, ctx)).toEqual({ root: ROOT_A, key: writerKey(ROOT_A), at: "dist/index.js:1:1" });
   });
 
   it("names the site when only site frames are on the stack", () => {
     const stack = v8(`${ORIGIN}/assets/index-abc.js`, `${ORIGIN}/assets/main.js`);
-    expect(findWriter(stack, ctx)).toEqual({ root: "site@42", key: writerKey("site@42") });
+    expect(findWriter(stack, ctx)).toEqual({
+      root: "site@42",
+      key: writerKey("site@42"),
+      at: "assets/index-abc.js:1:1",
+    });
+  });
+
+  it("says where in the package the write came from", () => {
+    const stack = `Error\n    at onClick (${served(ROOT_A, "dist/assets/canvas-x1.js")}:412:17)`;
+    expect(findWriter(stack, ctx)!.at).toBe("dist/assets/canvas-x1.js:412:17");
+    const dev = { ...ctx, httpSources: () => ["http://localhost:5173/src/main.tsx"] };
+    const devStack = "Error\n    at f (http://localhost:5173/src/components/Draw.tsx?t=123:88:3)";
+    expect(findWriter(devStack, dev)).toMatchObject({
+      root: "http://localhost:5173/src/main.tsx",
+      at: "components/Draw.tsx:88:3",
+    });
+    const file = { ...ctx, httpSources: () => ["https://esm.sh/tldraw@3"] };
+    expect(findWriter("Error\n    at f (https://esm.sh/tldraw@3:5:6)", file)!.at).toBe("tldraw@3:5:6");
   });
 
   it("reads the plugin sources once per stack", () => {

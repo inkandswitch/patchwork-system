@@ -1,4 +1,4 @@
-export { installProvenance, composeMessage, WRITERS, type ProvenanceOptions } from "./stamp.js";
+export { installProvenance, composeMessage, AUTHORS, WRITERS, type Author, type ProvenanceOptions } from "./stamp.js";
 export {
   explain,
   explainSummary,

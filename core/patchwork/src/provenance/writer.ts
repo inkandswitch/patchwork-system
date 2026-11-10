@@ -1,9 +1,13 @@
 // Which package version a stack belongs to, and the short key its changes carry.
 import { isValidAutomergeUrl } from "@automerge/automerge-repo/slim";
-import { frameUrls } from "./frames.js";
+import { frames } from "./frames.js";
 
-/** A package version (or site build) that writes, and its key. */
-export type Writer = { root: string; key: string };
+/**
+ * A package version (or site build) that writes, and its key. `at` is where
+ * in it the write came from: `path:line:column`, the path relative to the
+ * package root (the site's path from its origin).
+ */
+export type Writer = { root: string; key: string; at?: string };
 
 export type WriterContext = {
   /** The tab's own origin: frames there with no package segment are the site's. */
@@ -20,7 +24,7 @@ export type WriterContext = {
  * an extension).
  */
 export function packageRoot(url: string, ctx: WriterContext): string | "site" | undefined {
-  return rootIn(url, ctx.siteOrigin, sourceDirs(ctx.httpSources()));
+  return rootIn(url, ctx.siteOrigin, sourceDirs(ctx.httpSources()))?.root;
 }
 
 type SourceDir = { source: string; dir: string };
@@ -50,14 +54,20 @@ function sourceDirs(sources: readonly string[]): SourceDir[] {
   return dirs;
 }
 
-function rootIn(url: string, siteOrigin: string, dirs: readonly SourceDir[]): string | "site" | undefined {
+/** The root a frame's url belongs to, and the file's path inside that root. */
+function rootIn(
+  url: string,
+  siteOrigin: string,
+  dirs: readonly SourceDir[],
+): { root: string | "site"; path: string } | undefined {
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
     return undefined;
   }
-  for (const segment of parsed.pathname.split("/")) {
+  const segments = parsed.pathname.split("/");
+  for (const [i, segment] of segments.entries()) {
     if (!segment.startsWith("automerge%3A")) continue;
     let decoded: string;
     try {
@@ -65,7 +75,7 @@ function rootIn(url: string, siteOrigin: string, dirs: readonly SourceDir[]): st
     } catch {
       continue;
     }
-    if (isValidAutomergeUrl(decoded)) return decoded;
+    if (isValidAutomergeUrl(decoded)) return { root: decoded, path: segments.slice(i + 1).join("/") };
   }
   let best: string | undefined;
   let bestDir = "";
@@ -78,8 +88,13 @@ function rootIn(url: string, siteOrigin: string, dirs: readonly SourceDir[]): st
       bestDir = dir;
     }
   }
-  if (best) return best;
-  if (parsed.origin === siteOrigin) return "site";
+  // Without the query a dev server adds (`?v=…`, `?t=…`).
+  const bare = parsed.origin + parsed.pathname;
+  if (best) {
+    const path = bestDir.endsWith("/") ? bare.slice(bestDir.length) : segments.at(-1)!;
+    return { root: best, path };
+  }
+  if (parsed.origin === siteOrigin) return { root: "site", path: parsed.pathname.slice(1) };
   return undefined;
 }
 
@@ -88,14 +103,16 @@ function rootIn(url: string, siteOrigin: string, dirs: readonly SourceDir[]): st
  * else the site if any frame was the site's, else null.
  */
 export function findWriter(stack: string, ctx: WriterContext): Writer | null {
-  let site = false;
+  let site: string | undefined;
   const dirs = sourceDirs(ctx.httpSources());
-  for (const url of frameUrls(stack)) {
-    const root = rootIn(url, ctx.siteOrigin, dirs);
-    if (root === "site") site = true;
-    else if (root !== undefined) return { root, key: writerKey(root) };
+  for (const frame of frames(stack)) {
+    const found = rootIn(frame.url, ctx.siteOrigin, dirs);
+    if (!found) continue;
+    const at = `${found.path}:${frame.line}:${frame.column}`;
+    if (found.root === "site") site ??= at;
+    else return { root: found.root, key: writerKey(found.root), at };
   }
-  return site ? { root: ctx.siteRoot, key: writerKey(ctx.siteRoot) } : null;
+  return site === undefined ? null : { root: ctx.siteRoot, key: writerKey(ctx.siteRoot), at: site };
 }
 
 const BASE58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";

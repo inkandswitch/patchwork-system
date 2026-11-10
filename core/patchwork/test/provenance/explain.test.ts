@@ -37,10 +37,10 @@ const install = () => {
 
 describe("parseMessage", () => {
   it("splits the caller's message from the key", () => {
-    expect(parseMessage("pw:4kQx9TmB")).toEqual({ message: null, key: "4kQx9TmB" });
-    expect(parseMessage("rename layer\npw:4kQx9TmB")).toEqual({ message: "rename layer", key: "4kQx9TmB" });
-    expect(parseMessage("pw:4kQx")).toEqual({ message: "pw:4kQx", key: null });
-    expect(parseMessage(null)).toEqual({ message: null, key: null });
+    expect(parseMessage("pw:4kQx9TmB")).toEqual({ message: null, key: "4kQx9TmB", at: null });
+    expect(parseMessage("rename layer\npw:4kQx9TmB")).toEqual({ message: "rename layer", key: "4kQx9TmB", at: null });
+    expect(parseMessage("pw:4kQx")).toEqual({ message: "pw:4kQx", key: null, at: null });
+    expect(parseMessage(null)).toEqual({ message: null, key: null, at: null });
   });
 });
 
@@ -62,7 +62,9 @@ describe("explain", () => {
     const rows = explain(h);
     expect(rows.map((r) => r.key)).toEqual([KEY_B, KEY_B, KEY_A, KEY_A, KEY_A, KEY_A, null, null]);
     expect(rows[0].writer).toEqual({ url: ROOT_B });
-    expect(rows[1]).toMatchObject({ message: "from b", key: KEY_B, writer: { url: ROOT_B } });
+    expect(rows[1]).toMatchObject({ message: "from b", key: KEY_B, writer: { url: ROOT_B }, at: "dist/index.js:3:9" });
+    // The record change says which writer, not where.
+    expect(rows[0]!.at).toBeNull();
     expect(rows[2].writer).toEqual({ url: ROOT_A });
     expect(rows.at(-2)!.writer).toBeNull();
     for (const row of rows) {
@@ -93,6 +95,26 @@ describe("explain", () => {
     const h = mixed();
     h.change((d) => (d.items = {}));
     expect(explain(h.sub("items"), { limit: Infinity })).toHaveLength(explain(h, { limit: Infinity }).length);
+  });
+});
+
+describe("authors", () => {
+  it("reads back who made each change, from the author and its record", () => {
+    const device = "0123456789abcdef".repeat(4);
+    const contact = generateAutomergeUrl();
+    uninstall = installProvenance({
+      siteOrigin: ORIGIN,
+      siteRoot: "site@test",
+      httpSources: () => [],
+      stack: () => current,
+      author: () => ({ id: device.slice(0, 16), device, contact }),
+    });
+    const h = repo.create<Record<string, any>>({ "@patchwork": { type: "test" } });
+    h.change((d) => (d.a = 1));
+    const [record, change] = explain(h);
+    expect(change).toMatchObject({ key: KEY_A, author: device.slice(0, 16), person: { device, contact } });
+    expect(record!.person).toEqual({ device, contact });
+    expect(explain(h).at(-1)).toMatchObject({ author: null, person: null });
   });
 });
 

@@ -98,7 +98,7 @@ describe("the Writers component", () => {
 
 	it("shows the selected doc's writers, by package name, and follows the selection", async () => {
 		const { element, cleanup, select } = await mount()
-		expect(element.textContent).toContain("No document selected.")
+		expect(element.textContent).toContain("Select a document to see who changed it.")
 		const a = stamped("first doc")
 		const b = stamped("second doc")
 		select([`${a.url}#${a.heads().join("|")}`])
@@ -108,7 +108,7 @@ describe("the Writers component", () => {
 		await until(() => element.textContent!.includes("second doc"))
 		expect(element.textContent).not.toContain("first doc")
 		select([])
-		await until(() => element.textContent!.includes("No document selected."))
+		await until(() => element.textContent!.includes("Select a document to see who changed it."))
 		cleanup()
 		expect(element.childElementCount).toBe(0)
 	})

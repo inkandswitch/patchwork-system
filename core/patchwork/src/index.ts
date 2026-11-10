@@ -80,6 +80,19 @@ declare const __SITE_TITLE__: string;
 declare const __BUILD_ID__: number;
 
 let provenanceInstalled = false;
+/** The account whose contact card this tab's changes name, once setup has it. */
+let provenanceAccount: DocHandle<AccountDoc> | undefined;
+
+/**
+ * This device's key in hex: the tab's sync signer, which every tab on the
+ * origin shares, or else the keyhive individual it acts as.
+ */
+function deviceKey(signer: SignerIdentity | undefined, hive: AutomergeRepoKeyhive | undefined): string | undefined {
+  if (signer?.verifyingKey) return signer.verifyingKey.toLowerCase();
+  const bytes = (hive as any)?.active?.individual?.id?.toBytes?.();
+  if (!(bytes instanceof Uint8Array)) return undefined;
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 const PROVENANCE_PACKAGE = "@inkandswitch/patchwork-provenance";
 
@@ -208,6 +221,17 @@ async function doSetup(
         siteRoot: `site@${buildId ?? "dev"}`,
         httpSources: () =>
           pluginImportUrls().filter((url) => isHttpUrl(url) && url !== writersUrl),
+        // Says who's writing: the device, and the account's contact card once
+        // the account has loaded. Self-reported, not signed.
+        author: (() => {
+          let device: string | undefined | null = null;
+          return () => {
+            if (device === null) device = deviceKey(signerIdentity, hive);
+            if (!device || device.length < 16) return undefined;
+            const contact = provenanceAccount?.doc()?.contactUrl;
+            return { id: device.slice(0, 16), device, ...(contact ? { contact } : {}) };
+          };
+        })(),
       });
     } catch (error) {
       console.warn("patchwork provenance: not installed", error);
@@ -319,6 +343,7 @@ async function doSetup(
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
+  provenanceAccount ??= accountDocHandle;
 
   // Once the account's packages are listed too, the list is whole, and a
   // package that's left it since last visit is forgotten.

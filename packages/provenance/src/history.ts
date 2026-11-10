@@ -1,63 +1,136 @@
 // `explain`, read a little at a time, for a view that follows a doc as it
-// changes: each update reads only the changes since the last one.
+// changes: each update reads only the changes since the last one. Keeps the
+// newest changes in full, and counts every change by writer and by author.
 import * as A from "@automerge/automerge/slim";
-import { parseMessage, writerResolver, type ExplainedChange, type WriterSummary } from "./explain.js";
+import {
+  explainer,
+  personResolver,
+  readChange,
+  writerResolver,
+  type ExplainedChange,
+  type ExplainedPerson,
+  type ReadChange,
+  type WriterSummary,
+} from "./explain.js";
 
-type Change = Omit<ExplainedChange, "writer">;
-type Group = Omit<WriterSummary, "writer">;
+export type PersonSummary = {
+  author: string | null;
+  person: ExplainedPerson;
+  count: number;
+  first: number;
+  last: number;
+};
+
+/**
+ * A run of changes by one writer and one author with no gap longer than the
+ * session gap between them, newest first: one block on the timeline.
+ */
+export type Session = {
+  key: string | null;
+  author: string | null;
+  changes: ExplainedChange[];
+  first: number;
+  last: number;
+};
 
 export type History = {
   /** Reads the changes made since the last update; returns how many there were. */
   update(doc: A.Doc<unknown>): number;
-  /** The newest changes read so far, newest first, resolved against `doc`'s record. */
-  recent(doc: A.Doc<unknown>): ExplainedChange[];
+  /** How many changes have been read, kept or not. */
+  readonly total: number;
+  /** The newest kept changes, newest first, resolved against `doc`'s records. */
+  recent(doc: A.Doc<unknown>, limit?: number): ExplainedChange[];
   /** Every change read so far, grouped by writer, most changes first. */
   summary(doc: A.Doc<unknown>): WriterSummary[];
+  /** Every change read so far, grouped by author, most changes first. */
+  people(doc: A.Doc<unknown>): PersonSummary[];
+  /** The kept changes as sessions, newest first. */
+  sessions(doc: A.Doc<unknown>, gapSeconds?: number): Session[];
 };
 
-export function createHistory({ limit = 50 }: { limit?: number } = {}): History {
+type Count = { count: number; first: number; last: number };
+
+function tally<K>(counts: Map<K, Count>, key: K, time: number) {
+  const count = counts.get(key);
+  if (count) {
+    count.count++;
+    count.first = Math.min(count.first, time);
+    count.last = Math.max(count.last, time);
+  } else {
+    counts.set(key, { count: 1, first: time, last: time });
+  }
+}
+
+export function createHistory({ keep = 2000 }: { keep?: number } = {}): History {
   let heads: A.Heads = [];
+  let total = 0;
   /** Newest first. */
-  let recent: Change[] = [];
-  const groups = new Map<string | null, Group>();
+  let kept: ReadChange[] = [];
+  const byWriter = new Map<string | null, Count>();
+  const byAuthor = new Map<string | null, Count>();
 
   return {
+    get total() {
+      return total;
+    },
+
     update(doc) {
       const changes = A.getChangesMetaSince(doc, heads);
       heads = A.getHeads(doc);
       if (changes.length === 0) return 0;
-      const added: Change[] = [];
-      for (const change of changes) {
-        const { message, key } = parseMessage(change.message);
-        added.push({ hash: change.hash, time: change.time, actor: change.actor, message, key });
-        const group = groups.get(key);
-        if (group) {
-          group.count++;
-          group.first = Math.min(group.first, change.time);
-          group.last = Math.max(group.last, change.time);
-        } else {
-          groups.set(key, { key, count: 1, first: change.time, last: change.time });
-        }
+      total += changes.length;
+      const added = changes.map(readChange);
+      for (const change of added) {
+        tally(byWriter, change.key, change.time);
+        tally(byAuthor, change.author, change.time);
       }
       // Newest first by time, like `explain`; reverse causal order breaks ties.
-      recent = added
+      kept = added
         .reverse()
-        .concat(recent)
+        .concat(kept)
         .sort((a, b) => b.time - a.time)
-        .slice(0, limit);
+        .slice(0, keep);
       return changes.length;
     },
 
-    recent(doc) {
-      const resolve = writerResolver(doc);
-      return recent.map((change) => ({ ...change, writer: resolve(change.key) }));
+    recent(doc, limit = 50) {
+      return kept.slice(0, limit).map(explainer(doc));
     },
 
     summary(doc) {
-      const resolve = writerResolver(doc);
-      return [...groups.values()]
-        .map((group) => ({ ...group, writer: resolve(group.key) }))
+      const writer = writerResolver(doc);
+      return [...byWriter]
+        .map(([key, count]) => ({ key, writer: writer(key), ...count }))
         .sort((a, b) => b.count - a.count);
+    },
+
+    people(doc) {
+      const person = personResolver(doc);
+      return [...byAuthor]
+        .map(([author, count]) => ({ author, person: person(author), ...count }))
+        .sort((a, b) => b.count - a.count);
+    },
+
+    sessions(doc, gapSeconds = 5 * 60) {
+      const explain = explainer(doc);
+      const sessions: Session[] = [];
+      let current: Session | undefined;
+      for (const read of kept) {
+        const change = explain(read);
+        if (
+          current &&
+          current.key === change.key &&
+          current.author === change.author &&
+          current.first - change.time <= gapSeconds
+        ) {
+          current.changes.push(change);
+          current.first = change.time;
+        } else {
+          current = { key: change.key, author: change.author, changes: [change], first: change.time, last: change.time };
+          sessions.push(current);
+        }
+      }
+      return sessions;
     },
   };
 }

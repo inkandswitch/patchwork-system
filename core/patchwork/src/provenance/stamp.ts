@@ -5,12 +5,23 @@ import * as A from "@automerge/automerge/slim";
 import { DocHandle } from "@automerge/automerge-repo/slim";
 import { findWriter, MAX_KEY_LENGTH, writerKey, type WriterContext } from "./writer.js";
 
+/**
+ * Who is writing, as far as this tab knows. `id` is the change author, 16 hex
+ * characters (the first 8 bytes of `device`); `device` is this device's
+ * verifying key in hex; `contact` the account's contact card url, once known.
+ * None of it is verified: it's what this tab says about itself.
+ */
+export type Author = { id: string; device: string; contact?: string };
+
 export type ProvenanceOptions = WriterContext & {
   /** Where the stack comes from; tests choose it. Defaults to a fresh Error's stack, 50 frames deep. */
   stack?: () => string | undefined;
+  /** Who is writing; each doc's changes carry `id` as their author, and `@patchwork.authors[id]` says the rest. */
+  author?: () => Author | undefined;
 };
 
 export const WRITERS = "writers";
+export const AUTHORS = "authors";
 const PATCHWORK = "@patchwork";
 
 let warned = false;
@@ -20,8 +31,10 @@ function warnOnce(error: unknown) {
   console.warn("patchwork provenance: a change went unstamped or unrecorded", error);
 }
 
-export function composeMessage(message: string | undefined, key: string): string {
-  return message ? `${message}\npw:${key}` : `pw:${key}`;
+/** The caller's message, then `pw:<key>` on its own line, and where the write came from if known. */
+export function composeMessage(message: string | undefined, key: string, at?: string): string {
+  const line = at ? `pw:${key} ${at}` : `pw:${key}`;
+  return message ? `${message}\n${line}` : line;
 }
 
 function captureStack(): string | undefined {
@@ -66,6 +79,19 @@ export function installProvenance(options: ProvenanceOptions): () => void {
   /** The key a writer uses in a doc, once collisions are settled: `documentId \n root` → key. */
   const keys = new Map<string, string>();
 
+  /** Backends whose changes already carry this tab's author. */
+  const authored = new WeakSet<object>();
+  const authorFor = (handle: AnyHandle): Author | undefined => {
+    const author = options.author?.();
+    if (!author || !/^[0-9a-f]{16}$/.test(author.id)) return undefined;
+    const backend = A.getBackend(handle.fullDoc() as A.Doc<unknown>) as { setAuthor?(id: string): void };
+    if (!authored.has(backend)) {
+      backend.setAuthor?.(author.id);
+      authored.add(backend);
+    }
+    return author;
+  };
+
   const writer = () => {
     const text = stack();
     return typeof text === "string" && text ? findWriter(text, options) : null;
@@ -95,25 +121,42 @@ export function installProvenance(options: ProvenanceOptions): () => void {
     return handle.path.length === 0 && !handle.range ? handle : undefined;
   };
 
-  const record = (handle: AnyHandle, key: string, url: string) => {
+  /** Whether `doc[@patchwork][field]` lacks `key`, or `null` when it can't hold a record at all. */
+  const lacks = (meta: unknown, field: string, key: string): boolean | null => {
+    if (meta === undefined) return true;
+    if (!isPlainObject(meta)) return null;
+    const records = meta[field];
+    if (records === undefined) return true;
+    if (!isPlainObject(records)) return null;
+    return !Object.hasOwn(records, key);
+  };
+
+  const record = (handle: AnyHandle, key: string, url: string, author: Author | undefined) => {
     const meta = (handle.fullDoc() as any)?.[PATCHWORK];
-    if (meta !== undefined) {
-      if (!isPlainObject(meta)) return;
-      const writers = meta[WRITERS];
-      if (writers !== undefined && !isPlainObject(writers)) return;
-      if (writers && key in writers) return;
+    const writer = lacks(meta, WRITERS, key) === true;
+    let person = false;
+    if (author) {
+      const missing = lacks(meta, AUTHORS, author.id);
+      // Again once the contact card is known, if it wasn't the first time.
+      person = missing === true || (missing === false && !!author.contact && !meta[AUTHORS][author.id]?.contact);
     }
+    if (!writer && !person) return;
     const root = rootOf(handle);
     if (!root) return;
+    const put = (doc: any, field: string, id: string, value: Record<string, string>) => {
+      if (doc[PATCHWORK] === undefined) doc[PATCHWORK] = {};
+      if (doc[PATCHWORK][field] === undefined) doc[PATCHWORK][field] = {};
+      doc[PATCHWORK][field][id] = value;
+    };
     original.change.call(
       root,
       (doc: any) => {
-        if (doc[PATCHWORK] === undefined) {
-          doc[PATCHWORK] = { [WRITERS]: { [key]: { url } } };
-        } else if (doc[PATCHWORK][WRITERS] === undefined) {
-          doc[PATCHWORK][WRITERS] = { [key]: { url } };
-        } else {
-          doc[PATCHWORK][WRITERS][key] = { url };
+        if (writer) put(doc, WRITERS, key, { url });
+        if (person && author) {
+          put(doc, AUTHORS, author.id, {
+            device: author.device,
+            ...(author.contact ? { contact: author.contact } : {}),
+          });
         }
       },
       { message: composeMessage(undefined, key) },
@@ -128,13 +171,14 @@ export function installProvenance(options: ProvenanceOptions): () => void {
   ): R => {
     // Provenance never stops a write: any failure here leaves it unstamped,
     // or (after it landed) unrecorded.
-    let found: { root: string; key: string } | null = null;
+    let found: { root: string; key: string; at?: string } | null = null;
+    let author: Author | undefined;
     let before = "";
     try {
       if (!handle.isReadOnly()) {
         const writer_ = writer();
         if (writer_) {
-          found = { root: writer_.root, key: keyFor(handle, writer_.root, writer_.key) };
+          found = { root: writer_.root, key: keyFor(handle, writer_.root, writer_.key), at: writer_.at };
           before = A.getHeads(handle.fullDoc()).join();
         }
       }
@@ -143,9 +187,14 @@ export function installProvenance(options: ProvenanceOptions): () => void {
       found = null;
     }
     if (!found) return run(opts);
-    const result = run({ ...opts, message: composeMessage(opts?.message, found.key) });
     try {
-      if (A.getHeads(handle.fullDoc()).join() !== before) record(handle, found.key, found.root);
+      author = authorFor(handle);
+    } catch (error) {
+      warnOnce(error);
+    }
+    const result = run({ ...opts, message: composeMessage(opts?.message, found.key, found.at) });
+    try {
+      if (A.getHeads(handle.fullDoc()).join() !== before) record(handle, found.key, found.root, author);
     } catch (error) {
       warnOnce(error);
     }

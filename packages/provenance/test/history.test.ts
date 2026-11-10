@@ -19,15 +19,21 @@ function make(steps: (string | undefined)[], writers: unknown = { [KEY_A]: { url
 
 describe("parseMessage", () => {
 	it("splits the caller's message from the key line", () => {
-		expect(parseMessage(null)).toEqual({ message: null, key: null })
-		expect(parseMessage("rename layer")).toEqual({ message: "rename layer", key: null })
-		expect(parseMessage(`pw:${KEY_A}`)).toEqual({ message: null, key: KEY_A })
-		expect(parseMessage(`rename layer\npw:${KEY_A}`)).toEqual({ message: "rename layer", key: KEY_A })
+		expect(parseMessage(null)).toEqual({ message: null, key: null, at: null })
+		expect(parseMessage("rename layer")).toEqual({ message: "rename layer", key: null, at: null })
+		expect(parseMessage(`pw:${KEY_A}`)).toEqual({ message: null, key: KEY_A, at: null })
+		expect(parseMessage(`rename layer\npw:${KEY_A}`)).toEqual({ message: "rename layer", key: KEY_A, at: null })
+		expect(parseMessage(`rename layer\npw:${KEY_A} dist/index.js:3:9`)).toEqual({
+			message: "rename layer",
+			key: KEY_A,
+			at: "dist/index.js:3:9",
+		})
 	})
 
 	it("leaves a pw: line that isn't a key, or isn't last, in the message", () => {
-		expect(parseMessage("pw:short")).toEqual({ message: "pw:short", key: null })
-		expect(parseMessage(`pw:${KEY_A}\nmore`)).toEqual({ message: `pw:${KEY_A}\nmore`, key: null })
+		expect(parseMessage("pw:short")).toEqual({ message: "pw:short", key: null, at: null })
+		expect(parseMessage(`pw:${KEY_A}\nmore`)).toEqual({ message: `pw:${KEY_A}\nmore`, key: null, at: null })
+		expect(parseMessage(`pw:${KEY_A} not a place`)).toMatchObject({ key: null })
 	})
 })
 
@@ -68,7 +74,7 @@ describe("createHistory", () => {
 
 	it("keeps only the newest `limit` changes, but counts them all", () => {
 		const doc = make(Array.from({ length: 10 }, () => `pw:${KEY_A}`))
-		const history = createHistory({ limit: 3 })
+		const history = createHistory({ keep: 3 })
 		history.update(doc)
 		expect(history.recent(doc)).toHaveLength(3)
 		expect(history.summary(doc).find(g => g.key === KEY_A)!.count).toBe(10)
@@ -83,6 +89,37 @@ describe("createHistory", () => {
 			d["@patchwork"].writers[KEY_B] = { url: "site@42" }
 		})
 		expect(history.recent(doc).find(r => r.key === KEY_B)!.writer).toEqual({ url: "site@42" })
+	})
+
+	it("groups runs of changes by one writer and author into sessions, newest first", () => {
+		const doc = make([`pw:${KEY_A}`, `pw:${KEY_A}`, `pw:${KEY_B}`, `pw:${KEY_A}`])
+		const history = createHistory()
+		history.update(doc)
+		expect(history.sessions(doc).map(s => [s.key, s.changes.length])).toEqual([
+			[KEY_A, 1],
+			[KEY_B, 1],
+			[KEY_A, 2],
+			[null, 1],
+		])
+	})
+
+	it("splits a session at a long gap", () => {
+		let doc = A.from<any>({ n: 0 })
+		for (const time of [1000, 1100, 5000]) {
+			doc = A.change(doc, { message: `pw:${KEY_A}`, time }, d => {
+				d.n++
+			})
+		}
+		const history = createHistory()
+		history.update(doc)
+		expect(history.sessions(doc, 300).filter(s => s.key === KEY_A).map(s => s.changes.length)).toEqual([1, 2])
+	})
+
+	it("counts changes by author", () => {
+		const doc = make([`pw:${KEY_A}`])
+		const history = createHistory()
+		history.update(doc)
+		expect(history.people(doc)).toEqual([expect.objectContaining({ author: null, person: null, count: 2 })])
 	})
 
 	it("copes with no record, or one that isn't an object", () => {
