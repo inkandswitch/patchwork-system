@@ -1,4 +1,5 @@
 import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
+import type { PatchworkHive } from "@inkandswitch/patchwork-plugins";
 import {
   getRegistry,
   isLoadablePlugin,
@@ -73,6 +74,8 @@ export type RegisterPatchworkViewElementParams = {
    * {@link ComponentRender}).
    */
   repo: Repo;
+  /** @deprecated Patchwork no longer uses keyhive: ignored. */
+  hive?: PatchworkHive;
 };
 
 // Every `<patchwork-view>`, component or legacy tool. `repo` (the element's
@@ -94,7 +97,10 @@ declare global {
   }
 }
 
-export type LegacyPatchworkViewElement = PatchworkViewElementBase;
+export type LegacyPatchworkViewElement = PatchworkViewElementBase & {
+  /** @deprecated Patchwork no longer uses keyhive: never set. */
+  hive?: PatchworkHive;
+};
 
 export function registerPatchworkViewElement(
   params: RegisterPatchworkViewElementParams

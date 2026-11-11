@@ -96,7 +96,9 @@ export function serveClient(port: MessagePort, options: ServeOptions): void {
         if (!status) throw new Error("this worker has no sync server link");
         return status.setOffline(body.offline);
       case "info":
-        return { peerId } satisfies HubInfo;
+        return { peerId, hive: null } satisfies HubInfo;
+      case "hive":
+        throw new Error("this site has no keyhive");
     }
   };
 

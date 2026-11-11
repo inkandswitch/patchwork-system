@@ -33,6 +33,7 @@ import {
   type AccountDoc,
   type DatatypeDescription,
   type LoadedDatatype,
+  type PatchworkHive,
   createDocOfDatatype2,
   getRegistry,
   registerPlugins,
@@ -76,6 +77,8 @@ declare global {
     repo: Repo;
     Automerge: typeof import("@automerge/automerge/slim");
     AutomergeRepo: typeof import("@automerge/automerge-repo/slim");
+    /** @deprecated Patchwork no longer uses keyhive: never set. */
+    hive?: PatchworkHive;
   }
 }
 

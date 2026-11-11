@@ -17,6 +17,8 @@ export type BackendCall =
   | { op: "flush"; ids?: SedimentreeId[] }
   | { op: "deleteLocal"; documentId: SedimentreeId }
   | { op: "publishEphemeral"; session: number; message: EphemeralEnvelope }
+  /** @deprecated Patchwork no longer uses keyhive: the worker refuses it. */
+  | { op: "hive"; method: "canRead" | "canWrite"; url: string }
   | { op: "info" }
   /** The peers the worker is connected to: the sync server's id, hex. */
   | { op: "serverPeers" }
@@ -59,4 +61,6 @@ export type HubMessage =
 export type HubInfo = {
   /** The hex verifying key it signs as, towards the sync server. */
   peerId: string;
+  /** @deprecated Patchwork no longer uses keyhive: always null. */
+  hive: { id: string } | null;
 };

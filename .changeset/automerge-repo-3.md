@@ -15,14 +15,16 @@ Patchwork runs on automerge-repo 3.0.0-alpha.1 (`@automerge/automerge-repo-subdu
 
 **One node per origin.** automerge-repo 3 allows one live backend per IndexedDB database, so tabs no longer each run their own node on a shared database. The automerge SharedWorker holds the origin's one `SubductionBackend` (its IndexedDB and its socket to the sync server). Each tab's `Repo` runs on a `PortBackend`, a sedimentree backend that forwards to the worker over a MessagePort and carries on with each replacement worker. Tabs load only automerge's wasm. Documents are stored in new databases (`<prefix>-documents`, `<prefix>-hub`). Nothing is migrated from automerge-repo 2's database: documents come back from the sync server, and edits that never reached it stay in the old database.
 
-**No keyhive.** Keyhive is gone: documents are stored and synced in the clear over subduction, and every site runs the same plain subduction repo. The `keyhive` site option, the access checks views made before mounting, and the `@keyhive/keyhive` and `@automerge/automerge-repo-keyhive` dependencies (and the keyhive wasm a build emitted) are removed. Keyhive state from automerge-repo-keyhive is left where it was, unread.
+**No keyhive.** Keyhive is gone: documents are stored and synced in the clear over subduction, and every site runs the same plain subduction repo. The access checks views made before mounting, and the `@keyhive/keyhive` and `@automerge/automerge-repo-keyhive` dependencies (and the keyhive wasm and importmap entries a build emitted), are removed. Keyhive state from automerge-repo-keyhive is left where it was, unread.
+
+The keyhive API is kept, deprecated and inert, so nothing that imports it breaks: `isKeyhiveDoc` always returns false; `PatchworkHive`, `ArkVersion` and `PatchworkKeyhiveOptions` are still exported; the `keyhive` site option and the `hive` options of `setup()` and `registerPatchworkViewElement` are accepted and ignored; `window.hive`, `Patchwork.hive`, `ToolElement.hive` and patchwork-view's `hive` are never set; `hasActiveAccess(hive, url)` still asks the hive it's given; `PortBackend.onHiveChange` never calls back, the worker's `info()` reports `hive: null`, and it refuses `hive` calls.
 
 **Removed**
 
-- bootloader: `connectClassicSync` (automerge-repo 3 has no classic sync), `ArkVersion`, the `@keyhive/keyhive` importmap entries, `connectPublicReader`, `publicReaderCanRead`, `onPublicReaderStatus`, and the `./signer`, `./keyhive-sync-server`, `./public-pair`, `./public-reader` and `./public-reader-worker` entry points. `storage.ts` no longer exports `keyhiveStorageName`, `keyhiveStorageVersion` or `publicReaderStorageName`.
-- patchwork: the `keyhive` site option and `PatchworkKeyhiveOptions`, `ArkVersion`, `window.hive`, `Patchwork.hive`, `PatchworkOptions.hive`, `patchwork.sw.connectClassicSync`, `BootProgress.publicReader` and the `ark`/`arkAliases`/`arkStack` vite plugin exports. `HEADS_CHANNEL` is gone.
-- elements: `hasActiveAccess`, `setPublicAccess`, `publicAccessChanged`, `PublicAccess`, and the `hive` parameter of `registerPatchworkViewElement`. Views no longer check access before mounting, and patchwork-view's `hive` and legacy tools' `element.hive` are gone.
-- plugins: `PatchworkHive`, `isKeyhiveDoc`, `ToolElement.hive`, and the `hive` argument to `createDocOfDatatype2` and `resolveAccountHandle`.
+- bootloader: `connectClassicSync` (automerge-repo 3 has no classic sync), the `@keyhive/keyhive` importmap entries, `KEYHIVE_WASM` from `./emitted`, `connectPublicReader`, `publicReaderCanRead`, `onPublicReaderStatus`, and the `./signer`, `./keyhive-sync-server`, `./public-pair`, `./public-reader` and `./public-reader-worker` entry points. `storage.ts` no longer exports `keyhiveStorageName`, `keyhiveStorageVersion` or `publicReaderStorageName`.
+- patchwork: `patchwork.sw.connectClassicSync`, `BootProgress.publicReader` and the `ark`/`arkAliases`/`arkStack` vite plugin exports. `HEADS_CHANNEL` is gone.
+- elements: `setPublicAccess`, `publicAccessChanged` and `PublicAccess`.
+- plugins: the `hive` argument to `createDocOfDatatype2` and `resolveAccountHandle`.
 
 **Changed**
 

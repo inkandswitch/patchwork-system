@@ -1,3 +1,4 @@
+import type { ArkVersion } from "@inkandswitch/patchwork-bootloader";
 // Options for a site's generated files (icons, index.html, the manifest,
 // Netlify config), with nothing vite-specific in them, so another bundler can
 // use them too. `../vite/patchwork-plugin.ts` adds the vite parts.
@@ -27,6 +28,12 @@ export interface PatchworkHtmlOptions {
 export interface PatchworkNetlifyOptions {
   /** Cache-Control: immutable on /assets/*. Default true. */
   immutableAssets?: boolean;
+}
+
+/** @deprecated Patchwork no longer uses keyhive. */
+export interface PatchworkKeyhiveOptions {
+  /** @deprecated Ignored. */
+  ark?: ArkVersion;
 }
 
 export type PatchworkSyncServersOptions = {
@@ -65,6 +72,9 @@ export interface PatchworkSiteOptions {
   themeColor?: string | { light: string; dark: string };
   /** manifest background_color */
   backgroundColor?: string;
+
+  /** @deprecated Patchwork no longer uses keyhive: ignored. */
+  keyhive?: boolean | PatchworkKeyhiveOptions;
 
   /**
    * The sync-server URLs for this build. Also emitted as connection hints;

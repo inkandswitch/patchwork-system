@@ -18,6 +18,9 @@ import { serveClient } from "./serve.js";
 
 const SEED_KEY = "signer/seed";
 
+/** @deprecated Patchwork no longer uses keyhive. */
+export type ArkVersion = "0.6" | "0.8";
+
 export type SyncServerConfig = {
   url: string;
 };

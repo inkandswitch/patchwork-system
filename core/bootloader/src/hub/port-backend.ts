@@ -87,6 +87,15 @@ export class PortBackend implements SedimentreeBackend {
     }
   }
 
+  /**
+   * Hear when keyhive in the worker learns something.
+   *
+   * @deprecated Patchwork no longer uses keyhive: `listener` is never called.
+   */
+  onHiveChange(_listener: () => void): () => void {
+    return () => {};
+  }
+
   /** Ask the worker something that isn't a backend operation. */
   call<T>(body: BackendCall): Promise<T> {
     if (this.#closed) {

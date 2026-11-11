@@ -17,6 +17,7 @@ import {
 export { lifecycleLog };
 export { resolveHandoffsWith } from "./tab-resolver.js";
 export { PortBackend } from "./hub/port-backend.js";
+export type { ArkVersion } from "./hub/hub.js";
 
 const serviceWorkerDebugging = debug.enabled("patchwork:serviceworker");
 const workerDebugging = debug.enabled("patchwork:automergeworker");
