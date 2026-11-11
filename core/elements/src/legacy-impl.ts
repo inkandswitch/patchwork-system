@@ -21,7 +21,7 @@ import {
   type ToolElement,
 } from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
-import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { PatchworkHive } from "@inkandswitch/patchwork-plugins";
 import { gateOnAccess } from "./keyhive-access.js";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 import { loadRetryDelay, resyncBeforeRetry } from "./load-retry.js";
@@ -70,12 +70,12 @@ export type LegacyImplParams = {
    * draft, say) decides which document the tool gets.
    */
   repo: Repo;
-  hive?: AutomergeRepoKeyhive;
+  hive?: PatchworkHive;
 };
 
 type HostElement = HTMLElement & {
   repo?: Repo;
-  hive?: AutomergeRepoKeyhive;
+  hive?: PatchworkHive;
 };
 
 const ERROR_STYLE_ID = "patchwork-view-error-style";
@@ -237,7 +237,7 @@ export class LegacyImpl {
   #element: HostElement;
   #content: HostElement;
   #repo: Repo;
-  #hive: AutomergeRepoKeyhive | undefined;
+  #hive: PatchworkHive | undefined;
   // Set on disconnect. The host makes a fresh impl for each connection, so a
   // disposed impl never mounts again, whatever async work is still in flight.
   #disposed = false;
@@ -272,8 +272,8 @@ export class LegacyImpl {
     this.#hive = params.hive;
     this.#element.hive = params.hive;
 
-  // Fills the host, so tools that measure their root element see the host's
-  // box.
+    // Fills the host, so tools that measure their root element see the host's
+    // box.
     this.#content = document.createElement("div") as HostElement;
     this.#content.className = "patchwork-view-content";
     this.#content.style.width = "100%";
@@ -359,7 +359,8 @@ export class LegacyImpl {
         // getFallbackTool scans the whole registry: calling it on every
         // registration is O(N²) across a load burst.
         if (this.#handle && this.#couldChangeFallback(addedTool)) {
-          this.#fallbackId = getFallbackTool(this.#handle.doc())?.id;
+          const doc = this.#handle.doc();
+          this.#fallbackId = doc ? getFallbackTool(doc)?.id : undefined;
         }
         const isFallbackTool = toolId == this.#fallbackId;
         if (isChosenTool || isFallbackTool) {
@@ -514,7 +515,7 @@ export class LegacyImpl {
     const supported = added.supportedDatatypes;
     if (!supported) return false;
     if (supported === "*" || supported.includes("*")) return true;
-    const type = this.#handle ? getType(this.#handle.doc()) : undefined;
+    const type = this.#handle ? getType(this.#handle.doc() ?? {}) : undefined;
     return type != null && supported.includes(type);
   }
 
@@ -569,9 +570,7 @@ export class LegacyImpl {
   // until their own cleanup runs, hence the in-flight check.
   #mayRender(epoch: number): boolean {
     return (
-      !this.#disposed &&
-      epoch === this.#initEpoch &&
-      !this.#teardown.pending
+      !this.#disposed && epoch === this.#initEpoch && !this.#teardown.pending
     );
   }
 
@@ -584,8 +583,9 @@ export class LegacyImpl {
 
     this.#resetDisplay();
 
+    // a sub-handle's path may not exist (yet): then there's no fallback
     const doc = this.#handle.doc();
-    const fallbackTool = getFallbackTool(doc);
+    const fallbackTool = doc ? getFallbackTool(doc) : undefined;
     this.#fallbackId = fallbackTool?.id;
     const fallingBack = !this.#toolId;
     const toolId = this.#toolId || this.#fallbackId;
@@ -593,7 +593,7 @@ export class LegacyImpl {
     const mountingWildcardStopgap =
       fallingBack &&
       !!fallbackTool &&
-      isWildcardOnlyMatch(fallbackTool, getType(doc));
+      isWildcardOnlyMatch(fallbackTool, getType(doc ?? {}));
 
     if (fallingBack) {
       console.warn(`falling back to default tool for ${this.#docUrl}`);
@@ -871,7 +871,7 @@ export class LegacyImpl {
   #suggestedImport(): { url: string; loading: boolean } | null {
     if (!this.#docUrl || !this.#handle) return null;
     const url = presentableImportUrl(
-      getSuggestedImportUrl(this.#handle.doc())
+      getSuggestedImportUrl(this.#handle.doc() ?? {})
     );
     if (!url) return null;
     return { url, loading: this.#requestedToolImports.has(url) };

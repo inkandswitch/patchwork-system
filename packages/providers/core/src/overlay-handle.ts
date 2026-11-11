@@ -4,7 +4,7 @@ import {
   type AutomergeUrl,
   type DocHandle,
   type DocumentId,
-  type StorageId,
+  type PeerId,
   type SyncInfo,
   type UrlHeads,
 } from "@automerge/automerge-repo/slim";
@@ -19,8 +19,7 @@ type Segments = NonNullable<ReturnType<typeof parseAutomergeUrl>["segments"]>;
 // `setSyncHandle`), the identity-preserving `sub`/`view` (derived urls stay
 // in the presented space), url equality (`equals`), the argument-unwrapping
 // comparisons (`merge`/`overlaps`/`contains`/`isChildOf`/`diff`), the peer
-// members that go to the sync handle (`broadcast`/`getSyncInfo`/
-// `getRemoteHeads`/`isCaughtUpWith`), and the re-stamping EventEmitter
+// members that go to the sync handle (`broadcast`/`getSyncInfo`), and the re-stamping EventEmitter
 // surface. Everything else (doc/change/heads/ref/history/...) forwards to the
 // backing handle.
 const OVERLAY_HANDLE_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
@@ -39,8 +38,6 @@ const OVERLAY_HANDLE_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
   "diff",
   "broadcast",
   "getSyncInfo",
-  "getRemoteHeads",
-  "isCaughtUpWith",
   "on",
   "off",
   "once",
@@ -55,12 +52,11 @@ const OVERLAY_HANDLE_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
 ]);
 
 // Events about the document's peers rather than its contents, which
-// automerge-repo sends to every handle on the document; an overlay handle
-// hears them from its sync handle (see `setSyncHandle`). The other peer event,
-// `remote-heads`, it emits on the document's root handle alone.
+// automerge-repo 3 sends to every handle on the document; an overlay handle
+// hears them from its sync handle (see `setSyncHandle`).
 const PEER_EVENTS: ReadonlySet<string> = new Set([
   "ephemeral-message",
-  "ephemeral-message-outbound",
+  "remote-heads",
 ]);
 
 export type OverlayHandleOpts<T> = {
@@ -237,8 +233,8 @@ export class OverlayHandle<T> {
   /**
    * @internal Send this wrapper's and its family's peer traffic through
    * `sync` instead of their backings: `broadcast`, `getSyncInfo`,
-   * `getRemoteHeads`, `isCaughtUpWith`, and the `ephemeral-message`,
-   * `ephemeral-message-outbound` and `remote-heads` events. For a backing
+   * and the `ephemeral-message`
+   * and `remote-heads` events. For a backing
    * with no peers of its own, such as a scratch document, whose peers are
    * those of the stored document it's computed from. `undefined` goes back
    * to the backings.
@@ -260,18 +256,8 @@ export class OverlayHandle<T> {
     this.#syncHandle().broadcast(message);
   }
 
-  getSyncInfo(storageId: StorageId): SyncInfo | undefined {
-    return this.#syncHandle().getSyncInfo(storageId);
-  }
-
-  getRemoteHeads(storageId: StorageId): UrlHeads | undefined {
-    return this.#syncHandle().getRemoteHeads(storageId);
-  }
-
-  // Asked of the stored document: whether this tab holds what a peer last
-  // advertised for it, which a scratch document's own history can't answer.
-  isCaughtUpWith(storageId: StorageId): boolean | undefined {
-    return this.#syncHandle().isCaughtUpWith(storageId);
+  getSyncInfo(peerId: PeerId): SyncInfo | undefined {
+    return this.#syncHandle().getSyncInfo(peerId);
   }
 
   // `equals` is url equality, and ours is the presented url.
@@ -465,17 +451,12 @@ export class OverlayHandle<T> {
     return this.#root.#sync ?? (this.#handle as DocHandle<unknown>);
   }
 
-  // Where `ev`'s forwarder belongs. `remote-heads` comes from the sync handle
-  // only to the handle the repo would emit it on: a root not pinned to heads.
-  // Anywhere else it's left on the backing, which, as in the repo, never
-  // emits it.
+  // Where `ev`'s forwarder belongs: the sync handle for peer events, else
+  // the backing.
   #sourceOf(ev: string): DocHandle<unknown> {
-    const peer =
-      PEER_EVENTS.has(ev) ||
-      (ev === "remote-heads" &&
-        this.#root === (this as OverlayHandle<unknown>) &&
-        !parseAutomergeUrl(this.#originalUrl).heads);
-    return peer ? this.#syncHandle() : (this.#handle as DocHandle<unknown>);
+    return PEER_EVENTS.has(ev)
+      ? this.#syncHandle()
+      : (this.#handle as DocHandle<unknown>);
   }
 
   // Move each forwarder to where it now belongs.
@@ -545,9 +526,7 @@ function remake(
 ): DocHandle<unknown> | undefined {
   let handle = backing;
   if (recipe.heads) {
-    const has = (handle as { containsHeads?: (h: UrlHeads) => boolean })
-      .containsHeads;
-    if (has && !has.call(handle, recipe.heads)) return undefined;
+    if (!handle.hasHeads(recipe.heads)) return undefined;
     handle = handle.view(recipe.heads);
   }
   if (recipe.segments.length > 0) {

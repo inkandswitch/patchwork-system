@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Repo as AutomergeRepo, type PeerId } from "@automerge/automerge-repo";
+import { Repo as AutomergeRepo } from "@automerge/automerge-repo";
 import { ModuleWatcher } from "../src/module-watcher.js";
 import type { PackageTracker } from "../src/package-tracker.js";
 
@@ -19,12 +19,14 @@ afterEach(() => {
 
 describe("ModuleWatcher with a service worker module url", () => {
   it("reloads the same path the first load imported, at the new heads", async () => {
-    const repo = new AutomergeRepo({ peerId: "sw-reload" as PeerId });
+    const repo = new AutomergeRepo();
     try {
-      const folder = repo.create<any>({ "@patchwork": { type: "folder" } });
+      const folder = await repo.create<any>({
+        "@patchwork": { type: "folder" },
+      });
       const encodedDoc = encodeURIComponent(folder.url);
       const entry = `http://localhost/${encodedDoc}/dist/entry.js`;
-      const settings = repo.create<any>({
+      const settings = await repo.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [entry],
       });
@@ -48,7 +50,7 @@ describe("ModuleWatcher with a service worker module url", () => {
       await watcher.doneLoading;
       expect(importedFromHttp).toEqual([entry]);
 
-      folder.change((d: any) => {
+      await folder.change((d: any) => {
         d.rev = 1;
       });
       latest = folder.view(folder.heads()).url;

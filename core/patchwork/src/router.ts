@@ -7,7 +7,7 @@ import {
   type DocHandle,
   type DocumentId,
   type Repo,
-} from "@automerge/vanillajs/slim";
+} from "@automerge/automerge-repo/slim";
 import {
   type AccountDoc,
   type DatatypeDescription,
@@ -50,7 +50,9 @@ function serializeHashParams(params: URLSearchParams): string {
  * Coerce a `doc=` hash param to a full automerge URL. Accepts a full URL
  * (`automerge:<id>[#heads]`) or a bare document id, for older links.
  */
-export function docParamToUrl(docParam: string | null): AutomergeUrl | undefined {
+export function docParamToUrl(
+  docParam: string | null
+): AutomergeUrl | undefined {
   if (!docParam) return undefined;
   if (isValidAutomergeUrl(docParam as AutomergeUrl)) {
     return docParam as AutomergeUrl;
@@ -108,7 +110,7 @@ export function createRouter({
     const frame = params.get("frame");
 
     homeFrameToolId ??=
-      accountDocHandle.doc().frameToolId ??
+      accountDocHandle.doc()?.frameToolId ??
       frameToolId ??
       registeredFrameToolId();
     const toolId = frame ?? homeFrameToolId;
@@ -167,7 +169,8 @@ export function createRouter({
     const prevDoc = docParamToUrl(params.get("doc"));
     if (
       prevDoc &&
-      parseAutomergeUrl(prevDoc).documentId !== parseAutomergeUrl(url).documentId
+      parseAutomergeUrl(prevDoc).documentId !==
+        parseAutomergeUrl(url).documentId
     ) {
       params.delete("draft");
     }

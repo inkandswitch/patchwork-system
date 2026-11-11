@@ -1,24 +1,15 @@
-// See docs/bootloader.html#resolver.
-import { initializeWasm } from "@automerge/automerge/slim";
-// eslint-disable-next-line
-// @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
-import initSubduction from "@automerge/automerge-subduction/slim";
+// See docs/bootloader.html#resolver and #hub.
+//
+// The automerge worker: the origin's one node (see hub/hub.ts). It holds the
+// sedimentree backend every tab's Repo runs on, through a port each tab hands
+// it, and its own Repo answers the service worker's handoffs no tab could.
+import { Repo, type DocumentId } from "@automerge/automerge-repo/slim";
 
-import {
-  Repo,
-  type DocumentId,
-  type PeerId,
-} from "@automerge/automerge-repo/slim";
-
-import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
-import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-
-import { loadOrCreateSigner } from "./signer.js";
-import { keyhiveStorageName, storagePrefix } from "./storage.js";
-import { keyhiveSyncServer, type ArkVersion } from "./keyhive-sync-server.js";
+import { storagePrefix } from "./storage.js";
 import { startWorkerControl } from "./worker-control.js";
-import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
 import { createResolver } from "./resolver.js";
+import { createHub, type Hub, type SyncServerConfig } from "./hub/hub.js";
+import { initHubWasm, wasmGrowthMb, watchWasmMemories } from "./wasm.js";
 import {
   AUTOMERGE_WORKER_LOCK,
   HANDOFF_CHANNEL,
@@ -26,26 +17,19 @@ import {
   type HandoffRequestMessage,
 } from "./types.js";
 
-declare const __SYNC_SERVER__: {
-  url: string;
-  keyhive?: boolean;
-  useIdFactory?: boolean;
-  ark?: ArkVersion;
-};
+declare const __SYNC_SERVER__: SyncServerConfig;
 
-const syncServer =
+const syncServer: SyncServerConfig =
   typeof __SYNC_SERVER__ !== "undefined"
     ? __SYNC_SERVER__
     : { url: "wss://subduction.sync.inkandswitch.com" };
 
 const control = startWorkerControl("automerge-protocol-handler-worker", {
   onRestart: drainForRestart,
-  // A tab introducing us to the public reader (see setup.ts).
+  // A tab handing us the port its Repo's backend talks to us on.
   onMessage(data) {
-    if (data?.type === "public-reader" && data.port instanceof MessagePort) {
-      readerPort?.close();
-      readerPort = data.port;
-      linkPublicReader();
+    if (data?.type === "hub" && data.port instanceof MessagePort) {
+      connectTab(data.port);
     }
   },
   // Held only so the tabs and the service worker can tell whether this
@@ -54,141 +38,66 @@ const control = startWorkerControl("automerge-protocol-handler-worker", {
 });
 const log = control.log;
 
-let wasmPromise: Promise<void> | null = null;
+let hubPromise: Promise<Hub> | null = null;
 
-function initWasm(): Promise<void> {
-  if (!wasmPromise) {
-    log("fetching wasm");
-    watchWasmMemories();
-    wasmPromise = Promise.all([
-      initializeWasm(new Request(AUTOMERGE_WASM)),
-      initSubduction(new Request(SUBDUCTION_WASM)),
-    ]).then(() => log("wasm initialized"));
-    wasmPromise.catch(() => {
-      wasmPromise = null;
-    });
-  }
-  return wasmPromise;
-}
-
-let repoPromise: Promise<Repo> | null = null;
-
-function getRepo(): Promise<Repo> {
-  if (!repoPromise) {
-    repoPromise = buildRepo();
+function getHub(): Promise<Hub> {
+  if (!hubPromise) {
+    hubPromise = buildHub();
     // Nothing resolves without it (the wasm fetch failed, say): start again
     // from scratch, as a new instance.
-    repoPromise.catch((error) => {
-      repoPromise = null;
-      control.fail("the resolver's Repo failed to start", error);
+    hubPromise.catch((error) => {
+      hubPromise = null;
+      control.fail("the automerge worker's hub failed to start", error);
     });
   }
-  return repoPromise;
+  return hubPromise;
 }
 
-let builtRepo: Repo | undefined;
+const getRepo = (): Promise<Repo> => getHub().then((hub) => hub.repo);
 
-// For the console. The Repo is only built once something has to be resolved,
-// so before then reading `repo` starts building it and gives its promise:
-// `await repo` works either way.
+let builtHub: Hub | undefined;
+
+// For the console. The hub is built once a tab connects or something has to
+// be resolved, so before then reading `repo` starts building it and gives its
+// promise: `await repo` works either way.
 Object.defineProperty(self, "repo", {
   configurable: true,
-  get: () => builtRepo ?? getRepo(),
+  get: () => builtHub?.repo ?? getRepo(),
+});
+Object.defineProperty(self, "hub", {
+  configurable: true,
+  get: () => builtHub ?? getHub(),
 });
 
-async function buildRepo(): Promise<Repo> {
-  await initWasm();
-
-  const { repo, hive } = syncServer.keyhive
-    ? await buildKeyhiveRepo()
-    : { repo: await buildPlainRepo() };
-
-  builtRepo = repo;
-  if (hive) (self as any).hive = hive;
-  return repo;
+async function buildHub(): Promise<Hub> {
+  watchWasmMemories();
+  log("fetching wasm");
+  await initHubWasm({ keyhive: !!syncServer.keyhive });
+  log("wasm initialized");
+  const hub = await createHub({ syncServer, storagePrefix, log });
+  builtHub = hub;
+  return hub;
 }
 
-async function buildPlainRepo(): Promise<Repo> {
-  const storage = new IndexedDBStorageAdapter();
-  return new Repo({
-    signer: await loadOrCreateSigner(storage),
-    storage,
-    peerId:
-      `${storagePrefix}-resolver-${Math.random().toString(36).slice(2)}` as PeerId,
-    subductionWebsocketEndpoints: [syncServer.url],
-    headsChannel: `${storagePrefix}-heads`,
-    enableRemoteHeadsGossiping: true,
-  });
-}
+// Tabs connected to the hub. While there are any this instance doesn't
+// recycle itself: every tab's sessions would have to open again.
+let tabs = 0;
 
-async function buildKeyhiveRepo(): Promise<{
-  repo: Repo;
-  hive: AutomergeRepoKeyhive;
-}> {
-  const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
-    await import("@automerge/automerge-repo-keyhive");
-  initKeyhiveWasm();
-  const keyhiveStorage = new IndexedDBStorageAdapter(keyhiveStorageName);
-  const identity = await keyhiveSyncServer(syncServer, keyhiveStorage);
-  const { hive, repo } = await initializeAutomergeRepoKeyhive({
-    // ARK injects an `idFactory` deriving document ids from keyhive. A site
-    // can opt out of it with `keyhive: { useIdFactory: false }`.
-    createRepo: ({ idFactory, ...config }) =>
-      new Repo(
-        syncServer.useIdFactory === false ? config : { ...config, idFactory }
-      ),
-    storage: keyhiveStorage,
-    peerIdSuffix:
-      `${storagePrefix}-resolver` + Math.random().toString(36).slice(2),
-    automaticArchiveIngestion: true,
-    cachingMode: "periodic",
-    syncServer: identity,
-    repo: {
-      storage: new IndexedDBStorageAdapter(),
-      subductionWebsocketEndpoints: [syncServer.url],
-      headsChannel: `${storagePrefix}-heads`,
-      enableRemoteHeadsGossiping: true,
-    },
-  });
-
-  hive.networkAdapter.whenReady().then(() => {
-    (hive.networkAdapter as any).syncKeyhive();
-  });
-
-  // Packages made public to Patchwork are read through its public pair, which
-  // only ARK 0.8's keyhive has. Nothing waits on it.
-  if (syncServer.ark !== "0.6") {
-    keyhiveNode = { repo, hive };
-    linkPublicReader();
-  }
-
-  return { repo, hive };
-}
-
-// The public reader runs in its own SharedWorker. A SharedWorker can't start
-// another, so a tab hands this one a port to it, and another whenever either
-// is replaced: the latest one wins.
-
-let keyhiveNode: { repo: Repo; hive: AutomergeRepoKeyhive } | undefined;
-let readerPort: MessagePort | undefined;
-let readerLink: Promise<(() => void) | undefined> = Promise.resolve(undefined);
-
-function linkPublicReader() {
-  if (!keyhiveNode || !readerPort) return;
-  const { repo, hive } = keyhiveNode;
-  const control = readerPort;
-  readerPort = undefined;
-  readerLink = readerLink.then(async (hangUp) => {
-    hangUp?.();
-    try {
-      const { connectToPublicReader } = await import("./public-pair.js");
-      return await connectToPublicReader({ repo, hive, control });
-    } catch (error) {
-      console.error("couldn't connect to the public reader", error);
-      control.close();
-      return undefined;
+function connectTab(port: MessagePort) {
+  tabs++;
+  clearTimeout(recycleTimer);
+  getHub().then(
+    (hub) =>
+      hub.serve(port, () => {
+        tabs--;
+        scheduleRecycle();
+      }),
+    (error) => {
+      tabs--;
+      console.error("couldn't serve a tab", error);
+      port.close();
     }
-  });
+  );
 }
 
 // Handoffs are what nothing else could answer: the service worker asks the
@@ -196,7 +105,11 @@ function linkPublicReader() {
 // them can (one still booting, one from an older build, a site that brings
 // its own Repo).
 
-const resolver = createResolver(getRepo, log);
+const resolver = createResolver(
+  getRepo,
+  log,
+  () => builtHub?.network.status === "connected"
+);
 const handoffChannel = new BroadcastChannel(HANDOFF_CHANNEL);
 
 const EVICT_IDLE_MS = 5_000;
@@ -215,6 +128,10 @@ function handoffFinished() {
   evictTimer = setTimeout(() => {
     evictLoaded().catch((error) => console.error("eviction failed", error));
   }, EVICT_IDLE_MS);
+  scheduleRecycle();
+}
+
+function scheduleRecycle() {
   clearTimeout(recycleTimer);
   recycleTimer = setTimeout(recycleIfHolding, RECYCLE_IDLE_MS);
 }
@@ -226,51 +143,8 @@ const RECYCLE_AT_MB = 64;
 const RECYCLE_IDLE_MS = 15_000;
 let recycleTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** Every wasm memory instantiated here, with the file it was compiled from. */
-const wasmMemories: Array<{ url: string; memory: WebAssembly.Memory }> = [];
-let watchingWasm = false;
-
-/**
- * Note the memory of every wasm instance instantiated from a response from
- * here on: automerge and subduction instantiate from their `Request`s that
- * way, and don't hand back the instance.
- */
-function watchWasmMemories() {
-  if (watchingWasm) return;
-  watchingWasm = true;
-  const wasm = WebAssembly as {
-    instantiateStreaming: typeof WebAssembly.instantiateStreaming;
-  };
-  const instantiateStreaming = wasm.instantiateStreaming;
-  wasm.instantiateStreaming = async (source, imports) => {
-    const response = await source;
-    const result = await instantiateStreaming(response, imports);
-    for (const value of Object.values(result.instance.exports)) {
-      if (value instanceof WebAssembly.Memory) {
-        wasmMemories.push({ url: response.url, memory: value });
-      }
-    }
-    return result;
-  };
-}
-
-const wasmBytes = (file: string) =>
-  wasmMemories
-    .filter(
-      ({ url }) =>
-        new URL(url, self.location.href).pathname ===
-        new URL(file, self.location.href).pathname
-    )
-    .reduce((bytes, { memory }) => bytes + memory.buffer.byteLength, 0);
-
-/** How much memory this instance's wasm holds. */
-function wasmGrowthMb(): number {
-  const bytes = wasmBytes(AUTOMERGE_WASM) + wasmBytes(SUBDUCTION_WASM);
-  return Math.round(bytes / 1048576);
-}
-
 function recycleIfHolding() {
-  if (handoffsInFlight > 0 || draining) return;
+  if (handoffsInFlight > 0 || tabs > 0 || draining) return;
   const mb = wasmGrowthMb();
   if (mb <= RECYCLE_AT_MB) return;
   control.restart(
@@ -279,7 +153,7 @@ function recycleIfHolding() {
 }
 
 async function evictLoaded() {
-  const repo = await repoPromise?.catch(() => null);
+  const repo = (await hubPromise?.catch(() => null))?.repo;
   if (!repo) return;
   const ids = Object.keys(repo.handles) as DocumentId[];
   log(
@@ -326,8 +200,9 @@ async function drainForRestart(): Promise<void> {
       `[lifecycle] closing with ${handoffsInFlight} handoff(s) in flight; the service worker will re-send them`
     );
   }
-  const repo = await repoPromise?.catch(() => null);
-  await repo?.flush();
+  const hub = await hubPromise?.catch(() => null);
+  // tabs' writes as well as the worker's own
+  await hub?.backend.flush();
 }
 
 handoffChannel.addEventListener("message", (event) => {

@@ -33,10 +33,10 @@ function deferred<T>() {
 describe("a re-answered descriptor", () => {
   it("isn't failed by an older answer that fails after it", async () => {
     const repo = new Repo();
-    const note = repo.create<Note>({ title: "note", text: "" });
-    const first = repo.clone(note);
-    const second = repo.clone(note);
-    second.change((d) => {
+    const note = await repo.create<Note>({ title: "note", text: "" });
+    const first = await repo.clone(note);
+    const second = await repo.clone(note);
+    await second.change((d) => {
       d.title = "second";
     });
     const pending = new Map<
@@ -76,20 +76,20 @@ describe("a re-answered descriptor", () => {
 describe("a retry", () => {
   it("is joined, not doubled, by a subscriber that finds again on hearing it start", async () => {
     const repo = new Repo();
-    const note = repo.create<Note>({ title: "note", text: "" });
+    const note = await repo.create<Note>({ title: "note", text: "" });
     // Nothing can supply it, so the first attempt fails.
     const url = generateAutomergeUrl();
     const view = mount(repo);
-    const progress = view.overlay.findWithProgress<Note>(url);
-    await expect(progress.whenReady()).rejects.toThrow();
+    const query = view.overlay.query<Note>(url);
+    await expect(view.overlay.find(url)).rejects.toThrow();
     // An unsubscribe reaches the provider over its port.
     await settle();
     expect(view.subscribers(url)).toBe(0);
 
     view.route(url, { url, cloneUrl: note.url });
     let nested: Promise<DocHandle<Note>> | undefined;
-    progress.subscribe((state) => {
-      if (state.state === "loading") nested ??= progress.whenReady();
+    query.subscribe((state) => {
+      if (state.status === "loading") nested ??= view.overlay.find<Note>(url);
     });
     const retry = view.overlay.find<Note>(url);
     expect(nested).toBeDefined();
@@ -101,17 +101,17 @@ describe("a retry", () => {
 
   it("started by a subscriber hearing the failure keeps its own subscription", async () => {
     const repo = new Repo();
-    const note = repo.create<Note>({ title: "note", text: "" });
+    const note = await repo.create<Note>({ title: "note", text: "" });
     const url = generateAutomergeUrl();
     const view = mount(repo);
-    const progress = view.overlay.findWithProgress<Note>(url);
+    const query = view.overlay.query<Note>(url);
     // The first attempt has had its answer; the retry's waits for a route.
     view.silence(url);
     let retry: Promise<DocHandle<Note>> | undefined;
-    progress.subscribe((state) => {
-      if (state.state === "unavailable") retry ??= view.overlay.find(url);
+    query.subscribe((state) => {
+      if (state.status === "unavailable") retry ??= view.overlay.find(url);
     });
-    await expect(progress.whenReady()).rejects.toThrow();
+    await expect(view.overlay.find(url)).rejects.toThrow();
     expect(retry).toBeDefined();
     await settle();
     expect(view.subscribers(url)).toBe(1);
@@ -125,7 +125,7 @@ describe("a retry", () => {
 describe("a remapper's pinned backing", () => {
   it("still gives views that stay where they were", async () => {
     const repo = new Repo();
-    const note = repo.create<Note>({ title: "note", text: "" });
+    const note = await repo.create<Note>({ title: "note", text: "" });
     const pin = () =>
       stringifyAutomergeUrl({
         documentId: note.documentId,
@@ -138,7 +138,7 @@ describe("a remapper's pinned backing", () => {
     expect(snapshot).not.toBe(handle);
     expect(snapshot.url).toBe(pin());
 
-    note.change((d) => {
+    await note.change((d) => {
       d.title = "later";
     });
     view.route(note.url, { url: note.url, cloneUrl: pin() });
@@ -150,9 +150,12 @@ describe("a remapper's pinned backing", () => {
 describe("a swap", () => {
   it("keeps a cursor sub-handle on its cursors, not its indices", async () => {
     const repo = new Repo();
-    const note = repo.create<Note>({ title: "note", text: "hello world" });
-    const fork = repo.clone(note);
-    fork.change((d) => {
+    const note = await repo.create<Note>({
+      title: "note",
+      text: "hello world",
+    });
+    const fork = await repo.clone(note);
+    await fork.change((d) => {
       A.splice(d, ["text"], 0, 0, ">> ");
     });
     const view = mount(repo);
@@ -169,8 +172,11 @@ describe("a swap", () => {
   it("goes through when a cursor sub-handle's path isn't text in the new backing", async () => {
     const scratch = getScratchRepo();
     const repo = new Repo();
-    const note = repo.create<Note>({ title: "note", text: "hello world" });
-    const computed = scratch.create<{ title: string; text: number }>({
+    const note = await repo.create<Note>({
+      title: "note",
+      text: "hello world",
+    });
+    const computed = await scratch.create<{ title: string; text: number }>({
       title: "computed",
       text: 3,
     });
@@ -189,9 +195,9 @@ describe("a swap", () => {
 
   it("emits heads-changed then change, with whole documents in patchInfo, on every handle", async () => {
     const repo = new Repo();
-    const note = repo.create({ nested: { x: 1 } });
-    const fork = repo.clone(note);
-    fork.change((d) => {
+    const note = await repo.create({ nested: { x: 1 } });
+    const fork = await repo.clone(note);
+    await fork.change((d) => {
       d.nested.x = 2;
     });
     const view = mount(repo);
@@ -249,7 +255,10 @@ describe.runIf(gc)("derived handles", () => {
 
   it("aren't kept alive by the overlay once nothing holds or listens to them", async () => {
     const repo = new Repo();
-    const note = repo.create<Note>({ title: "note", text: "hello world" });
+    const note = await repo.create<Note>({
+      title: "note",
+      text: "hello world",
+    });
     const view = mount(repo);
     const handle = await view.overlay.find<Note>(note.url);
     // One per selection, as the editors make them.
@@ -259,7 +268,10 @@ describe.runIf(gc)("derived handles", () => {
 
   it("are kept alive while something listens, and let go after", async () => {
     const repo = new Repo();
-    const note = repo.create<Note>({ title: "note", text: "hello world" });
+    const note = await repo.create<Note>({
+      title: "note",
+      text: "hello world",
+    });
     const view = mount(repo);
     const handle = await view.overlay.find<Note>(note.url);
     const listener = () => {};

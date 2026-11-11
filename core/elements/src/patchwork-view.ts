@@ -1,5 +1,5 @@
 import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
-import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { PatchworkHive } from "@inkandswitch/patchwork-plugins";
 import { gateOnAccess } from "./keyhive-access.js";
 import {
   getRegistry,
@@ -78,7 +78,7 @@ export type RegisterPatchworkViewElementParams = {
    */
   repo: Repo;
   /** Handed to legacy-mode tools as `element.hive`. */
-  hive?: AutomergeRepoKeyhive;
+  hive?: PatchworkHive;
 };
 
 // Every `<patchwork-view>`, component or legacy tool. `repo` (the element's
@@ -101,7 +101,7 @@ declare global {
 }
 
 export type LegacyPatchworkViewElement = PatchworkViewElementBase & {
-  hive?: AutomergeRepoKeyhive;
+  hive?: PatchworkHive;
 };
 
 export function registerPatchworkViewElement(
@@ -192,7 +192,7 @@ export function registerPatchworkViewElement(
 
       connectedCallback() {
         this.#capturedParent = this.parentElement;
-        (this as { hive?: AutomergeRepoKeyhive }).hive = params.hive;
+        (this as { hive?: PatchworkHive }).hive = params.hive;
         this.#component = this.getAttribute(ATTRS.component);
         this.#url = this.getAttribute(ATTRS.url) as AutomergeUrl | null;
         // A same-task remove-and-reinsert (keyed reorder, `insertBefore`)

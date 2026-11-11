@@ -16,12 +16,6 @@ export const HANDOFF_CHANNEL = "@patchwork/handoff";
 export const AUTOMERGE_WORKER_LOCK = "@patchwork/automerge-worker";
 
 /**
- * The Web Lock the public reader's SharedWorker holds for as long as it lives,
- * so tabs hear it go and start another (see public-reader.ts).
- */
-export const PUBLIC_READER_LOCK = "@patchwork/public-reader";
-
-/**
  * Service worker → tabs: there's no automerge worker (nothing holds or is
  * waiting for {@link AUTOMERGE_WORKER_LOCK}), so a handoff would go unanswered.
  * Start one.

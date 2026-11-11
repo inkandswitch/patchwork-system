@@ -1,109 +1,60 @@
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
-import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { isKeyhiveDoc } from "@inkandswitch/patchwork-plugins";
+import {
+  isKeyhiveDoc,
+  type PatchworkHive,
+} from "@inkandswitch/patchwork-plugins";
 import type { Teardowns } from "./lifecycle.js";
 
-type Access = Awaited<ReturnType<AutomergeRepoKeyhive["accessForDoc"]>>;
-
-/** Whether a doc is readable through patchwork's public reader. */
-export type PublicAccess = (docUrl: AutomergeUrl) => Promise<boolean>;
-
-let publicAccess: PublicAccess | undefined;
-
 /**
- * How to ask whether a doc is public. On ARK 0.8 a doc made public ("anyone
- * with the link") is granted to patchwork's public reader, not to whoever
- * opens it, and their own keyhive doesn't even hear about it: the server only
- * sends an identity the ops that concern it. So the reader, which fetches and
- * decrypts public docs for everyone, is asked. Setup gives this one.
+ * Whether this device may open `docUrl`: it has been granted access, or the
+ * doc is public. The worker that holds keyhive answers both (public docs are
+ * read through patchwork's public pair, which it also holds).
  */
-export function setPublicAccess(check: PublicAccess | undefined): void {
-  publicAccess = check;
-  publicAccessChanged();
-}
-
-/** The public reader learned something: check every watched doc again. */
-export function publicAccessChanged(): void {
-  for (const watcher of allWatchers) watcher.recheck();
-}
-
-/**
- * Whether the active identity may open `docUrl`: it's been granted access,
- * or the doc is public.
- *
- * A site built on ARK 0.6 (`keyhive.ark`) still has public access, and there
- * `accessForDoc` counts only what was granted to the identity directly. Its
- * `bestAccessForDoc` adds the public grant, so a public doc opens for
- * everyone. 0.8 has no public access of its own: {@link setPublicAccess}.
- */
-export async function hasActiveAccess(
-  hive: AutomergeRepoKeyhive,
+export function hasActiveAccess(
+  hive: PatchworkHive,
   docUrl: AutomergeUrl
 ): Promise<boolean> {
-  const id = hive.active.individual.id;
-  const { bestAccessForDoc } = hive as {
-    bestAccessForDoc?: (id: unknown, docUrl: AutomergeUrl) => Promise<Access>;
-  };
-  if (bestAccessForDoc) return !!(await bestAccessForDoc.call(hive, id, docUrl));
-  if (await hive.accessForDoc(id, docUrl)) return true;
-  return publicAccess ? publicAccess(docUrl).catch(() => false) : false;
+  return hive.canRead(docUrl);
 }
 
 /** Called with the active identity's access after keyhive ingests remote ops. */
 export type AccessListener = (hasAccess: boolean) => void;
 
-// The base class only types `networkAdapter` as far as `close` needs it; both
-// ARK generations' adapters emit `ingest-remote` after ingesting remote ops.
-type IngestEmitter = {
-  on(event: "ingest-remote", listener: () => void): unknown;
-  off(event: "ingest-remote", listener: () => void): unknown;
-};
-
 /**
- * One `ingest-remote` listener per hive, fanned out to every watched doc.
- * A burst of ops (they arrive in batches) is coalesced into one pass that
+ * One `onChange` subscription per hive, fanned out to every watched doc. A
+ * burst of changes (ops arrive in batches) is coalesced into one pass that
  * checks each watched doc's access once, however many views show it.
  */
 class AccessWatcher {
-  readonly #hive: AutomergeRepoKeyhive;
-  readonly #emitter: IngestEmitter;
+  readonly #hive: PatchworkHive;
   readonly #listeners = new Map<AutomergeUrl, Set<AccessListener>>();
-  #attached = false;
+  #unsubscribe: (() => void) | undefined;
   #draining = false;
   #dirty = false;
 
-  constructor(hive: AutomergeRepoKeyhive) {
+  constructor(hive: PatchworkHive) {
     this.#hive = hive;
-    this.#emitter = hive.networkAdapter as unknown as IngestEmitter;
   }
 
   watch(url: AutomergeUrl, listener: AccessListener): () => void {
     let listeners = this.#listeners.get(url);
     if (!listeners) this.#listeners.set(url, (listeners = new Set()));
     listeners.add(listener);
-    if (!this.#attached) {
-      this.#attached = true;
-      this.#emitter.on("ingest-remote", this.#onIngest);
-    }
+    this.#unsubscribe ??= this.#hive.onChange(this.#onChange);
 
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0 && this.#listeners.get(url) === listeners) {
         this.#listeners.delete(url);
       }
-      if (this.#listeners.size === 0 && this.#attached) {
-        this.#attached = false;
-        this.#emitter.off("ingest-remote", this.#onIngest);
+      if (this.#listeners.size === 0) {
+        this.#unsubscribe?.();
+        this.#unsubscribe = undefined;
       }
     };
   }
 
-  /** Check every watched doc again, as if ops had come in. */
-  recheck(): void {
-    if (this.#listeners.size) this.#onIngest();
-  }
-
-  #onIngest = () => {
+  #onChange = () => {
     this.#dirty = true;
     if (this.#draining) return;
     this.#draining = true;
@@ -111,7 +62,7 @@ class AccessWatcher {
     setTimeout(() => void this.#drain(), 0);
   };
 
-  // Ops that arrive mid-pass mark the watcher dirty and get one more pass.
+  // Changes that arrive mid-pass mark the watcher dirty and get one more pass.
   async #drain(): Promise<void> {
     try {
       while (this.#dirty) {
@@ -129,7 +80,7 @@ class AccessWatcher {
     try {
       hasAccess = await hasActiveAccess(this.#hive, url);
     } catch {
-      // Leave every view as it is; the next op checks again.
+      // Leave every view as it is; the next change checks again.
       return;
     }
     // Views that stopped watching during the check don't hear about it.
@@ -141,16 +92,11 @@ class AccessWatcher {
   }
 }
 
-const watchers = new WeakMap<AutomergeRepoKeyhive, AccessWatcher>();
-// every watcher, for publicAccessChanged; there's one per hive, so a handful
-const allWatchers = new Set<AccessWatcher>();
+const watchers = new WeakMap<PatchworkHive, AccessWatcher>();
 
-function watcherFor(hive: AutomergeRepoKeyhive): AccessWatcher {
+function watcherFor(hive: PatchworkHive): AccessWatcher {
   let watcher = watchers.get(hive);
-  if (!watcher) {
-    watchers.set(hive, (watcher = new AccessWatcher(hive)));
-    allWatchers.add(watcher);
-  }
+  if (!watcher) watchers.set(hive, (watcher = new AccessWatcher(hive)));
   return watcher;
 }
 
@@ -160,11 +106,11 @@ function watcherFor(hive: AutomergeRepoKeyhive): AccessWatcher {
  * `teardowns`, and every later access check is reported to `onChange`.
  *
  * Resolves true when the view may mount — there's no hive, `url` is a legacy
- * (padded-zero) doc keyhive doesn't govern, or access is granted. A failed
- * check counts as no access; the next op checks again.
+ * (zero-padded) doc keyhive doesn't govern, or access is granted. A failed
+ * check counts as no access; the next change checks again.
  */
 export async function gateOnAccess(
-  hive: AutomergeRepoKeyhive | undefined,
+  hive: PatchworkHive | undefined,
   url: AutomergeUrl,
   teardowns: Teardowns,
   onChange: AccessListener

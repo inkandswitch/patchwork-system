@@ -1,80 +1,105 @@
-import { SedimentreeId } from "@automerge/automerge-subduction/slim";
 import {
   parseAutomergeUrl,
   type AutomergeUrl,
+  type DocumentId,
   type Repo,
 } from "@automerge/automerge-repo/slim";
+import {
+  sedimentreeId,
+  type SedimentreeBackend,
+} from "@automerge/automerge-repo/sedimentree";
 import debug from "debug";
-import { HEADS_CHANNEL } from "./repo.js";
 
 const log = debug("patchwork:watch");
 
-// A watched document has no Repo waiting on its round to pick a deadline.
-const WATCH_SYNC_TIMEOUT_MS = 60_000;
+/** One report of a document's heads from a peer (the sync server). */
+export type ServerHeads = {
+  /** The reporting peer (the sync server's hex verifying key). */
+  peerId: string;
+  /** Its heads, as hex commit ids. */
+  heads: string[];
+  timestamp: number;
+};
 
-/** What a Repo on the origin relays on {@link HEADS_CHANNEL} of a server's heads. */
-type RemoteHeadsMessage = { kind: "remote"; sid: string; heads: string[] };
-
-const summarize = (heads: readonly string[]) => [...heads].sort().join("|");
+/**
+ * Hear every report of the document `documentId`'s heads from the sync
+ * server, until the returned function is called, without loading it into a
+ * Repo: a session of its own on `backend` (the tab's port to the automerge
+ * worker) is opened, and only its `remote-heads` are read. The worker holds
+ * the document, and subscribes to it with the server, while any session is
+ * open.
+ */
+export function watchServerHeads(
+  backend: SedimentreeBackend,
+  documentId: DocumentId,
+  onHeads: (report: ServerHeads) => void
+): () => void {
+  const { binaryDocumentId } = parseAutomergeUrl(
+    `automerge:${documentId}` as AutomergeUrl
+  );
+  const session = backend.open(sedimentreeId(binaryDocumentId));
+  let stopped = false;
+  void (async () => {
+    try {
+      for await (const event of session.events) {
+        if (stopped) return;
+        if (event.type !== "remote-heads") continue;
+        onHeads({
+          peerId: event.remote.id,
+          heads: [...event.heads],
+          timestamp: Date.now(),
+        });
+      }
+    } catch (error) {
+      if (!stopped) log(`stopped watching ${documentId}`, error);
+    }
+  })();
+  return () => {
+    stopped = true;
+    void session.close();
+  };
+}
 
 /**
  * Call `onChange` whenever the document at `url` may have new heads, until the
- * returned function is called, without loading it into `repo`. The tab's
- * Subduction node subscribes to the document with the server, which pushes
- * each change along with its heads. Every Repo on the origin, this tab's
- * included, relays the server's heads on the heads channel whether or not it
- * holds the document, so listening there hears this tab's pushes and other
- * tabs' writes alike: a write comes back as the heads the server acknowledges
- * it with.
+ * returned function is called, without loading it into `repo`. The server
+ * pushes each change to the automerge worker with its heads, and a write from
+ * any tab comes back as the heads the server acknowledges it with.
  *
  * `seen` sums up the server's heads: the same `seen` twice means nothing
  * arrived in between. It isn't a version of the document: Subduction's heads
  * can include ancestors of the Automerge heads, so find the document to know
  * where it is.
  *
- * Subduction can't unsubscribe from one document, so the server keeps
- * pushing it to this tab after the watch stops; nobody's told.
+ * Without the tab's backend (a site that brings its own Repo), the document
+ * is found in `repo` and its handle's `remote-heads` are heard instead.
  */
 export function watchDocument(
-  repo: Repo,
+  source: { repo: Repo; backend?: SedimentreeBackend },
   url: AutomergeUrl,
   onChange: (seen: string) => void
 ): () => void {
-  const { binaryDocumentId } = parseAutomergeUrl(url);
-  // A document's 16 id bytes, zero-padded to 32.
-  const bytes = new Uint8Array(32);
-  bytes.set(binaryDocumentId.subarray(0, 32));
-  const sid = SedimentreeId.fromBytes(bytes);
-  const sidHex = sid.toString();
+  const summarize = (heads: readonly string[]) => [...heads].sort().join("|");
+  const { documentId } = parseAutomergeUrl(url);
+  if (source.backend) {
+    return watchServerHeads(source.backend, documentId, ({ heads }) =>
+      onChange(summarize(heads))
+    );
+  }
+  let stop = () => {};
   let stopped = false;
-
-  // The server forgets subscriptions with the connection, so this runs again
-  // each time the Repo comes back online.
-  const subscribe = () => {
-    if (stopped || !repo.isSubductionConnected()) return;
-    repo.subduction
-      .then((subduction) =>
-        subduction.syncWithAllPeers(sid, true, WATCH_SYNC_TIMEOUT_MS)
-      )
-      .catch((error) => log(`couldn't subscribe to ${url}`, error));
-  };
-
-  const onConnection = ({ connected }: { connected: boolean }) => {
-    if (connected) subscribe();
-  };
-  const channel = new BroadcastChannel(HEADS_CHANNEL);
-  channel.onmessage = ({ data }: MessageEvent<RemoteHeadsMessage>) => {
-    if (data?.kind === "remote" && data.sid === sidHex) {
-      onChange(summarize(data.heads));
-    }
-  };
-
-  repo.on("subduction-connection", onConnection);
-  subscribe();
-
+  source.repo.find(url).then(
+    (handle) => {
+      if (stopped) return;
+      const onRemote = ({ heads }: { heads: readonly string[] }) =>
+        onChange(summarize(heads));
+      handle.on("remote-heads", onRemote);
+      stop = () => handle.off("remote-heads", onRemote);
+    },
+    (error) => log(`couldn't watch ${url}`, error)
+  );
   return () => {
     stopped = true;
-    repo.off("subduction-connection", onConnection);
-    channel.close();
+    stop();
   };
 }

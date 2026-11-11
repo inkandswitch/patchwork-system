@@ -86,8 +86,6 @@ export function showBootStatus(options: {
     }
     const packages = packagesText(progress);
     if (packages) lines.push(line(packages, "pw-boot-status-detail"));
-    const reader = readerText(progress);
-    if (reader) lines.push(line(reader, "pw-boot-status-detail"));
     text.replaceChildren(...lines);
     if (progress.stuck && !reload) {
       reload = document.createElement("button");
@@ -160,22 +158,4 @@ function packagesText({ packages }: BootProgress): string | undefined {
   if (!packages?.total || packages.loaded >= packages.total) return undefined;
   const count = `Packages: ${packages.loaded} of ${packages.total}`;
   return packages.latest ? `${count} (${packages.latest})` : count;
-}
-
-function readerText({ publicReader: reader }: BootProgress): string | undefined {
-  if (!reader || reader.phase === "ready") return undefined;
-  const count = (n: number) => n.toLocaleString();
-  switch (reader.phase) {
-    case "waiting":
-      return "Public documents: waiting for the sync server";
-    case "fetching":
-      return `Public documents: fetching ${count(reader.received)} keys`;
-    case "reading":
-      return `Public documents: reading ${count(reader.received)} keys`;
-    default: {
-      // A phase this build doesn't know, with its error if it has one.
-      const error = (reader as { error?: string }).error;
-      return `Public documents: ${reader.phase}${error ? ` (${error})` : ""}`;
-    }
-  }
 }

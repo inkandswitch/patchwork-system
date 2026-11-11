@@ -1,5 +1,5 @@
+import type { ArkVersion } from "@inkandswitch/patchwork-bootloader";
 import type { PatchworkSiteOptions } from "./options.js";
-import type { ArkVersion } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 
 // The same defaults as the bootloader's DEFAULT_CLASSIC_SYNC_SERVER
 // (sync-config.ts) and the subduction url in automerge-protocol-handler.ts,
@@ -9,13 +9,12 @@ export const DEFAULT_SYNC_SERVERS = {
   subduction: "wss://subduction.sync.inkandswitch.com",
 };
 
-/** Sync servers still running ARK 0.6, by host. */
+/** Sync servers still running ARK 0.6 (keyhive 0.3), by host. */
 const ARK_06_HOSTS = ["subduction.sync.inkandswitch.com"];
 
 export function resolvePrimarySyncServer(options: PatchworkSiteOptions): {
   url: string;
   keyhive?: boolean;
-  useIdFactory?: boolean;
   ark?: ArkVersion;
 } {
   const url =
@@ -26,7 +25,6 @@ export function resolvePrimarySyncServer(options: PatchworkSiteOptions): {
   return {
     url,
     keyhive: true,
-    useIdFactory: keyhive.useIdFactory ?? true,
     ark:
       keyhive.ark ?? (ARK_06_HOSTS.includes(new URL(url).host) ? "0.6" : "0.8"),
   };
@@ -52,4 +50,4 @@ export function resolveSyncServers(options: PatchworkSiteOptions): string[] {
 
 // Emitted by importmap-plugin.ts. keyhive_wasm.wasm is loaded lazily (only
 // when keyhive is actually enabled), so it isn't worth an eager preload.
-export const PRELOAD_WASM_ASSETS = ["automerge.wasm", "subduction.wasm"];
+export const PRELOAD_WASM_ASSETS = ["automerge.wasm"];

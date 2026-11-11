@@ -1,5 +1,4 @@
-import type { ArkVersion } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
-
+import type { ArkVersion } from "@inkandswitch/patchwork-bootloader";
 // Options for a site's generated files (icons, index.html, the manifest,
 // Netlify config), with nothing vite-specific in them, so another bundler can
 // use them too. `../vite/patchwork-plugin.ts` adds the vite parts.
@@ -33,28 +32,20 @@ export interface PatchworkNetlifyOptions {
 
 export interface PatchworkKeyhiveOptions {
   /**
-   * The automerge-repo-keyhive to build with, which has to be the one the
-   * sync server runs. `"0.8"` is the current stack. `"0.6"` is the previous
-   * one, which patchwork installs under `@ark-0.6/*`: ARK 0.6, keyhive 0.3,
-   * and the automerge-repo and subduction they were built with, swapped in
-   * whole.
-   * It only knows subduction.sync.inkandswitch.com's identity.
+   * The keyhive the sync server speaks; each device keeps a keyhive of each
+   * kind it has used, apart. `"0.8"` is keyhive 0.6 used directly (keyline),
+   * for servers that serve `/keyhive/contact-card` (staging). `"0.6"` is ARK
+   * 0.6 and keyhive 0.3, which subduction.sync.inkandswitch.com still runs;
+   * it only knows that server's identity.
    *
    * Defaults to `"0.6"` when `syncServers.subduction` is on
-   * subduction.sync.inkandswitch.com, which hasn't moved to 0.8 yet, and
-   * `"0.8"` anywhere else. Each keeps its keyhive state in its own database.
+   * subduction.sync.inkandswitch.com and `"0.8"` anywhere else.
    */
   ark?: ArkVersion;
-  /**
-   * Use the `idFactory` ARK injects into the repo config, which derives
-   * document ids from keyhive. Default true. `false` drops it and lets the
-   * Repo generate ids its own way.
-   */
-  useIdFactory?: boolean;
 }
 
 export type PatchworkSyncServersOptions = {
-  /** wss:// URL for the legacy automerge-repo sync-server channel (connected on demand via connectClassicSync). Default: wss://sync3.automerge.org. Pass false to skip its preconnect hint. */
+  /** wss:// URL for the legacy automerge-repo sync-server channel (only for its preconnect hint: automerge-repo 3 has no classic sync). Default: wss://sync3.automerge.org. Pass false to skip its preconnect hint. */
   classic?: string | false;
   /** wss:// URL for the subduction channel. Default: wss://subduction.sync.inkandswitch.com. A keyhive build uses it too, and fetches the server's contact card from `/keyhive/contact-card` on the same host. */
   subduction?: string;

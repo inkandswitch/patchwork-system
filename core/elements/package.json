@@ -29,7 +29,6 @@
   "license": "MIT",
   "peerDependencies": {
     "@automerge/automerge-repo": "*",
-    "@automerge/automerge-repo-keyhive": "*",
     "@inkandswitch/patchwork-filesystem": "workspace:^",
     "@inkandswitch/patchwork-plugins": "workspace:^",
     "@inkandswitch/patchwork-providers": "workspace:^",
@@ -62,11 +61,12 @@
   "devDependencies": {
     "@automerge/automerge": "catalog:",
     "@automerge/automerge-repo": "catalog:",
-    "@automerge/automerge-repo-keyhive": "catalog:",
-    "@automerge/automerge-subduction": "catalog:",
+    "@automerge/automerge-repo-subduction": "catalog:",
+    "@automerge/subduction": "catalog:",
     "@inkandswitch/patchwork-filesystem": "workspace:^",
     "@inkandswitch/patchwork-plugins": "workspace:^",
     "@inkandswitch/patchwork-providers": "workspace:^",
+    "@keyhive/keyhive": "catalog:",
     "@types/debug": "^4.1.13",
     "@types/node": "catalog:",
     "@types/react": "catalog:",

@@ -1,11 +1,6 @@
 export * from "./patchwork-view.js";
 export * from "./events.js";
-export {
-  hasActiveAccess,
-  publicAccessChanged,
-  setPublicAccess,
-  type PublicAccess,
-} from "./keyhive-access.js";
+export { hasActiveAccess } from "./keyhive-access.js";
 export type { PatchworkViewAttrs } from "./jsx.js";
 
 // The `<patchwork-view>` JSX intrinsic lives in opt-in entry points, so a

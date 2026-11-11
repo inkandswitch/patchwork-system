@@ -25,9 +25,9 @@ let repo: Repo;
 let note: DocHandle<Note>;
 const teardowns: (() => void)[] = [];
 
-beforeEach(() => {
+beforeEach(async () => {
   repo = new Repo();
-  note = repo.create<Note>({ title: "note" });
+  note = await repo.create<Note>({ title: "note" });
 });
 
 afterEach(() => {
@@ -37,10 +37,8 @@ afterEach(() => {
 
 // A fork of `note` in the scratch repo, the way a remapper computing a view
 // would make one.
-function fork(): DocHandle<Note> {
-  const handle = scratch.create<Note>();
-  handle.update(() => A.clone(note.doc()));
-  return handle;
+function fork(): Promise<DocHandle<Note>> {
+  return scratch.clone(note);
 }
 
 // remapper > consumer. The remapper answers `note`'s descriptor with whatever
@@ -101,8 +99,8 @@ function mount({
 
 describe("scratch backings", () => {
   it("finds a scratch backing in the scratch repo, under the original url", async () => {
-    const scratchDoc = fork();
-    scratchDoc.change((d) => {
+    const scratchDoc = await fork();
+    await scratchDoc.change((d) => {
       d.title = "laid";
     });
     const view = mount();
@@ -112,7 +110,7 @@ describe("scratch backings", () => {
     expect(handle.url).toBe(note.url);
     expect(handle.doc().title).toBe("laid");
 
-    handle.change((d) => {
+    await handle.change((d) => {
       d.title = "edited";
     });
     expect(scratchDoc.doc().title).toBe("edited");
@@ -121,7 +119,7 @@ describe("scratch backings", () => {
   });
 
   it("holds a lease on the scratch document while it backs the view", async () => {
-    const scratchDoc = fork();
+    const scratchDoc = await fork();
     const view = mount();
     view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     const handle = await view.overlay.find<Note>(note.url);
@@ -129,16 +127,16 @@ describe("scratch backings", () => {
 
     view.answer({ url: note.url });
     await vi.waitFor(() => expect(view.leases(scratchDoc.url)).toBe(0));
-    note.change((d) => {
+    await note.change((d) => {
       d.title = "live";
     });
     expect(handle.doc().title).toBe("live");
   });
 
   it("takes the new lease before letting the old one go", async () => {
-    const first = fork();
-    const second = fork();
-    second.change((d) => {
+    const first = await fork();
+    const second = await fork();
+    await second.change((d) => {
       d.title = "second";
     });
     const view = mount();
@@ -155,7 +153,7 @@ describe("scratch backings", () => {
   });
 
   it("doesn't tell the view about a released scratch document being deleted", async () => {
-    const scratchDoc = fork();
+    const scratchDoc = await fork();
     const view = mount({ onRelease: (url) => scratch.delete(url) });
     view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     const handle = await view.overlay.find<Note>(note.url);
@@ -170,7 +168,7 @@ describe("scratch backings", () => {
   });
 
   it("lets its leases go on dispose", async () => {
-    const scratchDoc = fork();
+    const scratchDoc = await fork();
     const view = mount();
     view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     await view.overlay.find<Note>(note.url);
@@ -181,7 +179,7 @@ describe("scratch backings", () => {
   });
 
   it("lets a lease go on dispose while its lookup is still pending", async () => {
-    const scratchDoc = fork();
+    const scratchDoc = await fork();
     const view = mount();
     const find = vi
       .spyOn(scratch, "find")
@@ -197,7 +195,7 @@ describe("scratch backings", () => {
   });
 
   it("holds no lease for a backing in the realm repo", async () => {
-    const clone = repo.clone(note);
+    const clone = await repo.clone(note);
     const view = mount();
     view.answer({ url: note.url, cloneUrl: clone.url });
     await view.overlay.find<Note>(note.url);
@@ -210,7 +208,7 @@ describe("scratch backings", () => {
       heads: note.heads(),
     });
     // Computed, so it shares none of the note's history.
-    const computed = scratch.create<Note>({ title: "laid" });
+    const computed = await scratch.create<Note>({ title: "laid" });
     const view = mount();
     view.answer({ url: note.url, scratchUrl: computed.url });
 
@@ -222,15 +220,15 @@ describe("scratch backings", () => {
   });
 
   it("shows a cloneUrl pinned to heads, not the scratch one", async () => {
-    const clone = repo.clone(note);
+    const clone = await repo.clone(note);
     const checkpoint = stringifyAutomergeUrl({
       documentId: clone.documentId,
       heads: clone.heads(),
     });
-    clone.change((d) => {
+    await clone.change((d) => {
       d.title = "since";
     });
-    const computed = scratch.create<Note>({ title: "laid" });
+    const computed = await scratch.create<Note>({ title: "laid" });
     const view = mount();
     view.answer({
       url: note.url,
@@ -250,8 +248,8 @@ describe("scratch backings", () => {
   });
 
   it("shows a pinned url at heads only the scratch document has from the scratch one", async () => {
-    const scratchDoc = fork();
-    scratchDoc.change((d) => {
+    const scratchDoc = await fork();
+    await scratchDoc.change((d) => {
       d.title = "laid";
     });
     const view = mount();
@@ -269,8 +267,8 @@ describe("scratch backings", () => {
   });
 
   it("resolves a view() of a scratch backing back through the overlay", async () => {
-    const scratchDoc = fork();
-    scratchDoc.change((d) => {
+    const scratchDoc = await fork();
+    await scratchDoc.change((d) => {
       d.title = "laid";
     });
     const view = mount();
@@ -292,6 +290,20 @@ describe("scratch backings", () => {
 describe("scratch backings: peer traffic", () => {
   const peer = "peer-1" as PeerId;
 
+  // An ephemeral message from a peer, as the repo delivers it: to every
+  // handle on the document (the root, and the `title` sub-handle the tests
+  // listen on).
+  function receive(on: DocHandle<Note>, message: unknown) {
+    for (const h of [on, on.sub("title")] as DocHandle<unknown>[]) {
+      h.emit("ephemeral-message", {
+        handle: h,
+        senderId: peer,
+        originId: "origin-1" as never,
+        message,
+      });
+    }
+  }
+
   // Every ephemeral message `handles` hear, with whether it came stamped
   // with the handle that heard it.
   function hear(...handles: DocHandle<unknown>[]) {
@@ -305,32 +317,35 @@ describe("scratch backings: peer traffic", () => {
   }
 
   it("sends and hears ephemeral messages through the stored document", async () => {
-    const scratchDoc = fork();
+    const scratchDoc = await fork();
     const view = mount();
     view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     const handle = await view.overlay.find<Note>(note.url);
     const title = handle.sub("title");
 
     const heard = hear(handle, title);
-    note._receiveInboundEphemeral(peer, "stored");
-    scratchDoc._receiveInboundEphemeral(peer, "scratch");
+    receive(note, "stored");
+    receive(scratchDoc, "scratch");
     expect(heard).toEqual([
       [0, true, "stored"],
       [1, true, "stored"],
     ]);
 
     const sent: string[] = [];
-    note.on("ephemeral-message-outbound", () => sent.push("stored"));
-    scratchDoc.on("ephemeral-message-outbound", () => sent.push("scratch"));
+    vi.spyOn(note, "broadcast").mockImplementation(() => {
+      sent.push("stored");
+    });
+    vi.spyOn(scratchDoc, "broadcast").mockImplementation(() => {
+      sent.push("scratch");
+    });
     handle.broadcast({ hello: 1 });
     title.broadcast({ hello: 2 });
     expect(sent).toEqual(["stored", "stored"]);
   });
 
   it("goes through the clone under a scratch document laid over one", async () => {
-    const clone = repo.clone(note);
-    const scratchDoc = scratch.create<Note>();
-    scratchDoc.update(() => A.clone(clone.doc()));
+    const clone = await repo.clone(note);
+    const scratchDoc = await scratch.clone(clone);
     const view = mount();
     view.answer({
       url: note.url,
@@ -340,15 +355,15 @@ describe("scratch backings: peer traffic", () => {
     const handle = await view.overlay.find<Note>(note.url);
 
     const heard = hear(handle);
-    note._receiveInboundEphemeral(peer, "note");
-    clone._receiveInboundEphemeral(peer, "clone");
-    scratchDoc._receiveInboundEphemeral(peer, "scratch");
+    receive(note, "note");
+    receive(clone, "clone");
+    receive(scratchDoc, "scratch");
     expect(heard).toEqual([[0, true, "clone"]]);
   });
 
-  it("hears remote heads on the live root alone, as the repo emits them", async () => {
-    const scratchDoc = fork();
-    scratchDoc.change((d) => {
+  it("hears remote heads from the stored document, on every handle", async () => {
+    const scratchDoc = await fork();
+    await scratchDoc.change((d) => {
       d.title = "laid";
     });
     const view = mount();
@@ -367,21 +382,23 @@ describe("scratch backings: peer traffic", () => {
     pinned.on("remote-heads", () => heard.push("pinned"));
     title.on("remote-heads", () => heard.push("title"));
     note.emit("remote-heads", {
-      storageId: "server" as never,
+      peerId: peer,
       heads: note.heads(),
       timestamp: 1,
     });
-    expect(heard).toEqual(["live"]);
+    // The repo sends it to every handle on the document, so each overlay
+    // handle hears it from the stored one.
+    expect(heard).toEqual(["live", "pinned", "title"]);
     // The pinned view's other peer traffic is the stored document's too.
     const messages = hear(pinned);
-    note._receiveInboundEphemeral(peer, "stored");
+    receive(note, "stored");
     expect(messages).toEqual([[0, true, "stored"]]);
   });
 
   it("moves with the backing, and lets go of the stored document's handle", async () => {
-    const first = fork();
-    const second = fork();
-    const clone = repo.clone(note);
+    const first = await fork();
+    const second = await fork();
+    const clone = await repo.clone(note);
     const before = note.listenerCount("ephemeral-message");
     const view = mount();
     view.answer({ url: note.url, scratchUrl: first.url });
@@ -395,7 +412,7 @@ describe("scratch backings: peer traffic", () => {
     view.answer({ url: note.url, scratchUrl: second.url });
     await backedBy(handle, second);
     expect(note.listenerCount("ephemeral-message")).toBe(before + 2);
-    note._receiveInboundEphemeral(peer, "stored");
+    receive(note, "stored");
     expect(heard.splice(0)).toEqual([
       [0, true, "stored"],
       [1, true, "stored"],
@@ -405,9 +422,9 @@ describe("scratch backings: peer traffic", () => {
     view.answer({ url: note.url, cloneUrl: clone.url });
     await backedBy(handle, clone);
     expect(note.listenerCount("ephemeral-message")).toBe(before);
-    note._receiveInboundEphemeral(peer, "stored");
-    second._receiveInboundEphemeral(peer, "scratch");
-    clone._receiveInboundEphemeral(peer, "clone");
+    receive(note, "stored");
+    receive(second, "scratch");
+    receive(clone, "clone");
     expect(heard.splice(0)).toEqual([
       [0, true, "clone"],
       [1, true, "clone"],
@@ -415,7 +432,7 @@ describe("scratch backings: peer traffic", () => {
 
     view.overlay.dispose();
     expect(clone.listenerCount("ephemeral-message")).toBe(0);
-    clone._receiveInboundEphemeral(peer, "after");
+    receive(clone, "after");
     expect(heard).toEqual([]);
   });
 
@@ -425,31 +442,42 @@ describe("scratch backings: peer traffic", () => {
     const ready = new Promise<DocHandle<unknown>>((resolve) => {
       found = () => resolve(note as DocHandle<unknown>);
     });
-    const real = repo.findWithProgress.bind(repo);
-    const spy = vi.spyOn(repo, "findWithProgress").mockImplementation(((
-      id: AutomergeUrl
-    ) =>
-      id === note.url
-        ? {
-            ...real(id),
-            peek: () => ({ state: "loading", sources: {} }),
-            whenReady: () => ready,
-          }
-        : real(id)) as typeof repo.findWithProgress);
+    // `query` says `loading` and `find` waits, for the stored document only.
+    const realQuery = repo.query.bind(repo);
+    const realFind = repo.find.bind(repo);
+    const queries = vi
+      .spyOn(repo, "query")
+      .mockImplementation(((id: AutomergeUrl) =>
+        id === note.url
+          ? { ...realQuery(id), state: () => ({ status: "loading" }) }
+          : realQuery(id)) as typeof repo.query);
+    const finds = vi
+      .spyOn(repo, "find")
+      .mockImplementation(((
+        id: AutomergeUrl,
+        options?: { signal?: AbortSignal }
+      ) =>
+        id === note.url ? ready : realFind(id, options)) as typeof repo.find);
+    const spy = {
+      mockRestore() {
+        queries.mockRestore();
+        finds.mockRestore();
+      },
+    };
     teardowns.push(() => spy.mockRestore());
     return found;
   }
 
   it("moves peer traffic to the stored document once it's found", async () => {
     const found = holdStoredLookup();
-    const scratchDoc = fork();
+    const scratchDoc = await fork();
     const view = mount();
     view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     const handle = await view.overlay.find<Note>(note.url);
     const title = handle.sub("title");
     const heard = hear(handle, title);
 
-    scratchDoc._receiveInboundEphemeral(peer, "scratch");
+    receive(scratchDoc, "scratch");
     expect(heard.splice(0)).toEqual([
       [0, true, "scratch"],
       [1, true, "scratch"],
@@ -459,8 +487,8 @@ describe("scratch backings: peer traffic", () => {
     await vi.waitFor(() =>
       expect(note.listenerCount("ephemeral-message")).toBeGreaterThan(0)
     );
-    scratchDoc._receiveInboundEphemeral(peer, "scratch");
-    note._receiveInboundEphemeral(peer, "stored");
+    receive(scratchDoc, "scratch");
+    receive(note, "stored");
     expect(heard).toEqual([
       [0, true, "stored"],
       [1, true, "stored"],
@@ -469,8 +497,8 @@ describe("scratch backings: peer traffic", () => {
 
   it("ignores a stored document found after the backing has moved on", async () => {
     const found = holdStoredLookup();
-    const scratchDoc = fork();
-    const clone = repo.clone(note);
+    const scratchDoc = await fork();
+    const clone = await repo.clone(note);
     const view = mount();
     view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     const handle = await view.overlay.find<Note>(note.url);
@@ -480,23 +508,27 @@ describe("scratch backings: peer traffic", () => {
     await backedBy(handle, clone);
     found();
     await new Promise((resolve) => setTimeout(resolve, 10));
-    note._receiveInboundEphemeral(peer, "stored");
-    clone._receiveInboundEphemeral(peer, "clone");
+    receive(note, "stored");
+    receive(clone, "clone");
     expect(heard).toEqual([[0, true, "clone"]]);
   });
 
   it("follows a new stored document under the same scratch one", async () => {
-    const scratchDoc = fork();
-    const clone = repo.clone(note);
+    const scratchDoc = await fork();
+    const clone = await repo.clone(note);
     const view = mount();
     view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     const handle = await view.overlay.find<Note>(note.url);
     const heard = hear(handle);
 
-    view.answer({ url: note.url, cloneUrl: clone.url, scratchUrl: scratchDoc.url });
+    view.answer({
+      url: note.url,
+      cloneUrl: clone.url,
+      scratchUrl: scratchDoc.url,
+    });
     await new Promise((resolve) => setTimeout(resolve, 10));
-    note._receiveInboundEphemeral(peer, "stored");
-    clone._receiveInboundEphemeral(peer, "clone");
+    receive(note, "stored");
+    receive(clone, "clone");
     expect(heard).toEqual([[0, true, "clone"]]);
   });
 
@@ -504,28 +536,36 @@ describe("scratch backings: peer traffic", () => {
   // told to stop on.
   function holdStoredForever() {
     const waits: (AbortSignal | undefined)[] = [];
-    const real = repo.findWithProgress.bind(repo);
-    const spy = vi.spyOn(repo, "findWithProgress").mockImplementation(((
-      id: AutomergeUrl
-    ) =>
-      id === note.url
-        ? {
-            ...real(id),
-            peek: () => ({ state: "loading", sources: {} }),
-            whenReady: (options?: { signal?: AbortSignal }) => {
-              waits.push(options?.signal);
-              return new Promise(() => {});
-            },
-          }
-        : real(id)) as typeof repo.findWithProgress);
+    const realQuery = repo.query.bind(repo);
+    const realFind = repo.find.bind(repo);
+    const queries = vi
+      .spyOn(repo, "query")
+      .mockImplementation(((id: AutomergeUrl) =>
+        id === note.url
+          ? { ...realQuery(id), state: () => ({ status: "loading" }) }
+          : realQuery(id)) as typeof repo.query);
+    const finds = vi.spyOn(repo, "find").mockImplementation(((
+      id: AutomergeUrl,
+      options?: { signal?: AbortSignal }
+    ) => {
+      if (id !== note.url) return realFind(id, options);
+      waits.push(options?.signal);
+      return new Promise(() => {});
+    }) as typeof repo.find);
+    const spy = {
+      mockRestore() {
+        queries.mockRestore();
+        finds.mockRestore();
+      },
+    };
     teardowns.push(() => spy.mockRestore());
     return waits;
   }
 
   it("stops waiting for the stored document when the backing moves on", async () => {
     const waits = holdStoredForever();
-    const scratchDoc = fork();
-    const clone = repo.clone(note);
+    const scratchDoc = await fork();
+    const clone = await repo.clone(note);
     const view = mount();
     view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     const handle = await view.overlay.find<Note>(note.url);
@@ -538,7 +578,7 @@ describe("scratch backings: peer traffic", () => {
 
   it("stops waiting for the stored document on dispose", async () => {
     const waits = holdStoredForever();
-    const scratchDoc = fork();
+    const scratchDoc = await fork();
     const view = mount();
     view.answer({ url: note.url, scratchUrl: scratchDoc.url });
     await view.overlay.find<Note>(note.url);
@@ -548,7 +588,7 @@ describe("scratch backings: peer traffic", () => {
   });
 
   it("stays on the scratch document when the stored one can't be found", async () => {
-    const scratchDoc = fork();
+    const scratchDoc = await fork();
     const view = mount();
     view.answer({
       url: note.url,
@@ -559,7 +599,7 @@ describe("scratch backings: peer traffic", () => {
     expect(handle.doc().title).toBe("note");
     const heard = hear(handle);
     await new Promise((resolve) => setTimeout(resolve, 20));
-    scratchDoc._receiveInboundEphemeral(peer, "scratch");
+    receive(scratchDoc, "scratch");
     expect(heard).toEqual([[0, true, "scratch"]]);
   });
 });

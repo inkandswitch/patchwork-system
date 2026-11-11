@@ -14,10 +14,19 @@ import {
 } from "@automerge/automerge-repo";
 import { resolvePath } from "../src/resolve.js";
 
-type FileDoc = { "@patchwork": { type: "file" }; content: string; mimeType: string; name: string };
-type FolderDoc = { "@patchwork": { type: "folder" }; title: string; docs: { name: string; type: string; url: AutomergeUrl }[] };
+type FileDoc = {
+  "@patchwork": { type: "file" };
+  content: string;
+  mimeType: string;
+  name: string;
+};
+type FolderDoc = {
+  "@patchwork": { type: "folder" };
+  title: string;
+  docs: { name: string; type: string; url: AutomergeUrl }[];
+};
 
-const repo = () => new Repo({ network: [] });
+const repo = () => new Repo();
 
 const pin = (handle: DocHandle<unknown>): AutomergeUrl =>
   stringifyAutomergeUrl({
@@ -27,21 +36,25 @@ const pin = (handle: DocHandle<unknown>): AutomergeUrl =>
 
 /** root ──link──> child ──link──> file, with each link bare or pinned as asked. */
 async function tree(r: Repo, { pinLinks }: { pinLinks: boolean }) {
-  const file = await r.create2<FileDoc>({
+  const file = await r.create<FileDoc>({
     "@patchwork": { type: "file" },
     content: "first",
     mimeType: "text/plain",
     name: "page.txt",
   });
-  const child = await r.create2<FolderDoc>({
+  const child = await r.create<FolderDoc>({
     "@patchwork": { type: "folder" },
     title: "child",
-    docs: [{ name: "page.txt", type: "txt", url: pinLinks ? pin(file) : file.url }],
+    docs: [
+      { name: "page.txt", type: "txt", url: pinLinks ? pin(file) : file.url },
+    ],
   });
-  const root = await r.create2<FolderDoc>({
+  const root = await r.create<FolderDoc>({
     "@patchwork": { type: "folder" },
     title: "root",
-    docs: [{ name: "child", type: "folder", url: pinLinks ? pin(child) : child.url }],
+    docs: [
+      { name: "child", type: "folder", url: pinLinks ? pin(child) : child.url },
+    ],
   });
   return { file, child, root };
 }
@@ -52,31 +65,43 @@ describe("resolvePath and what heads actually pin", () => {
     const { file, root } = await tree(r, { pinLinks: false });
 
     const headsAtFirstRead = root.heads()!;
-    const before = await resolvePath(r, root.view(headsAtFirstRead), ["child", "page.txt"]);
+    const before = await resolvePath(r, root.view(headsAtFirstRead), [
+      "child",
+      "page.txt",
+    ]);
     expect(String(before?.content)).toBe("first");
 
     // The root is untouched: rewriting a page never touches the repo root.
-    file.change((d) => {
+    await file.change((d) => {
       d.content = "second";
     });
     expect(root.heads()).toEqual(headsAtFirstRead);
 
     // Same root, same heads, same path — different bytes.
-    const after = await resolvePath(r, root.view(headsAtFirstRead), ["child", "page.txt"]);
+    const after = await resolvePath(r, root.view(headsAtFirstRead), [
+      "child",
+      "page.txt",
+    ]);
     expect(String(after?.content)).toBe("second");
   });
 
   it("says a resolution was not pinned when any link on the path was bare", async () => {
     const r = repo();
     const { root } = await tree(r, { pinLinks: false });
-    const resolved = await resolvePath(r, root.view(root.heads()!), ["child", "page.txt"]);
+    const resolved = await resolvePath(r, root.view(root.heads()!), [
+      "child",
+      "page.txt",
+    ]);
     expect(resolved?.pinned).toBe(false);
   });
 
   it("says a resolution was pinned when every link carried heads", async () => {
     const r = repo();
     const { root } = await tree(r, { pinLinks: true });
-    const resolved = await resolvePath(r, root.view(root.heads()!), ["child", "page.txt"]);
+    const resolved = await resolvePath(r, root.view(root.heads()!), [
+      "child",
+      "page.txt",
+    ]);
     expect(resolved?.pinned).toBe(true);
   });
 
@@ -91,7 +116,9 @@ describe("resolvePath and what heads actually pin", () => {
   it("reaching a document directly is pinned only if that document was", async () => {
     const r = repo();
     const { file } = await tree(r, { pinLinks: false });
-    expect((await resolvePath(r, file.view(file.heads()!), []))?.pinned).toBe(true);
+    expect((await resolvePath(r, file.view(file.heads()!), []))?.pinned).toBe(
+      true
+    );
     expect((await resolvePath(r, file, []))?.pinned).toBe(false);
   });
 });

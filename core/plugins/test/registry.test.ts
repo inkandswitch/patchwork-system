@@ -1,5 +1,7 @@
 import {
   encodeHeads,
+  generateAutomergeUrl,
+  parseAutomergeUrl,
   stringifyAutomergeUrl,
   type DocumentId,
   type UrlHeads,
@@ -12,8 +14,8 @@ import {
   unregisterPlugins,
 } from "../src/registry/index.js";
 
-const ID = "2uZrhZ7G2NJxryZSMWSdDNFCke8C";
-const OTHER = "4NMNnkMhL8jXrdJ9jamS58PAVdXu";
+const ID = parseAutomergeUrl(generateAutomergeUrl()).documentId;
+const OTHER = parseAutomergeUrl(generateAutomergeUrl()).documentId;
 
 // Heads of two versions, shaped as automerge's are, to pin urls of the
 // documents above to.

@@ -16,7 +16,7 @@ export async function findHandleInFolderHandle<T>(
   const part = parts[0];
   if (!part) return folderHandle;
   const folder = folderHandle.doc();
-  if (!folder.docs) return;
+  if (!folder?.docs) return;
 
   const docLink = folder.docs.find((doc) => doc.name === part);
   if (!docLink) return;
@@ -25,7 +25,7 @@ export async function findHandleInFolderHandle<T>(
 
   if (parts.length > 1) {
     const doc = docHandle.doc();
-    if (!("docs" in doc)) {
+    if (!doc || !("docs" in doc)) {
       return;
     }
     return findHandleInFolderHandle(

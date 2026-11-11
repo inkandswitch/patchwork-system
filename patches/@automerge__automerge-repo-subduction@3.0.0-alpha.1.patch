@@ -1,0 +1,134 @@
+diff --git a/dist/index.d.ts b/dist/index.d.ts
+index d9d6467faec4db3797160be8e4ece51b9c84b63f..7f47bf5387bf70e0eb231df4f086af842957ae5a 100644
+--- a/dist/index.d.ts
++++ b/dist/index.d.ts
+@@ -39,6 +39,8 @@ export interface SubductionBackendOptions {
+ export declare class SubductionBackend implements SedimentreeBackend {
+     #private;
+     constructor(options: SubductionBackendOptions);
++    /** The native Subduction engine, for protocols Repo doesn't speak (keyhive). */
++    get engine(): N.Subduction;
+     /** Hex-encoded verifying key of this backend's signer. */
+     get peerId(): string;
+     /** Authenticate an outgoing transport with this backend's signer and add
+diff --git a/dist/index.js b/dist/index.js
+index 338be928f0ffcffbc6f67cb8ddf68123153a9146..3dfe5080645e578b68be8dd85a37c40c5085462a 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -112,6 +112,8 @@ export class SubductionBackend {
+     #closing;
+     #sequence = 0;
+     #round = 0;
++    /** Sync rounds in flight, by tree. */
++    #rounds = new Map();
+     #deleting = new Map();
+     /**
+      * Open sessions per tree. Close and deletion end a tree's sessions in the
+@@ -169,6 +171,10 @@ export class SubductionBackend {
+         this.#networkSettled = Promise.race([started.then(() => { }), closed]);
+     }
+     /** Hex-encoded verifying key of this backend's signer. */
++    /** The native Subduction engine, for protocols Repo doesn't speak (keyhive). */
++    get engine() {
++        return this.#engine;
++    }
+     get peerId() {
+         return Array.from(this.#signer.verifyingKey(), b => b.toString(16).padStart(2, "0")).join("");
+     }
+@@ -347,7 +353,26 @@ export class SubductionBackend {
+      * checking for peers, so skip it when none qualifies. Native rounds opened
+      * by loadAndWatch do not consult `announce`.
+      */
++    /**
++     * A single record stored while a round for its tree is in flight is in
++     * neither that round (its heads were exchanged already) nor a push (the
++     * round's subscription isn't up yet), so rounds are counted per tree and
++     * such a store starts another.
++     */
+     async #syncAllPeers(id) {
++        this.#rounds.set(id, (this.#rounds.get(id) ?? 0) + 1);
++        try {
++            return await this.#syncAllPeersNow(id);
++        }
++        finally {
++            const left = this.#rounds.get(id) - 1;
++            if (left)
++                this.#rounds.set(id, left);
++            else
++                this.#rounds.delete(id);
++        }
++    }
++    async #syncAllPeersNow(id) {
+         const connected = await this.#engine.getConnectedPeerIds();
+         const announced = await Promise.all(connected.map(peer => this.#announces(id, peer)));
+         const peers = connected.filter((_, i) => announced[i]);
+@@ -627,7 +652,7 @@ export class SubductionBackend {
+                 }
+                 // Durability never waits for a peer; a round propagates batches even
+                 // without a document session. A failed batch stored nothing to send.
+-                if (!single)
++                if (!single || this.#rounds.has(id))
+                     this.#propagate(id);
+             })().catch(cause => {
+                 throw error(operation, cause);
+diff --git a/src/index.ts b/src/index.ts
+index 8595f5dcaf996c39c54503912bf29be7ecf286e4..ecbffbc3cae76b41ee1b78ea405a1e632b819df2 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -211,6 +211,8 @@ export class SubductionBackend implements SedimentreeBackend {
+   #closing?: Promise<void>
+   #sequence = 0
+   #round = 0
++  /** Sync rounds in flight, by tree. */
++  readonly #rounds = new Map<SedimentreeId, number>()
+   readonly #deleting = new Map<SedimentreeId, Promise<void>>()
+   /**
+    * Open sessions per tree. Close and deletion end a tree's sessions in the
+@@ -278,6 +280,10 @@ export class SubductionBackend implements SedimentreeBackend {
+     )
+     this.#networkSettled = Promise.race([started.then(() => {}), closed])
+   }
++  /** The native Subduction engine, for protocols Repo doesn't speak (keyhive). */
++  get engine(): N.Subduction {
++    return this.#engine
++  }
+   /** Hex-encoded verifying key of this backend's signer. */
+   get peerId(): string {
+     return Array.from(this.#signer.verifyingKey(), b =>
+@@ -474,8 +480,27 @@ export class SubductionBackend implements SedimentreeBackend {
+    * checking for peers, so skip it when none qualifies. Native rounds opened
+    * by loadAndWatch do not consult `announce`.
+    */
++  /**
++   * A single record stored while a round for its tree is in flight is in
++   * neither that round (its heads were exchanged already) nor a push (the
++   * round's subscription isn't up yet), so rounds are counted per tree and
++   * such a store starts another.
++   */
+   async #syncAllPeers(
+     id: SedimentreeId
++  ): Promise<[N.PeerId, N.PeerSyncResult][]> {
++    this.#rounds.set(id, (this.#rounds.get(id) ?? 0) + 1)
++    try {
++      return await this.#syncAllPeersNow(id)
++    } finally {
++      const left = this.#rounds.get(id)! - 1
++      if (left) this.#rounds.set(id, left)
++      else this.#rounds.delete(id)
++    }
++  }
++
++  async #syncAllPeersNow(
++    id: SedimentreeId
+   ): Promise<[N.PeerId, N.PeerSyncResult][]> {
+     const connected = await this.#engine.getConnectedPeerIds()
+     const announced = await Promise.all(
+@@ -767,7 +792,7 @@ export class SubductionBackend implements SedimentreeBackend {
+         }
+         // Durability never waits for a peer; a round propagates batches even
+         // without a document session. A failed batch stored nothing to send.
+-        if (!single) this.#propagate(id)
++        if (!single || this.#rounds.has(id)) this.#propagate(id)
+       })().catch(cause => {
+         throw error(operation, cause)
+       })

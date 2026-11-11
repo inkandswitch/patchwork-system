@@ -4,8 +4,10 @@ import {
   type AutomergeUrl,
   type DocHandle,
 } from "@automerge/automerge-repo";
-import type { AutomergeRepoKeyhiveBase } from "@automerge/automerge-repo-keyhive";
-import { getRegistry } from "@inkandswitch/patchwork-plugins";
+import {
+  getRegistry,
+  type PatchworkHive,
+} from "@inkandswitch/patchwork-plugins";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,43 +25,40 @@ function settle(ms = 10) {
 }
 
 // Waits for the view to have heard `times` access checks: an ingest reaches
-// it through a macrotask, then `accessForDoc`, then microtasks after that.
+// it through a macrotask, then `canRead`, then microtasks after that.
 async function heard(
-  fake: { accessForDoc: ReturnType<typeof vi.fn> },
+  fake: { canRead: ReturnType<typeof vi.fn> },
   times: number
 ) {
-  await vi.waitFor(() =>
-    expect(fake.accessForDoc).toHaveBeenCalledTimes(times)
-  );
+  await vi.waitFor(() => expect(fake.canRead).toHaveBeenCalledTimes(times));
   await settle(0);
 }
 
-// A keyhive document id is 32 bytes with something in the back half; the
-// padded-zero 16-byte ids `Repo.create` hands out are legacy docs.
+// A keyhive document id is 32 bytes with something in the back half; a
+// 16-byte id carried over from repo 2 is padded with zeros and is a legacy doc.
 function keyhiveUrl(): AutomergeUrl {
   const bytes = new Uint8Array(32);
   bytes.fill((++seq % 250) + 1);
   return stringifyAutomergeUrl(bytes as never);
 }
 
-/** Just enough of `AutomergeRepoKeyhive` for the views' access gate. */
+/** A `PatchworkHive` whose answers the test controls. */
 function fakeHive(initialAccess: boolean) {
   let access = initialAccess;
   const listeners = new Set<() => void>();
-  const accessForDoc = vi.fn(async () =>
-    access ? { toString: () => "Read" } : undefined
-  );
-  const hive = {
-    active: { individual: { id: "me" } },
-    accessForDoc,
-    networkAdapter: {
-      on: (_event: string, listener: () => void) => listeners.add(listener),
-      off: (_event: string, listener: () => void) => listeners.delete(listener),
+  const canRead = vi.fn(async () => access);
+  const hive: PatchworkHive = {
+    id: "me",
+    canRead,
+    canWrite: async () => access,
+    onChange(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
-  } as unknown as AutomergeRepoKeyhiveBase;
+  };
   return {
     hive,
-    accessForDoc,
+    canRead,
     listeners,
     setAccess(value: boolean) {
       access = value;
@@ -111,7 +110,11 @@ describe("keyhive access (component mode)", () => {
   function setup(access: boolean) {
     fake = fakeHive(access);
     tag = `kh-view-${++seq}`;
-    registerPatchworkViewElement({ name: tag, repo: readyRepo, hive: fake.hive });
+    registerPatchworkViewElement({
+      name: tag,
+      repo: readyRepo,
+      hive: fake.hive,
+    });
   }
 
   function mount(component: string, url: AutomergeUrl) {
@@ -155,17 +158,18 @@ describe("keyhive access (component mode)", () => {
     await vi.waitFor(() => expect(component.mounts).toBe(3));
     expect(fake.listeners.size).toBe(1);
 
-    fake.accessForDoc.mockClear();
+    fake.canRead.mockClear();
     for (let i = 0; i < 5; i++) fake.ingest();
     await heard(fake, 1);
     await settle();
-    expect(fake.accessForDoc).toHaveBeenCalledTimes(1);
+    expect(fake.canRead).toHaveBeenCalledTimes(1);
   });
 
   it("doesn't watch legacy docs", async () => {
     setup(true);
     const component = registerComponent();
-    const legacyUrl = new Repo({}).create({}).url;
+    // a 16-byte repo 2 id
+    const legacyUrl = "automerge:2uZrhZ7G2NJxryZSMWSdDNFCke8C" as AutomergeUrl;
     mount(component.id, legacyUrl);
     await vi.waitFor(() => expect(component.mounts).toBe(1));
     expect(fake.listeners.size).toBe(0);
@@ -186,7 +190,7 @@ describe("keyhive access (component mode)", () => {
 describe("keyhive access (legacy mode)", () => {
   // The backing repo the overlay resolves against: `find` fails until the
   // test says the doc has synced.
-  const realRepo = new Repo({});
+  const realRepo = new Repo();
   let available = false;
   let backing: DocHandle<unknown>;
   const find = vi.fn(async () => {
@@ -195,6 +199,20 @@ describe("keyhive access (legacy mode)", () => {
   });
   const flakyRepo = {
     find,
+    // What the overlay reads for a failure's verdict: unavailable until synced.
+    query: () => {
+      const state = () =>
+        available
+          ? { status: "ready", handle: backing }
+          : { status: "unavailable" };
+      return {
+        state,
+        subscribe: (listener: (s: unknown) => void) => {
+          listener(state());
+          return () => {};
+        },
+      };
+    },
     findWithProgress: () => ({
       peek: () => ({ state: "loading" }),
       subscribe: () => () => {},
@@ -213,7 +231,11 @@ describe("keyhive access (legacy mode)", () => {
   it("retries a failed load in place instead of rebuilding the view", async () => {
     const fake = fakeHive(true);
     const tag = `kh-legacy-${++seq}`;
-    registerPatchworkViewElement({ name: tag, repo: flakyRepo, hive: fake.hive });
+    registerPatchworkViewElement({
+      name: tag,
+      repo: flakyRepo,
+      hive: fake.hive,
+    });
 
     const toolId = `kh-tool-${++seq}`;
     const tool = { mounts: 0 };
@@ -234,7 +256,7 @@ describe("keyhive access (legacy mode)", () => {
     );
     registered.push(toolId);
 
-    backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
+    backing = await realRepo.create({ "@patchwork": { type: "kh-type" } });
     available = false;
     find.mockClear();
 
@@ -292,7 +314,7 @@ describe("keyhive access (legacy mode)", () => {
     );
     registered.push(toolId);
 
-    backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
+    backing = await realRepo.create({ "@patchwork": { type: "kh-type" } });
     available = false;
     find.mockClear();
 
@@ -354,7 +376,7 @@ describe("keyhive access (legacy mode)", () => {
     );
     registered.push(toolId);
 
-    backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
+    backing = await realRepo.create({ "@patchwork": { type: "kh-type" } });
     available = false;
     find.mockClear();
 
@@ -385,7 +407,7 @@ describe("keyhive access (legacy mode)", () => {
     resolveRetry(backing);
     await settle();
 
-    expect(fake.accessForDoc).toHaveBeenCalledTimes(4);
+    expect(fake.canRead).toHaveBeenCalledTimes(4);
     expect(tool.mounts).toBe(0);
   });
 
@@ -394,7 +416,11 @@ describe("keyhive access (legacy mode)", () => {
   it("retries a failed load on a timer when no op comes", async () => {
     const fake = fakeHive(true);
     const tag = `kh-legacy-${++seq}`;
-    registerPatchworkViewElement({ name: tag, repo: flakyRepo, hive: fake.hive });
+    registerPatchworkViewElement({
+      name: tag,
+      repo: flakyRepo,
+      hive: fake.hive,
+    });
 
     const toolId = `kh-tool-${++seq}`;
     const tool = { mounts: 0 };
@@ -415,7 +441,7 @@ describe("keyhive access (legacy mode)", () => {
     );
     registered.push(toolId);
 
-    backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
+    backing = await realRepo.create({ "@patchwork": { type: "kh-type" } });
     available = false;
     find.mockClear();
 
@@ -439,95 +465,20 @@ describe("keyhive access (legacy mode)", () => {
     await settle(2200);
     expect(find).toHaveBeenCalledTimes(2);
   });
-
-  // An unavailable query answers `find` from its verdict without asking the
-  // server again, so the timer has to re-arm the sync before it looks.
-  it("asks the sync server again before each timed retry", async () => {
-    const fake = fakeHive(true);
-    const tag = `kh-legacy-${++seq}`;
-
-    const toolId = `kh-tool-${++seq}`;
-    const tool = { mounts: 0 };
-    const render = () => {
-      tool.mounts++;
-      return () => {};
-    };
-    tools.register(
-      {
-        id: toolId,
-        type: "patchwork:tool",
-        name: toolId,
-        supportedDatatypes: ["kh-type"],
-        load: async () => render,
-        module: render,
-      } as never,
-      `test://${toolId}`
-    );
-    registered.push(toolId);
-
-    const handle = realRepo.create({ "@patchwork": { type: "kh-type" } });
-    // like the real repo: once unavailable, `find` rejects straight away
-    // until something re-arms the sync, and a re-armed sync only finds the
-    // doc if the server has it by then
-    let state: "unavailable" | "loading" = "unavailable";
-    let serverHasIt = false;
-    const listeners = new Set<(p: { state: string }) => void>();
-    const setState = (next: typeof state) => {
-      state = next;
-      for (const listener of [...listeners]) listener({ state });
-    };
-    const resyncSubduction = vi.fn(() => {
-      setTimeout(() => setState("loading"), 0);
-    });
-    const verdictRepo = {
-      find: vi.fn(async () => {
-        if (state === "unavailable")
-          throw new Error("Document is unavailable");
-        if (!serverHasIt) {
-          setState("unavailable");
-          throw new Error("Document is unavailable");
-        }
-        return handle;
-      }),
-      findWithProgress: () => ({
-        peek: () => ({ state }),
-        subscribe: (listener: (p: { state: string }) => void) => {
-          listeners.add(listener);
-          return () => listeners.delete(listener);
-        },
-      }),
-      resyncSubduction,
-    } as unknown as Repo;
-    registerPatchworkViewElement({ name: tag, repo: verdictRepo, hive: fake.hive });
-
-    const provider = document.createElement("repo-provider");
-    const view = document.createElement(tag);
-    view.setAttribute("doc-url", keyhiveUrl());
-    provider.append(view);
-    document.body.replaceChildren(provider);
-    await vi.waitFor(() =>
-      expect(view.querySelector(".pw-error")).toBeTruthy()
-    );
-
-    // the sender's device pushes it to the server; nothing tells us
-    serverHasIt = true;
-    await vi.waitFor(() => expect(tool.mounts).toBe(1), { timeout: 5_000 });
-    expect(resyncSubduction).toHaveBeenCalledTimes(1);
-    expect(view.querySelector(".pw-error")).toBeNull();
-  });
 });
 
 // A failed load of a keyhive doc used to leave the view blank until reload.
 describe("failed loads (component mode)", () => {
   type Progress = {
     peek: () => { state: string; error?: Error };
-    subscribe: (cb: (s: { state: string; error?: Error }) => void) => () => void;
+    subscribe: (
+      cb: (s: { state: string; error?: Error }) => void
+    ) => () => void;
   };
 
   let current: { state: string; error?: Error };
   let listeners: Set<(s: { state: string; error?: Error }) => void>;
   let findWithProgress: ReturnType<typeof vi.fn>;
-  let resyncSubduction: ReturnType<typeof vi.fn>;
   let tag: string;
   let component: ReturnType<typeof registerComponent>;
 
@@ -539,17 +490,14 @@ describe("failed loads (component mode)", () => {
   function setup(initial: { state: string; error?: Error }) {
     current = initial;
     listeners = new Set();
-    findWithProgress = vi.fn(
-      (): Progress => ({
-        peek: () => current,
-        subscribe: (cb) => {
-          listeners.add(cb);
-          return () => listeners.delete(cb);
-        },
-      })
-    );
-    resyncSubduction = vi.fn();
-    const repo = { findWithProgress, resyncSubduction } as unknown as Repo;
+    findWithProgress = vi.fn((): Progress => ({
+      peek: () => current,
+      subscribe: (cb) => {
+        listeners.add(cb);
+        return () => listeners.delete(cb);
+      },
+    }));
+    const repo = { findWithProgress } as unknown as Repo;
     tag = `kh-failed-${++seq}`;
     registerPatchworkViewElement({
       name: tag,
@@ -609,11 +557,10 @@ describe("failed loads (component mode)", () => {
     expect(component.mounts).toBe(1);
   });
 
-  it("backs off, resyncs before each retry, and starts over after a success", async () => {
+  it("backs off between retries and starts over after a success", async () => {
     setup({ state: "failed", error: new Error("nope") });
     const view = mount();
     await vi.advanceTimersByTimeAsync(0);
-    expect(resyncSubduction).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(999);
     expect(findWithProgress).toHaveBeenCalledTimes(1);
@@ -625,7 +572,6 @@ describe("failed loads (component mode)", () => {
     expect(findWithProgress).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(findWithProgress).toHaveBeenCalledTimes(3);
-    expect(resyncSubduction).toHaveBeenCalledTimes(3);
 
     // a success resets the count: the next failure waits the first delay again
     current = { state: "ready" };
@@ -644,7 +590,6 @@ describe("failed loads (component mode)", () => {
     mount();
     await vi.advanceTimersByTimeAsync(0);
     expect(component.mounts).toBe(0);
-    expect(resyncSubduction).toHaveBeenCalledTimes(1);
 
     // the resync puts the query back to loading, which doesn't cancel the timer
     setState({ state: "loading" });

@@ -171,7 +171,7 @@ function registerTool(
 }
 
 describe("patchwork-view (legacy mode)", () => {
-  const repo = new Repo({});
+  const repo = new Repo();
 
   beforeEach(() => {
     registerPatchworkViewElement({ name: "patchwork-view-legacy", repo });
@@ -187,8 +187,8 @@ describe("patchwork-view (legacy mode)", () => {
     vi.restoreAllMocks();
   });
 
-  function mount(doc: unknown) {
-    const handle = repo.create(doc);
+  async function mount(doc: unknown) {
+    const handle = await repo.create(doc);
     const provider = document.createElement("repo-provider");
     const view = document.createElement("patchwork-view-legacy");
     view.setAttribute("doc-url", handle.url);
@@ -198,7 +198,9 @@ describe("patchwork-view (legacy mode)", () => {
   }
 
   function loadButton(view: Element) {
-    const button = view.querySelector<HTMLButtonElement>("button.pw-error__load");
+    const button = view.querySelector<HTMLButtonElement>(
+      "button.pw-error__load"
+    );
     expect(button).toBeTruthy();
     return button!;
   }
@@ -206,7 +208,7 @@ describe("patchwork-view (legacy mode)", () => {
   it("offers a suggested package instead of the wildcard stopgap", async () => {
     const raw = registerWildcardTool();
 
-    const view = mount({
+    const view = await mount({
       "@patchwork": {
         type: "test-datatype",
         suggestedImportUrl: "http://example.invalid/pkg.js",
@@ -223,7 +225,7 @@ describe("patchwork-view (legacy mode)", () => {
   it("still mounts the wildcard stopgap when the doc suggests nothing", async () => {
     const raw = registerWildcardTool();
 
-    mount({ "@patchwork": { type: "test-datatype" } });
+    await mount({ "@patchwork": { type: "test-datatype" } });
     await settle();
 
     expect(raw.mounts).toBe(1);
@@ -232,7 +234,7 @@ describe("patchwork-view (legacy mode)", () => {
   it("doesn't mount a tool-id change on a view removed in the same task", async () => {
     const first = registerTool(["lifecycle-type"]);
     const second = registerTool(["unrelated-type"]);
-    const view = mount({ "@patchwork": { type: "lifecycle-type" } });
+    const view = await mount({ "@patchwork": { type: "lifecycle-type" } });
     await settle();
     expect(first.mounts).toBe(1);
 
@@ -247,7 +249,7 @@ describe("patchwork-view (legacy mode)", () => {
   it("mounts exactly one tool after a tool-id change and a keyed reorder", async () => {
     const first = registerTool(["reorder-type"]);
     const second = registerTool(["unrelated-type"]);
-    const view = mount({ "@patchwork": { type: "reorder-type" } });
+    const view = await mount({ "@patchwork": { type: "reorder-type" } });
     await settle();
     expect(first.mounts).toBe(1);
 
@@ -263,7 +265,7 @@ describe("patchwork-view (legacy mode)", () => {
   it("offers the package again after its import fails", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(importPackage).mockRejectedValueOnce(new Error("offline"));
-    const view = mount({
+    const view = await mount({
       "@patchwork": {
         type: "no-tool-type",
         suggestedImportUrl: "http://example.invalid/pkg.js",
@@ -289,7 +291,7 @@ describe("patchwork-view (legacy mode)", () => {
 
   it("shows the trust prompt a url the doc can't dress up", async () => {
     const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
-    const view = mount({
+    const view = await mount({
       "@patchwork": {
         type: "no-tool-type",
         suggestedImportUrl:

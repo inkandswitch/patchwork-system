@@ -7,7 +7,6 @@ import type { PatchworkVitePluginOptions } from "./patchwork-plugin.js";
 import { buildDefines } from "./config-plugin.js";
 import { builtins, chunks, devDependencyId } from "./importmap-plugin.js";
 import { workers } from "./service-worker-plugin.js";
-import { arkStack } from "./ark-plugin.js";
 
 const PATCHWORK_CSS = "/@inkandswitch/patchwork/global.css";
 const BOOTLOADER_CSS = "/@inkandswitch/patchwork-bootloader/global.css";
@@ -74,10 +73,7 @@ export function dev(options: PatchworkVitePluginOptions = {}): Plugin {
   let serve = false;
   let contexts: Map<string, Promise<esbuild.BuildContext>> | undefined;
   const wasm = new Map(
-    wasmAssets(arkStack(options)).map(({ fileName, path }) => [
-      `/${fileName}`,
-      path,
-    ])
+    wasmAssets().map(({ fileName, path }) => [`/${fileName}`, path])
   );
 
   return {

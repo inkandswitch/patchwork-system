@@ -1,142 +1,78 @@
-import { initializeWasm, Repo } from "@automerge/vanillajs/slim";
-import { IndexedDBStorageAdapter } from "@automerge/automerge-repo-storage-indexeddb";
-import { loadOrCreateSigner } from "@inkandswitch/patchwork-bootloader/signer";
-import {
-  AUTOMERGE_WASM,
-  SUBDUCTION_WASM,
-} from "@inkandswitch/patchwork-bootloader/emitted";
-import * as AutomergeRepo from "@automerge/automerge-repo/slim";
-import type { AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-// eslint-disable-next-line
-// @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
-import initSubduction from "@automerge/automerge-subduction/slim";
-import {
-  keyhiveStorageName,
-  storagePrefix,
-} from "@inkandswitch/patchwork-bootloader/storage";
-import {
-  keyhiveSyncServer,
-  type ArkVersion,
-} from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
+import { initializeWasm } from "@automerge/automerge/slim";
+import { Repo, type AutomergeUrl } from "@automerge/automerge-repo/slim";
+import type { PortBackend } from "@inkandswitch/patchwork-bootloader";
+import { AUTOMERGE_WASM } from "@inkandswitch/patchwork-bootloader/emitted";
+import { storagePrefix } from "@inkandswitch/patchwork-bootloader/storage";
+import type { PatchworkHive } from "@inkandswitch/patchwork-plugins";
 import type { SignerIdentity } from "./types.js";
 import debug from "debug";
 
 const log = debug("patchwork:setup:repo");
 
-declare const __SYNC_SERVER__: {
-  url: string;
-  keyhive?: boolean;
-  useIdFactory?: boolean;
-  ark?: ArkVersion;
-};
-const syncServer =
-  typeof __SYNC_SERVER__ !== "undefined"
-    ? __SYNC_SERVER__
-    : { url: "wss://subduction.sync.inkandswitch.com" };
-
-// Fetch and initialize automerge + subduction wasm. Memoized: the fetches start
-// on the first call and every later caller awaits the same init. Skipped
-// entirely when the site brings its own Repo (it did this itself).
+// Fetch and initialize automerge's wasm. Memoized: the fetch starts on the
+// first call and every later caller awaits the same init. Skipped entirely
+// when the site brings its own Repo (it did this itself). A tab needs no
+// subduction or keyhive: those run in the automerge worker.
 let wasmReady: Promise<void> | undefined;
 export function initWasm(): Promise<void> {
-  if (!wasmReady) {
-    wasmReady = Promise.all([
-      initializeWasm(new Request(AUTOMERGE_WASM)),
-      initSubduction(new Request(SUBDUCTION_WASM)),
-    ]).then(() => undefined);
-  }
+  wasmReady ??= initializeWasm(new Request(AUTOMERGE_WASM)).then(() => {});
   return wasmReady;
 }
 
-/**
- * The BroadcastChannel every Repo on the origin announces its saves and the
- * server's heads on (automerge-repo's `headsChannel`).
- */
-export const HEADS_CHANNEL = `${storagePrefix}-heads`;
-
-// Other tabs hear about an edit, and the server is sent it, only once it has
-// been saved, so the save throttle (automerge-repo's default is 100ms) is on
-// the path from an edit to both.
-const SAVE_THROTTLE_MS = 20;
-
 export type TabRepo = {
   repo: Repo;
-  hive?: AutomergeRepoKeyhive;
+  hive?: PatchworkHive;
   signerIdentity?: SignerIdentity;
+  /** The tab's end of the automerge worker: its Repo's backend. */
+  backend: PortBackend;
 };
 
 /**
- * The tab's own node: this origin's IndexedDB, opened on this thread, a socket
- * to the sync server, and the storage channel to every other Repo on the
- * origin. Nothing is shared with other tabs except the database underneath
- * and the identity every node on the origin signs with.
+ * The tab's Repo. Everything it stores and syncs goes through the automerge
+ * worker, the origin's one node (its IndexedDB, its socket to the sync
+ * server, its keyhive): the tab's backend is a port to it, handed to every
+ * worker that replaces the last.
  */
 export async function createRepo(): Promise<TabRepo> {
-  if (syncServer.keyhive) {
-    log("setting up keyhive");
-    const { initKeyhiveWasm, initializeAutomergeRepoKeyhive } =
-      await import("@automerge/automerge-repo-keyhive");
-    initKeyhiveWasm();
-    const keyhiveStorage = new IndexedDBStorageAdapter(keyhiveStorageName);
-    const identity = await keyhiveSyncServer(syncServer, keyhiveStorage);
-    const { hive, repo } = await initializeAutomergeRepoKeyhive({
-      // ARK injects an `idFactory` deriving document ids from keyhive. A site
-      // can opt out of it with `keyhive: { useIdFactory: false }`.
-      createRepo: ({ idFactory, ...repoConfig }) =>
-        new Repo(
-          syncServer.useIdFactory === false
-            ? repoConfig
-            : { ...repoConfig, idFactory }
-        ),
-      storage: keyhiveStorage,
-      peerIdSuffix: storagePrefix + Math.random().toString(36).slice(2),
-      automaticArchiveIngestion: true,
-      cachingMode: "periodic",
-      syncServer: identity,
-      repo: {
-        storage: new IndexedDBStorageAdapter(),
-        subductionWebsocketEndpoints: [syncServer.url],
-        subductionSaveThrottle: SAVE_THROTTLE_MS,
-        headsChannel: HEADS_CHANNEL,
-        enableRemoteHeadsGossiping: true,
-      },
-    });
-    log("keyhive setup complete");
-    // Docs made public to Patchwork (pushwork's `--public-access read`) are
-    // read through its public pair, in a SharedWorker of its own. Imported
-    // lazily: the bootloader's entry touches `window` as it loads, and this
-    // module is loaded without one in tests.
-    void import("@inkandswitch/patchwork-bootloader")
-      .then(({ connectPublicReader }) => connectPublicReader(repo, hive))
-      .catch((error) =>
-        console.error("couldn't connect to the public reader", error)
-      );
-    return { repo, hive };
-  }
+  // Imported here: the bootloader's entry touches `window` as it loads, and
+  // this module is loaded without one in tests.
+  const { PortBackend, connectToAutomergeWorker } =
+    await import("@inkandswitch/patchwork-bootloader");
+  const lock = await holdLockForever(
+    `${storagePrefix}-tab-${crypto.randomUUID()}`
+  );
+  const backend = new PortBackend(lock);
+  const repo = new Repo({ backend });
+  connectToAutomergeWorker(backend);
 
-  // The signer is explicit rather than the Repo's internal default so that
-  // every tab on this origin signs as the same peer, and so the identity the
-  // tab presents to the server can be shown on window.patchwork.
-  const storage = new IndexedDBStorageAdapter();
-  const signer = await loadOrCreateSigner(storage);
-  const repo = new Repo({
-    signer,
-    storage,
-    peerId:
-      `${storagePrefix}-tab-${crypto.randomUUID()}` as AutomergeRepo.PeerId,
-    subductionWebsocketEndpoints: [syncServer.url],
-    subductionSaveThrottle: SAVE_THROTTLE_MS,
-    headsChannel: HEADS_CHANNEL,
-    enableRemoteHeadsGossiping: true,
-  });
-  const signerIdentity = {
-    peerId: signer.peerId().toString(),
-    verifyingKey: (
-      signer.verifyingKey() as Uint8Array<ArrayBufferLike> & {
-        toHex(): string;
-      }
-    ).toHex(),
+  const info = await backend.info();
+  const signerIdentity = { peerId: info.peerId, verifyingKey: info.peerId };
+  log("repo created, the worker signs as", info.peerId);
+  const hive = info.hive ? workerHive(backend, info.hive.id) : undefined;
+  return { repo, hive, signerIdentity, backend };
+}
+
+/** Keyhive, as the automerge worker answers for it. */
+function workerHive(backend: PortBackend, id: string): PatchworkHive {
+  return {
+    id,
+    canRead: (url: AutomergeUrl) =>
+      backend.call<boolean>({ op: "hive", method: "canRead", url }),
+    canWrite: (url: AutomergeUrl) =>
+      backend.call<boolean>({ op: "hive", method: "canWrite", url }),
+    onChange: (listener) => backend.onHiveChange(listener),
   };
-  log("repo created, tab subduction identity:", signerIdentity);
-  return { repo, signerIdentity };
+}
+
+/**
+ * Take a Web Lock named `name` and never let it go: the worker waits on it to
+ * learn this tab has gone. Resolves with the name once it's held.
+ */
+function holdLockForever(name: string): Promise<string> {
+  return new Promise((held) => {
+    void navigator.locks.request(name, () => {
+      held(name);
+      return new Promise<never>(() => {});
+    });
+  });
 }

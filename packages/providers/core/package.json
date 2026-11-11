@@ -27,7 +27,8 @@
   "devDependencies": {
     "@automerge/automerge": "catalog:",
     "@automerge/automerge-repo": "catalog:",
-    "@automerge/automerge-subduction": "catalog:",
+    "@automerge/automerge-repo-subduction": "catalog:",
+    "@automerge/subduction": "catalog:",
     "happy-dom": "^20.0.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.6"

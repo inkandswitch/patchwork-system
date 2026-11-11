@@ -103,19 +103,101 @@
 
     <nav>
       <ul>
+        <li><a href="#hub">The hub</a></li>
+        <li><a href="#keyhive">Keyhive</a></li>
         <li><a href="#public-pair">Reading public documents</a></li>
-        <li><a href="#public-reader">The public reader's worker</a></li>
         <li><a href="#resolver">The resolver</a></li>
         <li><a href="#recycling">Recycling the resolver</a></li>
         <li><a href="#worker-early">Starting a worker early</a></li>
       </ul>
     </nav>
 
+    <h2 id="hub"><a href="#hub">The hub</a></h2>
+    <p class="files">
+      <code>hub/hub.ts</code>, <code>hub/serve.ts</code>,
+      <code>hub/port-backend.ts</code>, <code>hub/protocol.ts</code>
+    </p>
+
+    <p>
+      automerge-repo 3 replaces network and storage adapters with one
+      sedimentree backend per Repo, and its IndexedDB storage allows one live
+      backend per database. So tabs can't each be a node on a shared database,
+      as they were on automerge-repo 2. The automerge SharedWorker is the
+      origin's one node. It holds the <code>SubductionBackend</code>, with its
+      IndexedDB (<code>&lt;prefix&gt;-documents</code>), its socket to the sync
+      server and, on keyhive sites, keyhive. Its own small key-value database
+      (<code>&lt;prefix&gt;-hub</code>) keeps the signer seed and keyhive's
+      archive.
+    </p>
+
+    <p>
+      Each tab's Repo runs on a <code>PortBackend</code>, a sedimentree backend
+      whose every call goes to the worker over a MessagePort that the tab hands
+      it (<code>{type: "hub", port}</code>). The worker opens a session of its
+      own for each of the tab's sessions and streams its events back,
+      <code>remote-heads</code> from the server included. Tabs load automerge's
+      wasm and nothing else. When the worker is replaced, the tab hands the new
+      one a port: its sessions open again there (the new initial load arrives as
+      live records, which Automerge skips), and calls nobody answered are sent
+      again. Each tab holds a Web Lock for as long as it lives, and the worker
+      closes a tab's sessions once it can take that lock.
+    </p>
+
+    <p>
+      A single change stored while a sync round for its document is in flight
+      used to be lost (the round had exchanged heads already, and the push
+      waited on a subscription the round hadn't set up yet), so a change made
+      straight after <code>create()</code> never reached the server. The pnpm
+      patch to <code>@automerge/automerge-repo-subduction</code> starts a
+      catch-up round for such a store. The same patch exposes the backend's
+      native engine for keyhive sync.
+    </p>
+
+    <h2 id="keyhive"><a href="#keyhive">Keyhive</a></h2>
+    <p class="files"><code>hub/keyhive.ts</code>, <code>keyline/*.ts</code></p>
+
+    <p>
+      Keyhive (<code>@keyhive/keyhive</code>) is used directly, as pushwork's
+      keyline does it, without automerge-repo-keyhive. It lives only in the
+      worker. It syncs with the server over subduction's keyhive frames
+      (<code>keyline/sync.ts</code>, <code>keyline/wire.ts</code>, the
+      subduction_keyhive server's messages), and the server's contact card comes
+      from <code>/keyhive/contact-card</code>. <code>KeyhiveBackend</code> wraps
+      the worker's backend: blobs are encrypted on the way in and decrypted on
+      the way out, so storage and the server only ever see ciphertext. A blob
+      that won't open yet is held and tried again whenever keyhive learns
+      something. New documents get keyhive-minted ids in one group per device,
+      which the server relays. Creating one waits for a keyhive sync so the
+      server knows the document before its blobs arrive. Tabs ask the worker
+      about access through <code>PatchworkHive</code>.
+    </p>
+
+    <p>
+      That's keyhive for servers that serve their card (<code>keyhive.ark</code>
+      <code>"0.8"</code>, staging). A server still on ARK 0.6 and keyhive 0.3
+      (<code>"0.6"</code>, subduction.sync.inkandswitch.com) speaks ARK's own
+      keyhive messages, so <code>hub/keyhive-ark06.ts</code> uses ARK 0.6's
+      <code>KeyhiveSubductionAdapter</code> and
+      <code>KeyhiveBlobInterceptor</code>
+      (<code>@ark-0.6/automerge-repo-keyhive</code>) over the same engine,
+      through a shim for subduction 0.27's hex peer ids. Keyhive 0.3 has a world
+      principal, so public documents there are read with the device's own
+      keyhive, and there is no public pair. The two keep their state apart in
+      the worker's database.
+    </p>
+
+    <p>
+      A device's decryption keys come from prekey secrets in its own archive,
+      which never syncs: the same seed on a fresh device can't open what the
+      first one wrote. A second device is a second identity, and has to be
+      granted access.
+    </p>
+
     <h2 id="public-pair">
       <a href="#public-pair">Reading public documents</a>
     </h2>
     <p class="files">
-      <code>public-pair.ts</code>, <code>public-pair-principals.ts</code>
+      <code>hub/public.ts</code>, <code>public-pair-principals.ts</code>
     </p>
 
     <p>
@@ -136,51 +218,26 @@
     </dl>
 
     <p>
-      The user's own Repo connects as the user, who isn't a member of these
-      docs, so the server never sends it their blobs. Instead a second Repo
-      connects as the fetcher. It syncs keyhive as the fetcher, hands every
-      keyhive event it gets to a keyhive opened as the reader, and decrypts
-      blobs with that. It sits beside the user's Repo as a peer on a
-      MessageChannel, and the user's Repo asks it for exactly the docs the
-      user's keyhive doesn't know, so a find for a public doc is answered over
-      automerge sync like any other.
+      The user connects as the user, who isn't a member of these docs, so the
+      server never sends their blobs on that connection. The worker therefore
+      connects a second time, as the fetcher, with a backend of its own
+      (<code>&lt;prefix&gt;-public-documents</code>). It syncs keyhive as the
+      fetcher, hands each keyhive event it hasn't handed over yet to a keyhive
+      opened as the reader, and decrypts blobs with that. A first visit hands
+      over every public event the server holds, thousands of them, once. The
+      reader's archive and what was handed over are kept. A
+      <code>RoutingBackend</code> opens a document on the public connection when
+      the user's keyhive doesn't know it and the reader can read it, and on the
+      user's otherwise. Every keyhive in the worker shares one queue, since
+      keyhive's wasm isn't reentrant.
     </p>
 
     <p>
-      The reader Repo never writes: anything the user changes in a public doc
-      stays local. Pushwork makes repos public this way (<code
+      Nothing is written through the public connection: writes always go to the
+      user's. Pushwork makes repos public this way (<code
         >--public-access read</code
       >), and the pair in <code>public-pair-principals.ts</code> has to be
       exactly the one pushwork grants, or it reads nothing already published.
-    </p>
-
-    <h2 id="public-reader">
-      <a href="#public-reader">The public reader's worker</a>
-    </h2>
-    <p class="files">
-      <code>public-reader.ts</code>, <code>public-reader-worker.ts</code>
-    </p>
-
-    <p>
-      The public reader runs in a SharedWorker: one per origin, for as long as
-      any tab is open. It reads public documents for every tab's Repo and for
-      the resolver's.
-    </p>
-
-    <p>
-      It's there rather than beside each Repo because catching up on the
-      server's keyhive is seconds of wasm. On a tab's thread that held up the
-      page, long enough that the service worker gave up asking the tab for its
-      own requests, and the resolver, which then got them, had to catch up all
-      over again. Its keyhive state is kept in IndexedDB, so only the first
-      start replays it all.
-    </p>
-
-    <p>
-      Each Repo is a client: a tab sends <code>{type: "client", port}</code> on
-      the worker's port, for itself or for the resolver. A SharedWorker can't
-      start another, so the tabs introduce the two. The reader answers on
-      <code>port</code>, as <code>PublicReader.serve</code> does.
     </p>
 
     <h2 id="resolver"><a href="#resolver">The resolver</a></h2>
@@ -197,10 +254,9 @@
     </p>
 
     <p>
-      It's a node like any tab's: the same IndexedDB, its own sync-server
-      socket, and the storage channel to the tabs. Resolving requests is its
-      whole job. When the service worker can't get a tab to resolve a request
-      that looks like an encoded URL, it broadcasts a
+      Its Repo sits on the hub's backend directly, beside the tabs' sessions
+      (see <a href="#hub">the hub</a>). When the service worker can't get a tab
+      to resolve a request that looks like an encoded URL, it broadcasts a
       <code>HandoffRequestMessage</code> on <code>HANDOFF_CHANNEL</code>. The
       resolver resolves the automerge URL, writes the response into the service
       worker's cache (keyed by a Request rebuilt to match the one the service
@@ -225,8 +281,9 @@
       wasm has grown by more than <code>RECYCLE_AT_MB</code> restarts itself, as
       it does for a new build. Tabs spawn the replacement, the service worker
       re-sends any handoff still unanswered, and what was resolved is in its
-      cache, so the replacement doesn't load it all again. Only the resolver
-      goes: every tab is its own node, with its own socket.
+      cache, so the replacement doesn't load it all again. Since every tab's
+      Repo now runs through the worker, it doesn't recycle while any tab is
+      connected: each tab's sessions would all have to open again.
     </p>
 
     <h2 id="worker-early">

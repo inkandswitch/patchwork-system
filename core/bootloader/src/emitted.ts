@@ -13,5 +13,3 @@ export const KEYHIVE_WASM = "/keyhive_wasm.wasm";
 /** What the automerge worker's script imports once it holds the lock. */
 export const AUTOMERGE_PROTOCOL_HANDLER = "/automerge-protocol-handler.js";
 export const MODULE_LOADER_WORKER = "/module-loader-worker.js";
-/** What the public reader worker's script imports once it holds the lock. */
-export const PUBLIC_READER = "/public-reader.js";

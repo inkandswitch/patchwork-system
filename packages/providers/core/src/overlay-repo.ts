@@ -8,6 +8,8 @@ import {
   type DocHandle,
   type DocumentId,
   type DocumentProgress,
+  type DocumentQuery,
+  type ProgressState,
   type QueryState,
   type Repo,
   type UrlHeads,
@@ -50,9 +52,8 @@ import type { RepoLike } from "./types.js";
  *
  * A scratch document has no peers, so a view it backs sends and hears peer
  * traffic through the stored document (`cloneUrl ?? url`) instead: its
- * `broadcast`, `getSyncInfo`, `getRemoteHeads` and `isCaughtUpWith`, and its
- * `ephemeral-message`, `ephemeral-message-outbound` and `remote-heads`
- * events, are those of the realm repo's handle for that document, once it's
+ * `broadcast` and `getSyncInfo`, and its
+ * `ephemeral-message` and `remote-heads` events, are those of the realm repo's handle for that document, once it's
  * found. Messages go as they are: peers on the stored document can't tell
  * they came from a view of a computed one, and any position in them (a
  * cursor, an index) is one in the scratch document.
@@ -79,15 +80,15 @@ export type DocHandleDescriptor = {
 };
 
 // The only members whose behavior an overlay repo changes; everything else
-// (create/create2/clone/delete, the EventEmitter surface, ...) forwards to the
+// (create/clone/import/delete, the EventEmitter surface, ...) forwards to the
 // realm-local base repo.
 const OVERLAY_REPO_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
   "baseRepo",
   "handles",
   "find",
+  "query",
   "findWithProgress",
   "create",
-  "create2",
   "dispose",
 ]);
 
@@ -96,13 +97,13 @@ const OVERLAY_REPO_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
  * remappable across provider scopes (including iframes) without sending a live
  * `Repo`/`DocHandle` over the wire.
  *
- * `find`/`findWithProgress` open a persistent `repo:handle-descriptor`
+ * `find`/`query` open a persistent `repo:handle-descriptor`
  * subscription for the requested url and resolve the returned
  * `cloneUrl ?? url` against the realm-local `baseRepo` (or `scratchUrl`
  * against {@link getScratchRepo}), then hand back an {@link OverlayHandle}
  * that keeps reporting the *original* url. Follow-up
  * descriptor emissions re-point the live wrapper via `swapBackingDocHandle`.
- * Every other method (`create`, `create2`, `clone`, `delete`, the
+ * Every other method (`create`, `clone`, `import`, `delete`, the
  * EventEmitter surface, ...) forwards to `baseRepo` unchanged — created docs
  * need no remapping.
  *
@@ -117,7 +118,7 @@ export class OverlayRepo implements RepoLike {
   // the root's descriptor subscription, swaps with it, and is the same
   // wrapper as the root's own `sub` of that path, as in the real repo.
   readonly #wrapped = new Map<AutomergeUrl, OverlayHandle<unknown>>();
-  readonly #inner = new Map<AutomergeUrl, DocumentProgress<unknown>>();
+  readonly #inner = new Map<AutomergeUrl, DocumentQuery<unknown>>();
   readonly #resolving = new Map<
     AutomergeUrl,
     Promise<OverlayHandle<unknown>>
@@ -163,7 +164,7 @@ export class OverlayRepo implements RepoLike {
   }
 
   // Only already-wrapped handles are exposed; unknown ids fall through to
-  // `find`/`findWithProgress` so consumers never see an un-wrapped handle.
+  // `find`/`query` so consumers never see an un-wrapped handle.
   // Like the real repo's, these are root handles: never a sub-handle or a
   // view pinned to heads.
   get handles(): Record<DocumentId, DocHandle<unknown>> {
@@ -188,61 +189,55 @@ export class OverlayRepo implements RepoLike {
     return scope(wrapped, segments) as DocHandle<T>;
   }
 
-  // Mirrors the realm-local repo's progress but reports `loading` until the
+  // Mirrors the realm-local repo's query but reports `loading` until the
   // descriptor has arrived and the backing handle is wrapped — otherwise
   // consumers would briefly observe the un-wrapped (un-remapped) handle.
-  findWithProgress<T>(id: AnyDocumentId): DocumentProgress<T> {
+  // Like the real repo's, `subscribe` calls back at once with the current
+  // state, then on each change of it.
+  query<T>(id: AnyDocumentId): DocumentQuery<T> {
     const self = this;
     // Readiness is the root's; a path only scopes the ready handle, as the
-    // real repo's `progressAtPath` does.
+    // real repo's `queryAtPath` does.
     const { root: presented, segments } = splitUrl(presentedUrlOf(id));
     const documentId = parseAutomergeUrl(presented).documentId;
     this.#resolve<T>(presented).catch(() => {});
 
-    const peek = (): QueryState<T> => {
-      const state = peekRoot();
-      return state.state === "ready"
-        ? { ...state, handle: scope(state.handle, segments) as DocHandle<T> }
-        : state;
+    const state = (): QueryState<T> => {
+      const root = stateOfRoot();
+      return root.status === "ready"
+        ? {
+            status: "ready",
+            handle: scope(root.handle, segments) as DocHandle<T>,
+          }
+        : root;
     };
-    const peekRoot = (): QueryState<T> => {
+    const stateOfRoot = (): QueryState<T> => {
       const failure = self.#failures.get(presented);
       if (failure) return failure as QueryState<T>;
-      const inner = self.#inner.get(presented) as
-        DocumentProgress<T> | undefined;
-      if (!inner) return { state: "loading", sources: {} };
-      const innerState = inner.peek();
-      if (innerState.state !== "ready") return innerState;
+      const inner = self.#inner.get(presented) as DocumentQuery<T> | undefined;
+      if (!inner) return { status: "loading" };
+      const innerState = inner.state();
+      if (innerState.status !== "ready") return innerState;
       const wrapped = self.#wrapped.get(presented);
-      if (!wrapped) {
-        return { state: "loading", sources: innerState.sources };
-      }
-      return {
-        state: "ready",
-        handle: wrapped as unknown as DocHandle<T>,
-        sources: innerState.sources,
-      };
+      if (!wrapped) return { status: "loading" };
+      return { status: "ready", handle: wrapped as unknown as DocHandle<T> };
     };
 
     return {
       documentId,
-      peek,
+      state,
       subscribe: (callback) => {
-        // Like the realm-local repo, only transitions are reported; the
-        // current state is read with `peek()`.
         let closed = false;
-        const signature = (state: QueryState<T>) =>
-          state.state === "failed"
-            ? `failed:${state.error.message}`
-            : state.state;
-        let last = signature(peek());
+        const signature = (s: QueryState<T>) =>
+          s.status === "failed" ? `failed:${s.error.message}` : s.status;
+        let last: string | undefined;
         const dispatch = () => {
           if (closed) return;
-          const state = peek();
-          const sig = signature(state);
+          const current = state();
+          const sig = signature(current);
           if (sig === last) return;
           last = sig;
-          callback(state);
+          callback(current);
         };
         // Registered at once, not when the resolution settles, so a failure or
         // a later retry's success reaches subscribers that were waiting. The
@@ -250,43 +245,57 @@ export class OverlayRepo implements RepoLike {
         // new inner.
         if (!self.#disposed)
           self.#registerProgressDispatcher(presented, dispatch);
+        dispatch();
         return () => {
           closed = true;
           self.#unregisterProgressDispatcher(presented, dispatch);
         };
       },
-      // Read from the current state, not the first resolution's promise: a
-      // progress that failed and has since recovered is ready now.
-      whenReady: ({ signal } = {}) => {
-        if (signal?.aborted) return Promise.reject(signal.reason);
-        const state = peek();
-        if (state.state === "ready") return Promise.resolve(state.handle);
-        return abortable(self.#resolve<T>(presented), signal).then(
-          (wrapped) => scope(wrapped, segments) as DocHandle<T>
-        );
+    };
+  }
+
+  /**
+   * @deprecated Like the repo's: use {@link query}. A progress-shaped view of
+   * it, with no per-source detail (`sources` is always empty).
+   */
+  findWithProgress<T>(id: AnyDocumentId): DocumentProgress<T> {
+    const query = this.query<T>(id);
+    const progress = (): ProgressState<T> => {
+      const s = query.state();
+      switch (s.status) {
+        case "ready":
+          return { state: "ready", handle: s.handle, sources: {} };
+        case "failed":
+          return { state: "failed", error: s.error, sources: {} };
+        case "loading":
+          return { state: "loading", sources: {} };
+        default:
+          // `deleted` has no progress state.
+          return { state: "unavailable", sources: {} };
+      }
+    };
+    return {
+      documentId: query.documentId,
+      peek: progress,
+      subscribe: (callback) => {
+        // Only transitions, as the repo's progress reports them.
+        let first = true;
+        return query.subscribe(() => {
+          if (first) {
+            first = false;
+            return;
+          }
+          callback(progress());
+        });
       },
-      // Deprecated; kept for pre-`peek()` consumers.
-      get state() {
-        return peek().state;
-      },
-      get progress() {
-        return self.#inner.get(presented)?.progress;
-      },
-      get error() {
-        const s = peek();
-        return s.state === "failed" ? s.error : undefined;
-      },
+      whenReady: ({ signal } = {}) => this.find<T>(id, { signal }),
     };
   }
 
   // Plain local creates need no remapping; declared (rather than forwarded) so
   // the class still satisfies `RepoLike`.
-  create<T>(initialValue?: T): DocHandle<T> {
+  create<T>(initialValue?: T): Promise<DocHandle<T>> {
     return this.baseRepo.create<T>(initialValue);
-  }
-
-  create2<T>(initialValue?: T): Promise<DocHandle<T>> {
-    return this.baseRepo.create2<T>(initialValue);
   }
 
   /** Called by the owning element on disconnect; releases live resources. */
@@ -356,7 +365,7 @@ export class OverlayRepo implements RepoLike {
     // when it has one, since that is what the repo would have reported, and
     // the inner itself, to watch for the document turning up.
     let failure: QueryState<unknown> | undefined;
-    let failedInner: DocumentProgress<unknown> | undefined;
+    let failedInner: DocumentQuery<unknown> | undefined;
 
     const promise = new Promise<OverlayHandle<T>>((resolve, reject) => {
       this.#rejecters.set(presented, reject);
@@ -408,21 +417,18 @@ export class OverlayRepo implements RepoLike {
             )
           : undefined;
         if (lease) this.#pendingLeases.add(lease);
-        let inner: DocumentProgress<T> | undefined;
+        let inner: DocumentQuery<T> | undefined;
         let backing: DocHandle<T>;
         try {
-          inner = repo.findWithProgress<T>(backingUrl);
+          inner = repo.query<T>(backingUrl);
           backing = await repo.find<T>(backingUrl);
         } catch (err) {
           lease?.();
           // A newer descriptor has taken over; its outcome is the one that
           // counts, so this one mustn't fail the resolution under it.
           if (mySeq !== seq) return;
-          failure = failureOf(
-            inner as DocumentProgress<unknown> | undefined,
-            err
-          );
-          failedInner = inner as DocumentProgress<unknown> | undefined;
+          failure = failureOf(inner as DocumentQuery<unknown> | undefined, err);
+          failedInner = inner as DocumentQuery<unknown> | undefined;
           throw err;
         } finally {
           if (lease) this.#pendingLeases.delete(lease);
@@ -435,7 +441,7 @@ export class OverlayRepo implements RepoLike {
         const appliedNow = { repo, url: backingUrl, stored: storedId };
         this.#backings.set(presented, appliedNow);
         this.#failures.delete(presented);
-        this.#setInner(presented, inner as DocumentProgress<unknown>);
+        this.#setInner(presented, inner as DocumentQuery<unknown>);
         // The previous lease goes only once nothing forwards to its
         // document, so the remapper deleting it can't reach consumers.
         const previous = this.#leases.get(presented);
@@ -528,7 +534,7 @@ export class OverlayRepo implements RepoLike {
     const has = async (repo: Repo, documentId: DocumentId) => {
       try {
         const handle = await repo.find(stringifyAutomergeUrl({ documentId }));
-        return handle.containsHeads(pinned);
+        return handle.hasHeads(pinned);
       } catch {
         return false;
       }
@@ -551,11 +557,9 @@ export class OverlayRepo implements RepoLike {
     this.#storedWaits.delete(presented);
     const storedId = applied.stored;
     if (!storedId) return undefined;
-    const stored = this.baseRepo.findWithProgress(
-      stringifyAutomergeUrl({ documentId: storedId })
-    );
-    const state = stored.peek();
-    if (state.state === "ready") return state.handle;
+    const storedUrl = stringifyAutomergeUrl({ documentId: storedId });
+    const state = this.baseRepo.query(storedUrl).state();
+    if (state.status === "ready") return state.handle;
     const wait = new AbortController();
     this.#storedWaits.set(presented, wait);
     const done = () => {
@@ -563,7 +567,7 @@ export class OverlayRepo implements RepoLike {
         this.#storedWaits.delete(presented);
       }
     };
-    stored.whenReady({ signal: wait.signal }).then(
+    this.baseRepo.find(storedUrl, { signal: wait.signal }).then(
       (handle) => {
         done();
         if (this.#backings.get(presented) !== applied) return;
@@ -607,19 +611,24 @@ export class OverlayRepo implements RepoLike {
   // has retried it first.
   #watchForRecovery(
     presented: AutomergeUrl,
-    inner: DocumentProgress<unknown>
+    inner: DocumentQuery<unknown>
   ): void {
+    // `subscribe` calls back at once, before `stop` exists.
+    let stop: (() => void) | undefined;
+    let ready = false;
     const retry = () => {
-      stop();
-      if (this.#recoveries.get(presented) !== stop) return;
+      stop?.();
+      if (!stop || this.#recoveries.get(presented) !== stop) return;
       this.#recoveries.delete(presented);
       this.#resolve(presented).catch(() => {});
     };
-    const stop = inner.subscribe((state) => {
-      if (state.state === "ready") retry();
+    stop = inner.subscribe((state) => {
+      if (state.status !== "ready") return;
+      ready = true;
+      retry();
     });
     this.#recoveries.set(presented, stop);
-    if (inner.peek().state === "ready") retry();
+    if (ready) retry();
   }
 
   // Tell every progress subscriber of a presented url to re-read its state.
@@ -630,7 +639,7 @@ export class OverlayRepo implements RepoLike {
   }
 
   // Replace the inner progress and move every registered subscriber onto it.
-  #setInner(presented: AutomergeUrl, inner: DocumentProgress<unknown>): void {
+  #setInner(presented: AutomergeUrl, inner: DocumentQuery<unknown>): void {
     this.#inner.set(presented, inner);
     const dispatchers = this.#progressDispatchers.get(presented);
     if (!dispatchers) return;
@@ -643,19 +652,20 @@ export class OverlayRepo implements RepoLike {
 }
 
 function failedState(error: Error): QueryState<never> {
-  return { state: "failed", error, sources: {} };
+  return { status: "failed", error };
 }
 
 // What a failed resolution looks like to a progress subscriber: the repo's
 // `unavailable` when the document just isn't there yet, otherwise `failed`.
 function failureOf(
-  inner: DocumentProgress<unknown> | undefined,
+  inner: DocumentQuery<unknown> | undefined,
   error: unknown
 ): QueryState<never> {
   const err = error instanceof Error ? error : new Error(String(error));
-  const state = inner?.peek();
-  if (state?.state === "unavailable") return state;
-  return { state: "failed", error: err, sources: state?.sources ?? {} };
+  const state = inner?.state();
+  if (state?.status === "unavailable" || state?.status === "deleted")
+    return state;
+  return { status: "failed", error: err };
 }
 
 // A presented url's root (documentId and pinned heads) and its path.
