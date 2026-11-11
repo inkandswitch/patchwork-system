@@ -1,0 +1,13 @@
+{
+  "name": "document open with",
+  "type": "module",
+  "main": "doc-openwith.js",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "happy-dom": "^15.11.7",
+    "vitest": "^3.2.4"
+  }
+}

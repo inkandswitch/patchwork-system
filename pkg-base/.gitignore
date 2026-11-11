@@ -1,0 +1,14 @@
+node_modules/
+dist/
+static-dist/
+static-dist.*/
+*.log
+.DS_Store
+.claude/
+.pnpm-store/
+.pushwork/
+
+# the repo root is not a package and not a workspace — nothing installs here
+/node_modules/
+/pnpm-lock.yaml
+/pnpm-workspace.yaml

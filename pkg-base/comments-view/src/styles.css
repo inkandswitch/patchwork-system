@@ -1,0 +1,302 @@
+@layer package {
+:root,
+:host,
+[theme] {
+  --comments-fg: var(--text-editor-line, var(--studio-line, black));
+  --comments-muted-fg: var(--studio-line-offset-50, #999);
+  --comments-bg: var(--text-editor-fill, var(--studio-fill, white));
+  --comments-border: var(--studio-fill-offset-20, #ccc);
+  --comments-hover-bg: var(--studio-fill-offset-10, #f5f5f5);
+  --comments-font: var(--studio-family-sans, system-ui, sans-serif);
+  --comments-accent: var(--studio-secondary, #33ccf8);
+}
+}
+
+/* The width:100% boxes below (panel, textarea) also carry padding and a
+   border, so without border-box they extend past their container and overflow
+   it. Scoped to the panel and the thread card so the injected stylesheet never
+   touches the host page (it may be injected into document.head, not a shadow
+   root). The card is covered on its own because a single thread renders
+   standalone too — e.g. in the editor's comment popover, with no panel around
+   it — and its draft textarea would otherwise spill out of the card. */
+.comments-panel,
+.comments-panel *,
+.comments-panel *::before,
+.comments-panel *::after,
+.comments-thread-card,
+.comments-thread-card *,
+.comments-thread-card *::before,
+.comments-thread-card *::after {
+  box-sizing: border-box;
+}
+
+.comments-panel {
+  height: 100%;
+  width: 100%;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem;
+  gap: 0.5rem;
+  font-family: var(--comments-font);
+  color: var(--comments-fg);
+}
+
+.comments-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.75rem;
+  color: var(--comments-muted-fg);
+}
+
+.comments-panel-header-title {
+  font-weight: 500;
+}
+
+.comments-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 0.5rem;
+  text-align: center;
+  font-size: 0.875rem;
+  color: var(--comments-muted-fg);
+}
+
+.comments-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* A thread that arrived while the doc was open (see SETTLE_MS in
+   CommentsView.tsx). Its card and actions mount whenever the `comment-thread`
+   tool finishes loading, so they animate on mount rather than the wrapper,
+   which could otherwise lift in while still empty. */
+.comments-thread[data-new] > patchwork-view > * {
+  transition:
+    opacity max(1ms, calc(200ms * var(--studio-motion-scale, 1) * var(--studio-motion-preference, 1))) var(--studio-ease-out, cubic-bezier(0.23, 1, 0.32, 1)),
+    transform max(1ms, calc(200ms * var(--studio-motion-scale, 1) * var(--studio-motion-preference, 1))) var(--studio-ease-out, cubic-bezier(0.23, 1, 0.32, 1));
+}
+@starting-style {
+  .comments-thread[data-new] > patchwork-view > * {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+/* The thread's card + actions are rendered by the `comment-thread` tool into
+   its <patchwork-view> host, so that host is the flex column that lays them
+   out (a custom element is `display: inline` by default). */
+.comments-thread > patchwork-view {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.comments-thread-card {
+  background: var(--comments-bg);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--comments-border);
+  padding: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  cursor: var(--studio-cursor-pointer, pointer);
+  border-radius: 6px;
+  transition:
+    border-color var(--studio-transition, 0.15s ease),
+    background var(--studio-transition, 0.15s ease),
+    box-shadow var(--studio-transition, 0.15s ease);
+}
+
+.comments-thread-card--primary {
+  box-shadow:
+    0 10px 15px -3px rgb(0 0 0 / 0.1),
+    0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+.comments-thread-card--secondary {
+  box-shadow:
+    0 4px 6px -1px rgb(0 0 0 / 0.1),
+    0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+.comments-thread-card--inactive {
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+
+/* In the sidebar, where threads sit side by side, the selected one needs to
+   stand out from the rest: an accent border and ring, faintly tinted. A thread
+   embedded on its own defaults to primary, so this is scoped to the panel. */
+.comments-panel .comments-thread-card--primary {
+  border-color: var(--comments-accent);
+  background: color-mix(in srgb, var(--comments-accent) 6%, var(--comments-bg));
+  box-shadow:
+    0 0 0 1px var(--comments-accent),
+    0 6px 14px -4px rgb(0 0 0 / 0.15);
+}
+
+/* Threads that also overlap the selection: a softer accent border. */
+.comments-panel .comments-thread-card--secondary {
+  border-color: color-mix(
+    in srgb,
+    var(--comments-accent) 50%,
+    var(--comments-border)
+  );
+  box-shadow: 0 2px 4px -2px rgb(0 0 0 / 0.1);
+}
+
+.comments-panel .comments-thread-card--inactive {
+  box-shadow: none;
+}
+
+/* Hovering a thread highlights its target, so hint that it's live. */
+.comments-panel .comments-thread:hover .comments-thread-card--inactive {
+  border-color: color-mix(
+    in srgb,
+    var(--comments-accent) 40%,
+    var(--comments-border)
+  );
+  background: var(--comments-hover-bg);
+}
+
+/* Resolved threads are hidden in the sidebar but shown when embedded. Keep
+   them clearly readable, just visibly "settled": muted fill, dashed border,
+   and slightly dimmed so they read as archived rather than active. */
+.comments-thread-card--resolved {
+  background: var(--comments-hover-bg);
+  border-style: dashed;
+  opacity: 0.75;
+}
+
+.comments-thread-resolved-label {
+  align-self: flex-start;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: var(--studio-chrome-letter-spacing, 0.03em);
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.625rem;
+  color: var(--comments-muted-fg);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--comments-border);
+}
+
+.comments-thread-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.comments-thread-doc-level {
+  font-size: 0.6875rem;
+  text-transform: uppercase;
+  letter-spacing: var(--studio-chrome-letter-spacing, 0.03em);
+  color: var(--comments-muted-fg);
+}
+
+.comments-thread-header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.comments-thread-actions {
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.comment-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.comment-header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.comment-author {
+  display: flex;
+  flex-direction: row;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.comment-author-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  white-space: nowrap;
+  color: var(--comments-fg);
+}
+
+.comment-timestamp {
+  font-size: 0.75rem;
+  color: var(--comments-muted-fg);
+}
+
+.comment-content {
+  font-size: 1rem;
+  color: var(--comments-fg);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* The draft editor is a cute.txt (CodeMirror) instance. Its inner
+   padding/font come from the injected cute.txt styles. */
+.comment-draft-editor {
+  height: 6rem;
+  min-height: 6rem;
+  min-width: 0;
+  width: 100%;
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--comments-border);
+  border-radius: 0.5rem;
+  color: var(--comments-fg);
+  background: var(--comments-bg);
+  overflow: hidden;
+}
+
+.comment-draft-editor .cm-content {
+  box-sizing: border-box;
+  min-height: 0;
+  min-width: 0;
+  margin: 0;
+  padding: 0.5rem;
+}
+
+.comment-draft-editor .cm-line {
+  margin: 0;
+  padding: 0;
+}
+
+.comment-draft-editor .cm-scroller {
+  height: 100%;
+  min-width: 0;
+}
+
+.comment-draft-editor:focus-within {
+  outline: var(--studio-focus-ring, 2px solid var(--comments-accent));
+  outline-offset: var(--studio-focus-ring-offset, 1px);
+}
+
+.comment-btn {
+  padding: 0.25rem 0.5rem;
+  border-radius: 0.25rem;
+  font-family: inherit;
+  font-size: 0.875rem;
+  cursor: var(--studio-cursor-pointer, pointer);
+  border: none;
+  background: transparent;
+  color: var(--comments-fg);
+}
+
+.comment-btn:hover {
+  background: var(--studio-hover-fill, var(--comments-hover-bg));
+}

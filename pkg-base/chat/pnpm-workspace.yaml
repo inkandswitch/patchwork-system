@@ -1,0 +1,11 @@
+# pnpm 11 reads its settings from this file. There is no root workspace, so
+# every package carries the settings it needs rather than inheriting them.
+minimumReleaseAge: 0
+verifyDepsBeforeRun: false
+allowBuilds:
+  "@swc/core": true
+  cbor-extract: true
+  core-js: true
+  esbuild: true
+configDependencies:
+  pnpm-plugin-patchwork: "0.4.0+sha512-ppHlw5UOoMCzseTp0X1vmMnWen/AsDPLf0Ft9YMLERPItErfZVyeM1pWefKY0onXZrD43afyB2ZJx1ztLteMkA=="

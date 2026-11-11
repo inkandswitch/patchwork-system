@@ -1,0 +1,34 @@
+{
+  "name": "@grjte/llm-host",
+  "version": "0.2.0",
+  "description": "The host-realm LLM package: owns the settings doc + config picker (llm-config-tray) and registers the LLM worker as a patchwork:worker plugin. The library itself is @chee/patchwork-llm.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "push": "pnpm build && pushwork sync",
+    "register": "pw-modules add \"$MODULE_SETTINGS_DOC_URL\" \"$(pushwork url)\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "author": "grjte",
+  "license": "MIT",
+  "dependencies": {
+    "@chee/patchwork-llm": "automerge:m6dt2f4hYdhyvmFDvXYbYDdNQey",
+    "solid-js": "^1.9.11"
+  },
+  "devDependencies": {
+    "@chee/patchwork-bundles": "^0.2.0",
+    "@inkandswitch/patchwork-bootloader": "^0.0.3",
+    "@inkandswitch/patchwork-plugins": "^0.0.5",
+    "happy-dom": "^15.11.7",
+    "typescript": "^5.8.3",
+    "vite": "^5.4.19",
+    "vite-plugin-solid": "^2.10.0",
+    "vitest": "^3.2.4"
+  }
+}

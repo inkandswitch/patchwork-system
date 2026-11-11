@@ -1,0 +1,50 @@
+{
+  "name": "@chee/patchwork-llm",
+  "version": "0.3.0",
+  "description": "LLM toolkit for Patchwork tools: a <dialog> model picker, a refresh-surviving SharedWorker that runs local (transformers.js) / OpenRouter / Ollama generation, and a streaming API that carries rich telemetry — next-token predictions, temperature, tokens/sec — alongside the text so you can build UIs that show how the model thinks.",
+  "type": "module",
+  "main": "index.js",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./index.js"
+    },
+    "./worker.js": {
+      "types": "./types/worker.d.ts",
+      "default": "./worker.js"
+    }
+  },
+  "scripts": {
+    "build": "pnpm build:types",
+    "build:types": "tsc",
+    "push": "pnpm build && pushwork sync"
+  },
+  "files": [
+    "types",
+    "index.js",
+    "config.js",
+    "client.js",
+    "cross-origin-worker.js",
+    "request.js",
+    "worker.js",
+    "picker.js",
+    "tools.js",
+    "provider.js",
+    "builtin.js",
+    "templates.js",
+    "README.md"
+  ],
+  "author": "chee",
+  "license": "MIT",
+  "dependencies": {
+    "@inkandswitch/patchwork-providers": "^0.5.2"
+  },
+  "devDependencies": {
+    "@automerge/automerge-repo": "^2.5.6",
+    "typescript": "^6.0.3"
+  },
+  "peerDependencies": {
+    "@automerge/automerge-repo": "^2.5.6"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "actions" : {
+    "build" : {
+      "enabled" : true,
+      "script" : "pnpm build"
+    },
+    "run" : {
+      "enabled" : true,
+      "script" : "pushwork sync"
+    }
+  },
+  "buildBeforeRunning" : true
+}

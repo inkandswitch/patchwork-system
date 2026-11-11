@@ -1,0 +1,309 @@
+@layer package {
+:root,
+:host,
+[theme] {
+  /* The well the cards sit in — slightly recessed surface. */
+  --folder-view-well: var(--editor-fill-offset-10, #f2f2f2);
+  --folder-view-well-edge: var(--editor-fill-offset-30, #d6d6d6);
+  --folder-view-fg: var(--editor-line, black);
+  --folder-view-muted: var(--editor-line-offset-50, #999);
+  --folder-view-border: var(--editor-fill-offset-20, #e5e5e5);
+
+  /* A card = a raised surface sitting on the well. */
+  --folder-view-card: var(--editor-fill, white);
+  --folder-view-card-border: var(--editor-fill-offset-20, #e5e5e5);
+
+  --folder-view-accent: var(--studio-primary-fill, var(--studio-primary, #35f7ca));
+  --folder-view-accent-line: var(--studio-primary-line, var(--editor-fill, white));
+  --folder-view-accent-text: var(--editor-primary-text, var(--studio-primary-text, var(--studio-primary, #35f7ca)));
+  --folder-view-hover: var(--editor-fill-offset-10, #f2f2f2);
+
+  /* Layered drop shadow so a card reads as a solid object resting on the
+     well — a tight contact shadow plus a softer cast one. Derived from the
+     theme line colour so it inverts in dark themes. */
+  --folder-view-card-shadow: 0 1px 2px
+      color-mix(in oklch, var(--editor-line, black), transparent 94%),
+    0 2px 8px color-mix(in oklch, var(--editor-line, black), transparent 96%);
+  --folder-view-card-shadow-hover: 0 2px 4px
+      color-mix(in oklch, var(--editor-line, black), transparent 90%),
+    0 8px 20px color-mix(in oklch, var(--editor-line, black), transparent 93%);
+
+  --folder-view-family: var(--editor-family-sans, system-ui, sans-serif);
+}
+}
+
+/* Block: the whole tool. A sunken well with an inset edge. */
+.folder-view {
+  height: 100%;
+  overflow: auto;
+  padding: var(--studio-space-md, 1rem);
+  display: flex;
+  flex-direction: column;
+  gap: var(--studio-space-md, 1rem);
+  font-family: var(--folder-view-family);
+  color: var(--folder-view-fg);
+  background: var(--folder-view-well);
+  /* No outer border: the host frame already draws the lines around the pane, so
+     the well reads as flush rather than double-edged. */
+}
+
+/* State: a document is being dragged in from the sidebar. Outline the well
+   with the accent colour so it reads as an active drop target. */
+.folder-view[data-drop-active] {
+  border-color: var(--folder-view-accent);
+  box-shadow: inset 0 0 0 2px var(--folder-view-accent);
+}
+
+/* Composition: header row. New-doc button on the left, count on the right. */
+.folder-view .folder-view-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--studio-space-sm, 0.5rem);
+  padding-bottom: var(--studio-space-sm, 0.5rem);
+  border-bottom: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--folder-view-border);
+}
+
+/* Composition: where we are inside a pushwork directory doc, in place of the
+   create-new control (pushwork owns those entries). */
+.folder-view .folder-view-crumbs:not([hidden]) {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--studio-space-2xs, 0.25rem);
+  min-width: 0;
+  font-size: 0.85rem;
+}
+
+.folder-view .folder-view-crumb {
+  font: inherit;
+  color: var(--folder-view-fg);
+  background: none;
+  border: none;
+  padding: var(--studio-space-2xs, 0.25rem);
+  border-radius: var(--studio-radius-sm, 4px);
+}
+
+.folder-view button.folder-view-crumb {
+  color: var(--folder-view-accent-text);
+  cursor: var(--studio-cursor-pointer, pointer);
+}
+
+.folder-view button.folder-view-crumb:hover {
+  background: var(--studio-hover-fill, var(--folder-view-hover));
+}
+
+.folder-view .folder-view-crumb-sep {
+  color: var(--folder-view-muted);
+}
+
+/* Composition: the create-new control — a button anchoring a type-picker. */
+.folder-view .folder-create {
+  position: relative;
+}
+
+.folder-view .folder-create-button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--studio-space-2xs, 0.25rem);
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--folder-view-accent-line);
+  background: var(--folder-view-accent);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) transparent;
+  border-radius: var(--studio-radius-sm, 4px);
+  padding: var(--studio-space-2xs, 0.25rem) var(--studio-space-sm, 0.5rem);
+  cursor: var(--studio-cursor-pointer, pointer);
+  transition: filter var(--studio-transition-fast, 0.1s ease);
+}
+
+.folder-view .folder-create-button:hover {
+  filter: brightness(0.96);
+}
+
+.folder-view .folder-create-icon {
+  font-size: 1rem;
+  line-height: 1;
+}
+
+/* The type-picker popover, anchored under the button. */
+.folder-view .folder-create-menu {
+  position: absolute;
+  top: calc(100% + var(--studio-space-2xs, 0.25rem));
+  left: 0;
+  z-index: var(--studio-layer-dropdown, 10);
+  min-width: 12rem;
+  max-height: 16rem;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  padding: var(--studio-space-3xs, 0.125rem);
+  background: var(--folder-view-card);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--folder-view-card-border);
+  border-radius: var(--studio-radius-md, 8px);
+  box-shadow: var(--folder-view-card-shadow-hover);
+  /* Grows out of its button. Closing is instant. */
+  transform-origin: top left;
+  transition:
+    opacity max(1ms, calc(150ms * var(--studio-motion-scale, 1) * var(--studio-motion-preference, 1))) var(--studio-ease-out, cubic-bezier(0.23, 1, 0.32, 1)),
+    transform max(1ms, calc(150ms * var(--studio-motion-scale, 1) * var(--studio-motion-preference, 1))) var(--studio-ease-out, cubic-bezier(0.23, 1, 0.32, 1));
+}
+@starting-style {
+  .folder-view .folder-create-menu {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+}
+
+.folder-view .folder-create-menu[hidden] {
+  display: none;
+}
+
+.folder-view .folder-create-item {
+  text-align: left;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--folder-view-fg);
+  background: transparent;
+  border: 0;
+  border-radius: var(--studio-radius-sm, 4px);
+  padding: var(--studio-space-2xs, 0.25rem) var(--studio-space-sm, 0.5rem);
+  cursor: var(--studio-cursor-pointer, pointer);
+}
+
+.folder-view .folder-create-item:hover {
+  background: var(--studio-hover-fill, var(--folder-view-hover));
+}
+
+.folder-view .folder-create-empty {
+  padding: var(--studio-space-sm, 0.5rem);
+  font-size: 0.8rem;
+  color: var(--folder-view-muted);
+}
+
+.folder-view .folder-view-count {
+  font-size: 0.8rem;
+  color: var(--folder-view-muted);
+  padding: var(--studio-space-2xs, 0.25rem) var(--studio-space-sm, 0.5rem);
+  border-radius: var(--studio-radius-round, 9999px);
+  background: var(--folder-view-card);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--folder-view-border);
+}
+
+/* Composition: the list of cards. */
+.folder-view .folder-view-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--studio-space-md, 1rem);
+  padding-bottom: var(--studio-space-md, 1rem);
+}
+
+.folder-view .folder-view-empty {
+  text-align: center;
+  color: var(--folder-view-muted);
+  padding: var(--studio-space-xl, 2rem) 0;
+}
+
+.folder-view-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: var(--studio-space-md, 1rem);
+  font-family: var(--folder-view-family);
+  color: var(--folder-view-muted);
+  background: var(--folder-view-card);
+}
+
+/* Block: one rendered file/folder card — sitting on the well. */
+.folder-view .folder-entry {
+  background: var(--folder-view-card);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--folder-view-card-border);
+  border-radius: var(--studio-radius-lg, 12px);
+  box-shadow: var(--folder-view-card-shadow);
+  overflow: hidden;
+  transition: box-shadow var(--studio-transition, 0.15s ease),
+    transform var(--studio-transition, 0.15s ease);
+}
+
+.folder-view .folder-entry:hover {
+  box-shadow: var(--folder-view-card-shadow-hover);
+  /* Lift slightly so the card feels like it peels up off the well. */
+  transform: translateY(-1px);
+}
+
+.folder-view .folder-entry-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--studio-space-sm, 0.5rem);
+  padding: var(--studio-space-sm, 0.5rem) var(--studio-space-md, 1rem);
+}
+
+.folder-view .folder-entry-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--studio-space-sm, 0.5rem);
+  min-width: 0;
+}
+
+.folder-view .folder-entry-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.folder-view .folder-entry-type {
+  font-size: 0.7rem;
+  color: var(--folder-view-muted);
+  padding: var(--studio-space-3xs, 0.125rem) var(--studio-space-2xs, 0.25rem);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--folder-view-border);
+  border-radius: var(--studio-radius-sm, 4px);
+  flex-shrink: 0;
+}
+
+.folder-view .folder-entry-open {
+  font: inherit;
+  font-size: 0.8rem;
+  background: none;
+  border: none;
+  cursor: var(--studio-cursor-pointer, pointer);
+  color: var(--folder-view-accent-text);
+  text-decoration: none;
+  padding: var(--studio-space-2xs, 0.25rem) var(--studio-space-sm, 0.5rem);
+  border-radius: var(--studio-radius-sm, 4px);
+  flex-shrink: 0;
+  transition: background var(--studio-transition-fast, 0.1s ease);
+}
+
+.folder-view .folder-entry-open:hover {
+  background: var(--studio-hover-fill, var(--folder-view-hover));
+}
+
+.folder-view .folder-entry-hint {
+  margin: 0;
+  padding: 0 var(--studio-space-md, 1rem) var(--studio-space-md, 1rem);
+  font-size: 0.85rem;
+  color: var(--folder-view-muted);
+}
+
+/* Block: embedded preview body. */
+.folder-view .folder-entry-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 300px;
+  display: flex;
+  flex-direction: column;
+  border-top: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--folder-view-border);
+}
+
+.folder-view .folder-entry-scroll {
+  height: 100%;
+  overflow: auto;
+}
+
+.folder-view .folder-entry-scroll patchwork-view {
+  display: block;
+  height: 100%;
+}

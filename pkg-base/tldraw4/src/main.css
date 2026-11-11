@@ -1,0 +1,20 @@
+@import url("@tldraw/tldraw/tldraw.css");
+
+.tlui-layout {
+  padding: 0px;
+}
+
+/* Diff highlighting: glows hug each shape's outline (no bounding boxes). */
+.tl-diff-added {
+  filter: drop-shadow(0 0 6px #22c55e) drop-shadow(0 0 3px #22c55e);
+}
+.tl-diff-changed {
+  filter: drop-shadow(0 0 6px #eab308) drop-shadow(0 0 3px #eab308);
+}
+/* Deleted shapes are re-inserted as locked ghosts. The fade-out (opacity 0.1)
+   is set via the shape record's `opacity` prop in tool.tsx, because tldraw
+   writes `opacity` as an inline style that a CSS class can't override. Here we
+   only tint the glow red so they read as "removed". */
+.tl-diff-deleted {
+  filter: drop-shadow(0 0 5px #ef4444) drop-shadow(0 0 2px #ef4444);
+}

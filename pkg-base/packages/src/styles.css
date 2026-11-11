@@ -1,0 +1,1033 @@
+@layer package {
+  :root,
+  :host,
+  [theme] {
+    /* Surface + ink: a tool derives from --editor-*. */
+    --pw-packages-fill: var(--editor-fill, white);
+    --pw-packages-line: var(--editor-line, black);
+    --pw-packages-family: var(--editor-family-sans, system-ui, sans-serif);
+    --pw-packages-family-code: var(--editor-family-code, ui-monospace, monospace);
+
+    --pw-packages-muted: color-mix(
+      in oklch,
+      var(--pw-packages-line),
+      var(--pw-packages-fill) 45%
+    );
+    --pw-packages-faint: color-mix(
+      in oklch,
+      var(--pw-packages-line),
+      var(--pw-packages-fill) 62%
+    );
+    /* Dividers should recede into the canvas, with only a trace of the
+       secondary colour to distinguish adjacent areas. */
+    --pw-packages-border: color-mix(
+      in oklch,
+      var(--studio-secondary, #33ccf8),
+      var(--pw-packages-fill) 90%
+    );
+    --pw-packages-border-strong: color-mix(
+      in oklch,
+      var(--studio-secondary, #33ccf8),
+      var(--pw-packages-fill) 82%
+    );
+    --pw-packages-raise: color-mix(
+      in oklch,
+      var(--pw-packages-fill),
+      var(--pw-packages-line) 4%
+    );
+    --pw-packages-raise-2: color-mix(
+      in oklch,
+      var(--pw-packages-fill),
+      var(--pw-packages-line) 8%
+    );
+
+    /* Accent per origin (accents come from --studio-*). "installed" is the
+       primary "yours" accent; "ephemeral" gets the secondary. */
+    --pw-packages-accent: var(--studio-primary, #35f7ca);
+    --pw-packages-installed: var(--studio-primary, #35f7ca);
+    --pw-packages-ephemeral: var(--studio-secondary, #33ccf8);
+    --pw-packages-core: var(--pw-packages-muted);
+    --pw-packages-unknown: var(--studio-warning, #f8c43b);
+    --pw-packages-danger: var(--studio-danger, #f8674b);
+
+    --pw-packages-installed-fill: color-mix(
+      in oklch,
+      var(--pw-packages-installed),
+      var(--pw-packages-fill) 82%
+    );
+    --pw-packages-installed-text: var(
+      --editor-primary-text,
+      color-mix(
+        in oklch,
+        var(--pw-packages-installed),
+        var(--pw-packages-line) 30%
+      )
+    );
+    --pw-packages-ephemeral-fill: color-mix(
+      in oklch,
+      var(--pw-packages-ephemeral),
+      var(--pw-packages-fill) 82%
+    );
+    --pw-packages-ephemeral-text: var(
+      --editor-secondary-text,
+      color-mix(
+        in oklch,
+        var(--pw-packages-ephemeral),
+        var(--pw-packages-line) 30%
+      )
+    );
+    --pw-packages-core-fill: var(--pw-packages-raise-2);
+    --pw-packages-core-text: var(--pw-packages-muted);
+    --pw-packages-unknown-fill: color-mix(
+      in oklch,
+      var(--pw-packages-unknown),
+      var(--pw-packages-fill) 78%
+    );
+    --pw-packages-unknown-text: var(
+      --editor-warning-text,
+      color-mix(
+        in oklch,
+        var(--pw-packages-unknown),
+        var(--pw-packages-line) 30%
+      )
+    );
+    --pw-packages-accent-fill: var(--pw-packages-installed-fill);
+    --pw-packages-accent-text: var(--pw-packages-installed-text);
+
+    --pw-packages-focus: var(--studio-primary, #35f7ca);
+  }
+}
+
+/* ---- composition / block ---- */
+
+.pw-packages {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  box-sizing: border-box;
+  background: var(--pw-packages-fill);
+  color: var(--pw-packages-line);
+  font-family: var(--pw-packages-family);
+  font-size: 14px;
+  line-height: 1.5;
+  container-type: inline-size;
+}
+
+.pw-packages *,
+.pw-packages *::before,
+.pw-packages *::after {
+  box-sizing: border-box;
+}
+
+/* ---- header ---- */
+
+.pw-packages {
+  --pw-ctl-h: 2.15rem;
+}
+
+.pw-packages__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding: 0.875rem 1rem 0;
+  background: color-mix(in oklch, var(--pw-packages-fill), transparent 4%);
+  backdrop-filter: var(--studio-backdrop-blur, blur(6px));
+}
+
+/* Row 1: filter (left) + a quiet summary pinned top-right. */
+.pw-packages__toolbar {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.pw-packages__search {
+  flex: 1;
+  min-width: 12rem;
+  height: var(--pw-ctl-h);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border-strong);
+  border-radius: var(--studio-radius-md, 8px);
+  background: var(--pw-packages-fill);
+  color: var(--pw-packages-line);
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 0 0.75rem;
+}
+.pw-packages__search::placeholder {
+  color: var(--pw-packages-faint);
+}
+.pw-packages__search:focus,
+.pw-packages__origin-chip:focus-visible,
+.pw-packages__tab:focus-visible {
+  outline: var(--studio-focus-ring, 2px solid var(--pw-packages-focus));
+  outline-offset: var(--studio-focus-ring-offset, 1px);
+}
+.pw-packages__stats {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-left: auto;
+  font-size: 0.8125rem;
+  color: var(--pw-packages-muted);
+  flex-wrap: wrap;
+}
+.pw-packages__stats strong {
+  color: var(--pw-packages-line);
+  font-variant-numeric: tabular-nums;
+}
+.pw-packages__stat-of {
+  color: var(--pw-packages-faint);
+}
+
+/* Bottom row: folder tabs (left) + origin filter chips (right), sharing the
+   baseline. Inactive tabs are plain text; the active one is a raised card whose
+   open bottom breaks through the baseline and merges into the content below. */
+.pw-packages__tabbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.35rem 0.75rem;
+  flex-wrap: wrap;
+  margin: 0.15rem -1rem 0;
+  padding: 0 0.6rem;
+  border-bottom: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border);
+}
+.pw-packages__tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 0.25rem;
+}
+.pw-packages__tab {
+  appearance: none;
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) transparent;
+  border-bottom: 0;
+  background: transparent;
+  color: var(--pw-packages-muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 0.4rem 0.9rem;
+  border-radius: var(--studio-radius-md, 8px) var(--studio-radius-md, 8px) 0 0;
+  cursor: var(--studio-cursor-pointer, pointer);
+  margin-bottom: -1px;
+  transition: color var(--studio-transition-fast, 0.1s ease);
+}
+.pw-packages__tab:hover {
+  color: var(--pw-packages-line);
+}
+.pw-packages__tab[data-active] {
+  background: var(--pw-packages-fill);
+  border-color: var(--pw-packages-border);
+  border-bottom: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-fill);
+  color: var(--pw-packages-line);
+  font-weight: 600;
+}
+.pw-packages__tab[data-view="registries"][data-active] {
+  border-color: color-mix(
+    in oklch,
+    var(--studio-secondary, #33ccf8),
+    var(--pw-packages-fill) 65%
+  );
+  color: color-mix(
+    in oklch,
+    var(--studio-secondary, #33ccf8),
+    var(--pw-packages-line) 40%
+  );
+}
+
+/* Origin chips ride on the right of the tab row, lifted off the baseline. */
+.pw-packages__origins {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-wrap: wrap;
+  margin-left: auto;
+  margin-bottom: 0.4rem;
+}
+.pw-packages__origin-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border-strong);
+  background: var(--pw-packages-fill);
+  color: var(--pw-packages-muted);
+  border-radius: var(--studio-radius-round, 9999px);
+  padding: 0.2rem 0.625rem;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: var(--studio-cursor-pointer, pointer);
+  transition: background var(--studio-transition-fast, 0.1s ease);
+}
+.pw-packages__origin-chip:hover {
+  background: var(--pw-packages-raise);
+}
+.pw-packages__origin-count {
+  font-variant-numeric: tabular-nums;
+  font-size: 0.6875rem;
+  color: var(--pw-packages-faint);
+}
+/* Active chip is a quiet neutral pill — the header stays accent-free so the
+   Install button is the only colored thing. Origin *colors* still live on the
+   cards (badges/dots/stripes), where they encode state. */
+.pw-packages__origin-chip[data-active] {
+  border-color: transparent;
+  font-weight: 600;
+  color: var(--pw-packages-line);
+  background: var(--pw-packages-raise-2);
+}
+.pw-packages__origin-chip[data-active] .pw-packages__origin-count {
+  color: inherit;
+  opacity: 0.7;
+}
+
+/* ---- shared: origin badge + copyable + source line + plugin row ---- */
+
+.pw-packages__origin {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.075rem 0.45rem;
+  border-radius: var(--studio-radius-round, 9999px);
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: var(--studio-chrome-letter-spacing, 0.01em);
+  background: var(--pw-packages-core-fill);
+  color: var(--pw-packages-core-text);
+  white-space: nowrap;
+}
+.pw-packages__origin[data-origin="installed"] {
+  background: var(--pw-packages-installed-fill);
+  color: var(--pw-packages-installed-text);
+}
+.pw-packages__origin[data-origin="ephemeral"] {
+  background: var(--pw-packages-ephemeral-fill);
+  color: var(--pw-packages-ephemeral-text);
+}
+.pw-packages__origin[data-origin="unknown"] {
+  background: var(--pw-packages-unknown-fill);
+  color: var(--pw-packages-unknown-text);
+}
+
+.pw-packages__unlisted {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.05rem 0.4rem;
+  border-radius: var(--studio-radius-sm, 4px);
+  font-size: 0.6875rem;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  color: var(--pw-packages-muted);
+  background: transparent;
+  border: var(--studio-border-width, 1px) dashed var(--pw-packages-border-strong);
+  white-space: nowrap;
+}
+
+/* Unlisted plugins are hidden from pickers, so their names recede toward the
+   canvas. --pw-packages-faint is the tool's most recessed ink tier (line→fill
+   62%), derived from --editor-line/--editor-fill; the same color used for
+   "no import url" and plugin counts. */
+.pw-plugin__name.is-unlisted,
+.pw-regitem__name.is-unlisted,
+.pw-table__name.is-unlisted,
+.pw-install__plugin-name.is-unlisted {
+  color: var(--pw-packages-faint);
+}
+
+.pw-packages__copy {
+  font-family: var(--pw-packages-family-code);
+  font-size: 0.75rem;
+  color: var(--pw-packages-muted);
+  cursor: var(--studio-cursor-pointer, pointer);
+  border-radius: 3px;
+  padding: 0.05rem 0.2rem;
+  margin: -0.05rem -0.2rem;
+  transition: color var(--studio-transition-fast, 0.1s ease),
+    background var(--studio-transition-fast, 0.1s ease);
+  word-break: break-all;
+}
+.pw-packages__copy:hover {
+  background: var(--pw-packages-raise-2);
+  color: var(--pw-packages-line);
+}
+.pw-packages__copy.is-copied {
+  color: var(--pw-packages-accent-text);
+  background: var(--pw-packages-accent-fill);
+}
+
+.pw-source {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  min-width: 0;
+}
+.pw-source__lines {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.pw-source__url {
+  min-width: 0;
+}
+.pw-source__heads {
+  font-size: 0.6875rem;
+  color: var(--pw-packages-faint);
+}
+.pw-source__none {
+  font-size: 0.75rem;
+  font-style: italic;
+  color: var(--pw-packages-faint);
+}
+
+/* right-aligned open / delete actions (cards, registries, table) */
+.pw-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.pw-actions__btn {
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border-strong);
+  background: var(--pw-packages-raise);
+  color: var(--pw-packages-muted);
+  border-radius: var(--studio-radius-sm, 4px);
+  font: inherit;
+  font-size: 0.6875rem;
+  padding: 0.15rem 0.55rem;
+  cursor: var(--studio-cursor-pointer, pointer);
+  transition: background var(--studio-transition-fast, 0.1s ease),
+    color var(--studio-transition-fast, 0.1s ease),
+    border-color var(--studio-transition-fast, 0.1s ease);
+}
+.pw-actions__btn:hover {
+  background: var(--pw-packages-raise-2);
+  color: var(--pw-packages-line);
+}
+.pw-actions__btn--danger:hover {
+  background: color-mix(in oklch, var(--pw-packages-danger), var(--pw-packages-fill) 84%);
+  border-color: color-mix(in oklch, var(--pw-packages-danger), var(--pw-packages-fill) 55%);
+  color: color-mix(in oklch, var(--pw-packages-danger), var(--pw-packages-line) 25%);
+}
+
+.pw-plugins {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.pw-plugin {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.4rem 0;
+  flex-wrap: wrap;
+}
+.pw-plugin__dot {
+  align-self: center;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  flex-shrink: 0;
+  background: var(--pw-packages-core);
+}
+.pw-plugin__dot[data-origin="installed"] {
+  background: var(--pw-packages-installed);
+}
+.pw-plugin__dot[data-origin="ephemeral"] {
+  background: var(--pw-packages-ephemeral);
+}
+.pw-plugin__dot[data-origin="unknown"] {
+  background: var(--pw-packages-unknown);
+}
+.pw-plugin__name {
+  font-weight: 550;
+}
+.pw-plugin__type {
+  font-size: 0.6875rem;
+  color: var(--pw-packages-muted);
+  background: var(--pw-packages-raise-2);
+  border-radius: var(--studio-radius-sm, 4px);
+  padding: 0.05rem 0.4rem;
+}
+.pw-plugin__id {
+  margin-left: auto;
+}
+.pw-plugin__supports {
+  flex-basis: 100%;
+  font-size: 0.75rem;
+  color: var(--pw-packages-muted);
+  font-family: var(--pw-packages-family-code);
+}
+.pw-plugin__supports-label {
+  text-transform: uppercase;
+  letter-spacing: var(--studio-chrome-letter-spacing, 0.05em);
+  font-size: 0.625rem;
+  font-family: var(--pw-packages-family);
+  color: var(--pw-packages-faint);
+}
+
+/* ---- view: by package (cards) ---- */
+
+.pw-cards {
+  list-style: none;
+  margin: 0;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.pw-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem 1.375rem;
+  background: var(--pw-packages-fill);
+}
+.pw-card__source {
+  display: flex;
+  min-width: 0;
+}
+.pw-card__foot {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  padding-bottom: 0.65rem;
+  border-bottom: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border);
+}
+
+/* show-more toggle, valid inside the plugin/registry <ul>s */
+.pw-more {
+  list-style: none;
+  padding: 0.15rem 0 0.1rem;
+}
+.pw-more__btn {
+  border: 0;
+  background: none;
+  padding: 0.1rem 0;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--pw-packages-muted);
+  cursor: var(--studio-cursor-pointer, pointer);
+  border-bottom: var(--studio-border-width, 1px) dashed var(--pw-packages-border-strong);
+}
+.pw-more__btn:hover {
+  color: var(--pw-packages-accent-text);
+  border-bottom-color: currentColor;
+}
+.pw-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.pw-card__name {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  word-break: break-word;
+}
+.pw-card__badges {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+.pw-card__version {
+  font-size: 0.6875rem;
+  font-family: var(--pw-packages-family-code);
+  color: var(--pw-packages-muted);
+}
+.pw-card__count {
+  font-size: 0.6875rem;
+  color: var(--pw-packages-faint);
+}
+.pw-card__pkgname {
+  font-size: 0.75rem;
+  font-family: var(--pw-packages-family-code);
+  color: var(--pw-packages-faint);
+  margin-top: -0.25rem;
+}
+
+/* ---- view: by registry ---- */
+
+.pw-registries {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1rem;
+}
+.pw-registry {
+  border-bottom: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border);
+}
+.pw-registry__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  background: color-mix(
+    in oklch,
+    var(--studio-secondary, #33ccf8),
+    var(--pw-packages-fill) 94%
+  );
+  border-bottom: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border);
+}
+.pw-registry__name {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 650;
+  font-family: var(--pw-packages-family-code);
+}
+.pw-registry__count {
+  font-size: 0.75rem;
+  color: var(--pw-packages-muted);
+  background: var(--pw-packages-fill);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border);
+  border-radius: var(--studio-radius-round, 9999px);
+  padding: 0 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+.pw-reglist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pw-regitem {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.55rem 0.875rem;
+  border-left: 3px solid transparent;
+}
+.pw-regitem + .pw-regitem {
+  border-top: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border);
+}
+.pw-regitem[data-origin="installed"] {
+  border-left-color: var(--pw-packages-installed);
+}
+.pw-regitem[data-origin="ephemeral"] {
+  border-left-color: var(--pw-packages-ephemeral);
+}
+.pw-regitem[data-origin="unknown"] {
+  border-left-color: var(--pw-packages-unknown);
+}
+.pw-regitem__main {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.pw-regitem__name {
+  font-weight: 550;
+}
+.pw-regitem__supports {
+  font-size: 0.75rem;
+  color: var(--pw-packages-muted);
+  font-family: var(--pw-packages-family-code);
+}
+.pw-regitem__source {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  color: var(--pw-packages-faint);
+}
+.pw-regitem__pkg {
+  font-size: 0.6875rem;
+  color: var(--pw-packages-muted);
+}
+
+/* ---- view: table ---- */
+
+.pw-table-wrap {
+  padding: 1rem;
+  overflow-x: auto;
+}
+.pw-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+.pw-table__th {
+  text-align: left;
+  padding: 0.4rem 0.6rem;
+  border-bottom: 2px solid var(--pw-packages-border-strong);
+  color: var(--pw-packages-muted);
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: var(--studio-cursor-pointer, pointer);
+  user-select: none;
+}
+.pw-table__th--plain {
+  cursor: var(--studio-cursor-default, default);
+}
+.pw-table__th[data-sorted] {
+  color: var(--pw-packages-line);
+}
+.pw-table__arrow {
+  font-size: 0.625rem;
+  margin-left: 0.25rem;
+}
+.pw-table__row {
+  border-bottom: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border);
+}
+.pw-table__row:hover {
+  background: var(--pw-packages-raise);
+}
+.pw-table td {
+  padding: 0.4rem 0.6rem;
+  vertical-align: baseline;
+}
+.pw-table__name {
+  font-weight: 550;
+}
+.pw-table__supports {
+  display: block;
+  font-size: 0.6875rem;
+  color: var(--pw-packages-faint);
+  font-family: var(--pw-packages-family-code);
+}
+.pw-table__reg,
+.pw-table__pkg {
+  font-family: var(--pw-packages-family-code);
+  font-size: 0.75rem;
+  color: var(--pw-packages-muted);
+}
+/* Keep the id on one line (the table scrolls) instead of breaking per-character. */
+.pw-table__id {
+  white-space: nowrap;
+}
+.pw-table__flag {
+  text-align: center;
+  color: var(--pw-packages-muted);
+}
+.pw-table__url {
+  max-width: 22rem;
+}
+
+/* ---- broken modules ---- */
+
+.pw-package-notices {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 1rem 1.25rem 0;
+}
+.pw-package-notice {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border-strong);
+  border-left: 3px solid var(--pw-packages-unknown);
+  border-radius: var(--studio-radius-md, 8px);
+  background: var(--pw-packages-unknown-fill);
+  padding: 0.625rem 0.75rem;
+  color: var(--pw-packages-unknown-text);
+  font-size: 0.8125rem;
+}
+.pw-package-notice__url {
+  max-width: 100%;
+}
+
+.pw-broken {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1rem 1.25rem 0;
+}
+.pw-broken__box {
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid)
+    color-mix(in oklch, var(--pw-packages-danger), var(--pw-packages-fill) 45%);
+  border-left: 3px solid var(--pw-packages-danger);
+  border-radius: var(--studio-radius-md, 8px);
+  background: color-mix(
+    in oklch,
+    var(--pw-packages-danger),
+    var(--pw-packages-fill) 88%
+  );
+  padding: 0.75rem 0.875rem;
+}
+.pw-broken__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.pw-broken__label {
+  font-size: 0.75rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: var(--studio-chrome-letter-spacing, 0.04em);
+  color: color-mix(in oklch, var(--pw-packages-danger), var(--pw-packages-line) 30%);
+}
+.pw-broken__name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: color-mix(in oklch, var(--pw-packages-danger), var(--pw-packages-line) 45%);
+  word-break: break-word;
+}
+.pw-broken__url {
+  min-width: 0;
+}
+.pw-broken__plugins {
+  margin: 0.6rem 0 0;
+}
+.pw-broken__trace {
+  margin: 0.6rem 0 0;
+  padding: 0.55rem 0.7rem;
+  background: color-mix(in oklch, var(--pw-packages-line), transparent 92%);
+  border-radius: var(--studio-radius-sm, 4px);
+  font-family: var(--pw-packages-family-code);
+  font-size: 0.6875rem;
+  line-height: 1.5;
+  color: var(--pw-packages-line);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow: auto;
+  max-height: 16rem;
+}
+
+/* ---- empty ---- */
+
+.pw-packages__empty {
+  padding: 3rem 1rem;
+  text-align: center;
+  color: var(--pw-packages-muted);
+}
+
+@container (max-width: 560px) {
+  .pw-cards {
+    padding: 0.875rem;
+  }
+  .pw-card {
+    padding: 1rem 1.05rem;
+  }
+  .pw-plugin__id {
+    margin-left: 0;
+  }
+}
+
+/* ---- install modal ---- */
+
+.pw-modal {
+  position: fixed;
+  inset: 0;
+  z-index: var(--studio-layer-modal, 50);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: max(6vh, 2rem) 1rem 2rem;
+  background: var(--studio-backdrop, color-mix(in oklch, var(--pw-packages-line), transparent 55%));
+  backdrop-filter: var(--studio-backdrop-blur, blur(2px));
+  overflow-y: auto;
+  /* Same enter as threepane's frame popover: the wash fades, the card lifts in.
+     Closing is instant. */
+  transition: opacity var(--studio-transition, 150ms ease);
+}
+@starting-style {
+  .pw-modal {
+    opacity: 0;
+  }
+}
+.pw-install {
+  width: min(34rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 1.25rem 1.375rem 1.125rem;
+  background: var(--pw-packages-fill);
+  color: var(--pw-packages-line);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border-strong);
+  border-radius: var(--studio-radius-lg, 12px);
+  box-shadow: 0 12px 40px color-mix(in oklch, var(--pw-packages-line), transparent 78%);
+  transition:
+    opacity max(1ms, calc(200ms * var(--studio-motion-scale, 1) * var(--studio-motion-preference, 1))) var(--studio-ease-out, cubic-bezier(0.23, 1, 0.32, 1)),
+    transform max(1ms, calc(200ms * var(--studio-motion-scale, 1) * var(--studio-motion-preference, 1))) var(--studio-ease-out, cubic-bezier(0.23, 1, 0.32, 1));
+}
+@starting-style {
+  .pw-install {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+.pw-install__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.pw-install__title {
+  margin: 0;
+  font-size: 1.0625rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.pw-install__close {
+  border: 0;
+  background: none;
+  color: var(--pw-packages-muted);
+  font-size: 1.25rem;
+  line-height: 1;
+  padding: 0.1rem 0.3rem;
+  cursor: var(--studio-cursor-pointer, pointer);
+  border-radius: var(--studio-radius-sm, 4px);
+}
+.pw-install__close:hover {
+  background: var(--pw-packages-raise-2);
+  color: var(--pw-packages-line);
+}
+.pw-install__blurb {
+  margin: 0;
+  font-size: 0.8125rem;
+  color: var(--pw-packages-muted);
+}
+.pw-install__blurb code {
+  font-family: var(--pw-packages-family-code);
+  font-size: 0.75rem;
+}
+.pw-install__input {
+  width: 100%;
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border-strong);
+  border-radius: var(--studio-radius-sm, 4px);
+  background: var(--pw-packages-fill);
+  color: var(--pw-packages-line);
+  font: inherit;
+  font-family: var(--pw-packages-family-code);
+  font-size: 0.8125rem;
+  padding: 0.5rem 0.625rem;
+}
+.pw-install__input:focus {
+  outline: var(--studio-focus-ring, 2px solid var(--pw-packages-focus));
+  outline-offset: var(--studio-focus-ring-offset, 1px);
+}
+.pw-install__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.pw-install__error {
+  font-size: 0.8125rem;
+  color: var(--pw-packages-unknown-text);
+  background: var(--pw-packages-unknown-fill);
+  border-radius: var(--studio-radius-sm, 4px);
+  padding: 0.4rem 0.6rem;
+}
+.pw-install__loading {
+  font-size: 0.8125rem;
+  color: var(--pw-packages-muted);
+}
+.pw-install__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.875rem 1rem;
+  background: var(--pw-packages-fill);
+}
+.pw-install__card-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.pw-install__pkg {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  word-break: break-word;
+}
+.pw-install__version {
+  font-size: 0.6875rem;
+  font-family: var(--pw-packages-family-code);
+  color: var(--pw-packages-muted);
+}
+.pw-install__none {
+  font-size: 0.8125rem;
+  font-style: italic;
+  color: var(--pw-packages-faint);
+}
+.pw-install__plugins {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.pw-install__plugin {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.pw-install__plugin-name {
+  font-weight: 550;
+}
+.pw-install__plugin-supports {
+  font-size: 0.75rem;
+  color: var(--pw-packages-muted);
+  font-family: var(--pw-packages-family-code);
+}
+.pw-install__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.pw-install__already {
+  margin-right: auto;
+  font-size: 0.75rem;
+  color: var(--pw-packages-muted);
+}
+.pw-install__cancel {
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--pw-packages-border-strong);
+  background: var(--pw-packages-fill);
+  color: var(--pw-packages-muted);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.8125rem;
+  padding: 0.45rem 0.9rem;
+  cursor: var(--studio-cursor-pointer, pointer);
+}
+.pw-install__cancel:hover {
+  background: var(--pw-packages-raise);
+  color: var(--pw-packages-line);
+}
+.pw-install__add {
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid)
+    color-mix(in oklch, var(--pw-packages-accent), var(--pw-packages-line) 12%);
+  background: color-mix(
+    in oklch,
+    var(--pw-packages-accent),
+    var(--pw-packages-fill) 46%
+  );
+  color: color-mix(in oklch, var(--pw-packages-accent), var(--pw-packages-line) 58%);
+  border-radius: 999px;
+  font: inherit;
+  font-size: 0.8125rem;
+  font-weight: 650;
+  padding: 0.45rem 1.05rem;
+  cursor: var(--studio-cursor-pointer, pointer);
+  box-shadow: 0 2px 6px
+    color-mix(in oklch, var(--pw-packages-accent), transparent 74%);
+  transition: background var(--studio-transition-fast, 0.1s ease),
+    box-shadow var(--studio-transition-fast, 0.1s ease);
+}
+.pw-install__add:hover:not(:disabled) {
+  background: color-mix(
+    in oklch,
+    var(--pw-packages-accent),
+    var(--pw-packages-fill) 30%
+  );
+}
+.pw-install__add:disabled {
+  opacity: var(--studio-disabled-opacity, 0.5);
+  cursor: var(--studio-cursor-not-allowed, not-allowed);
+  box-shadow: none;
+}

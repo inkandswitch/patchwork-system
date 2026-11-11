@@ -1,0 +1,44 @@
+# Netlify config for the patchwork-base *tools bundle* (static-dist:
+# modules.json + packages/). The shell (site/) is deployed separately and points
+# at this site's modules.json via PATCHWORK_SYSTEM_PACKAGE_LIST_URL / localStorage.
+#
+# The shell loads these cross-origin, so every response needs
+# `Access-Control-Allow-Origin: *`: the `modules.json` manifest, each tool's
+# `package.json` (now fetched to resolve its entry point, since manifest URLs
+# point at tool *directories*), and the entry JS that `import()` pulls in. That
+# header is set in the [[headers]] block below for Netlify, and also emitted
+# into the publish dir as a portable `_headers` file by scripts/bundle.mjs so
+# the same bundle works on Cloudflare Pages.
+#
+# Deploys run on Netlify's Git integration: production on the production branch,
+# automatic Deploy Previews for every PR. Also used by `pnpm deploy:tools` (CLI).
+[build]
+  publish = "static-dist"
+  # Netlify insists on running its own install in the repo root before this
+  # command, and restores a cached root node_modules for it to install into.
+  # Nothing installs at the root, so the build starts by throwing that away: the
+  # cached one predates the split into standalone packages (2GB of every tool's
+  # dependencies hoisted together), and a root node_modules is also somewhere a
+  # tool can resolve a dependency it never declared, which would then only break
+  # once the folder is on its own. Deleting it is also what clears it out of the
+  # cache, which is written from whatever is on disk when the build ends.
+  command = "rm -rf node_modules && pnpm build:ci"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Access-Control-Allow-Origin = "*"
+
+[build.environment]
+  # Match the local toolchain. There is no lockfile at the repo root for
+  # Netlify to auto-detect a package manager from — every tool installs itself
+  # during `build:ci` — so PNPM_VERSION is pinned here, to the same version as
+  # package.json "packageManager" and CI.
+  NODE_VERSION = "22"
+  PNPM_VERSION = "11.15.1"
+  # Flags for that root install, which has nothing to install and nothing to
+  # build. pnpm 11 fails an install outright (ERR_PNPM_IGNORED_BUILDS) when a
+  # package wants to run a build script that no `allowBuilds` map approves, and
+  # the root has no pnpm-workspace.yaml to approve one in — by design. Every
+  # tool approves its own during `build:ci`.
+  PNPM_FLAGS = "--ignore-scripts"

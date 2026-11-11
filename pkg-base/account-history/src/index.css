@@ -1,0 +1,495 @@
+@layer package {
+:root,
+:host,
+[theme] {
+  /* Colors derived from studio variables */
+  --account-history-primary: var(--studio-secondary, #33ccf8);
+  /* invert ink for text/icons sitting ON the primary (accent) surface. must be
+     the accent's own luminance-adaptive line, NOT --account-history-bg (the page
+     fill), which is only legible when the accent happens to be dark. */
+  --account-history-primary-line: var(--studio-secondary-line, var(--studio-fill, white));
+  --account-history-bg: var(--studio-fill, white);
+  --account-history-text: var(--studio-line, black);
+  --account-history-text-secondary: var(--studio-line-offset-40, #666);
+  --account-history-text-tertiary: var(--studio-line-offset-50, #999);
+  --account-history-border: var(--studio-fill-offset-20, #ccc);
+  --account-history-hover: var(--studio-fill-offset-10, #e5e5e5);
+  --account-history-family: var(--studio-family-sans, system-ui, sans-serif);
+  --account-history-family-code: var(--studio-family-code, ui-monospace, monospace);
+  --account-history-radius: 4px;
+
+  /* Danger/delete colors */
+  --account-history-danger: var(--studio-danger, #ff6a90);
+  --account-history-danger-bg: color-mix(in oklch, var(--studio-danger, #ff6a90), transparent 90%);
+
+  /* Fluid spacing scale - scales smoothly from mobile to desktop */
+  --account-history-space-2xs: 0.25rem;                        /* 4px - fixed minimal spacing */
+  --account-history-space-xs: clamp(0.375rem, 0.5vw, 0.5rem);  /* 6px → 8px */
+  --account-history-space-sm: clamp(0.5rem, 1vw, 0.75rem);     /* 8px → 12px */
+  --account-history-space-md: clamp(0.75rem, 2vw, 1rem);       /* 12px → 16px */
+  --account-history-space-lg: clamp(1rem, 2.5vw, 1.5rem);      /* 16px → 24px */
+  --account-history-space-xl: 2rem;                            /* 32px - fixed large spacing */
+  --account-history-space-2xl: 4rem;                           /* 64px - fixed extra large spacing */
+
+  /* Fluid typography scale - scales smoothly across viewports */
+  --account-history-text-2xs: clamp(0.625rem, 0.5vw + 0.5rem, 0.6875rem);    /* 10px → 11px */
+  --account-history-text-xs: clamp(0.6875rem, 0.5vw + 0.625rem, 0.8125rem);  /* 11px → 13px */
+  --account-history-text-sm: clamp(0.75rem, 0.5vw + 0.6875rem, 0.875rem);    /* 12px → 14px */
+  --account-history-text-base: clamp(0.8125rem, 0.5vw + 0.75rem, 0.9375rem); /* 13px → 15px */
+  --account-history-text-md: clamp(0.875rem, 0.5vw + 0.8125rem, 1rem);       /* 14px → 16px */
+  --account-history-text-lg: clamp(1rem, 1vw + 0.875rem, 1.125rem);          /* 16px → 18px */
+  --account-history-text-xl: clamp(1.125rem, 1.5vw + 0.9375rem, 1.25rem);    /* 18px → 20px */
+  --account-history-text-2xl: clamp(1.25rem, 2vw + 1rem, 1.375rem);          /* 20px → 22px */
+
+  /* Icon sizes */
+  --account-history-icon-xs: 0.875rem;   /* 14px */
+  --account-history-icon-sm: 1rem;       /* 16px */
+  --account-history-icon-md: 1.125rem;   /* 18px */
+  --account-history-icon-lg: 1.25rem;    /* 20px */
+  --account-history-icon-xl: 1.5rem;     /* 24px */
+  --account-history-icon-2xl: 1.75rem;   /* 28px */
+
+  /* Button/touch target sizes */
+  --account-history-touch-sm: 1.75rem;   /* 28px */
+  --account-history-touch-md: 2rem;      /* 32px */
+  --account-history-touch-lg: 2.75rem;   /* 44px - WCAG minimum touch target */
+
+  /* Transition timing */
+  --account-history-transition-fast: max(1ms, calc(0.15s * var(--studio-motion-scale, 1) * var(--studio-motion-preference, 1)));
+  --account-history-transition-base: max(1ms, calc(0.2s * var(--studio-motion-scale, 1) * var(--studio-motion-preference, 1)));
+  --easing: ease;
+
+  /* Z-index scale */
+  --account-history-z-sticky-date: 5;
+  --account-history-z-sticky-header: 10;
+}
+}
+
+
+/* History Recorder (toolbar button) */
+.account-history-toolbar-button {
+  padding: 0.5rem;
+  cursor: var(--studio-cursor-pointer, pointer);
+  background: transparent;
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--account-history-text);
+  transition: opacity max(1ms, calc(0.2s * var(--studio-motion-scale, 1) * var(--studio-motion-preference, 1))) ease;
+}
+
+.account-history-toolbar-button:hover {
+  opacity: 0.7;
+}
+
+/* History Viewer */
+.account-history-viewer {
+  padding: var(--account-history-space-md);
+  width: 100%;
+  height: 100%;
+  margin: 0 auto;
+  font-family: var(--account-history-family);
+  color: var(--account-history-text);
+  background: var(--account-history-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.account-history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--account-history-space-md);
+  padding-bottom: var(--account-history-space-md);
+  border-bottom: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  flex-shrink: 0;
+  gap: var(--account-history-space-md);
+  flex-wrap: wrap;
+  background: var(--account-history-bg);
+  position: sticky;
+  top: 0;
+  z-index: var(--account-history-z-sticky-header);
+  margin-left: calc(-1 * var(--account-history-space-md));
+  margin-right: calc(-1 * var(--account-history-space-md));
+  margin-top: calc(-1 * var(--account-history-space-md));
+  padding-left: var(--account-history-space-md);
+  padding-right: var(--account-history-space-md);
+  padding-top: var(--account-history-space-md);
+}
+
+.account-history-header-controls {
+  display: flex;
+  gap: var(--account-history-space-xs);
+  align-items: center;
+}
+
+.account-history-group-label {
+  font-size: var(--account-history-text-base);
+  color: var(--account-history-text-secondary);
+  font-weight: 500;
+}
+
+.account-history-search {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.account-history-search-icon {
+  position: absolute;
+  left: var(--account-history-space-sm);
+  width: var(--account-history-icon-md);
+  height: var(--account-history-icon-md);
+  color: var(--account-history-text-tertiary);
+  pointer-events: none;
+}
+
+.account-history-search-input {
+  width: 100%;
+  padding: var(--account-history-space-xs) var(--account-history-space-sm) var(--account-history-space-xs) 2.375rem;
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  border-radius: var(--account-history-radius);
+  background: var(--account-history-bg);
+  color: var(--account-history-text);
+  font-size: var(--account-history-text-md);
+  font-family: inherit;
+  transition: border-color var(--account-history-transition-fast) var(--easing);
+}
+
+.account-history-search-input::placeholder {
+  color: var(--account-history-text-tertiary);
+}
+
+.account-history-search-input:focus {
+  outline: none;
+  border-color: var(--account-history-primary);
+}
+
+.account-history-sort-label {
+  font-size: var(--account-history-text-base);
+  color: var(--account-history-text-secondary);
+  font-weight: 500;
+  margin-left: var(--account-history-space-md);
+}
+
+.account-history-sort-button {
+  padding: 0.375rem var(--account-history-space-sm);
+  border-radius: var(--account-history-radius);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  background: var(--account-history-bg);
+  cursor: var(--studio-cursor-pointer, pointer);
+  font-size: var(--account-history-text-base);
+  color: var(--account-history-text);
+  transition: background-color var(--account-history-transition-fast) var(--easing);
+  font-weight: 500;
+}
+
+.account-history-sort-button:hover {
+  background: var(--studio-hover-fill, var(--account-history-hover));
+}
+
+.account-history-sort-button.active {
+  background: var(--account-history-primary);
+  color: var(--account-history-primary-line);
+  border-color: var(--account-history-primary);
+}
+
+.account-history-title {
+  margin: 0;
+  font-size: var(--account-history-text-2xl);
+  font-weight: 600;
+  color: var(--account-history-text);
+}
+
+.account-history-toggle-button {
+  padding: var(--account-history-space-xs) var(--account-history-space-md);
+  border-radius: var(--account-history-radius);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  background: var(--account-history-bg);
+  cursor: var(--studio-cursor-pointer, pointer);
+  font-size: var(--account-history-text-base);
+  color: var(--account-history-text);
+  transition: background-color var(--account-history-transition-fast) var(--easing);
+  font-weight: 500;
+}
+
+.account-history-toggle-button:hover {
+  background: var(--studio-hover-fill, var(--account-history-hover));
+}
+
+.account-history-toggle-button.active {
+  background: var(--account-history-primary);
+  color: var(--account-history-primary-line);
+  border-color: var(--account-history-primary);
+}
+
+/* Scrollable Content Area */
+.account-history-content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+}
+
+/* History Groups - Flat Design */
+
+.account-history-group-header {
+  margin-bottom: var(--account-history-space-xs);
+  padding: var(--account-history-space-xs) 0;
+}
+
+/* Sticky date headers in date grouping mode */
+.account-history-group-header:not(.account-history-group-header-clickable) {
+  position: sticky;
+  top: 0;
+  background: var(--account-history-bg);
+  z-index: var(--account-history-z-sticky-date);
+  padding-top: var(--account-history-space-sm);
+  margin-top: calc(-1 * var(--account-history-space-2xs));
+}
+
+.account-history-group-header-clickable {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: var(--studio-cursor-pointer, pointer);
+  transition: background-color var(--account-history-transition-fast) var(--easing);
+  border-radius: var(--account-history-radius);
+  padding: var(--account-history-space-xs) var(--account-history-space-sm);
+}
+
+.account-history-group-header-clickable:hover {
+  background: var(--studio-hover-fill, var(--account-history-hover));
+}
+
+.account-history-group-header-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.account-history-group-toggle {
+  width: var(--account-history-touch-sm);
+  height: var(--account-history-touch-sm);
+  min-width: var(--account-history-touch-sm);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  background: var(--account-history-bg);
+  cursor: var(--studio-cursor-pointer, pointer);
+  border-radius: var(--account-history-radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--account-history-text-secondary);
+  font-size: var(--account-history-text-xl);
+  font-weight: 300;
+  transition: all var(--account-history-transition-fast) var(--easing);
+  padding: 0;
+  line-height: 1;
+}
+
+.account-history-group-toggle:hover {
+  background: var(--account-history-primary);
+  color: var(--account-history-primary-line);
+  border-color: var(--account-history-primary);
+}
+
+.account-history-group-title {
+  font-size: var(--account-history-text-base);
+  font-weight: 600;
+  margin: 0;
+  color: var(--account-history-text-secondary);
+}
+
+.account-history-group-meta {
+  font-size: var(--account-history-text-sm);
+  color: var(--account-history-text-tertiary);
+  margin: var(--account-history-space-2xs) 0 0 0;
+}
+
+.account-history-entries {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 1rem;
+}
+
+/* History Entry - Flat List Design */
+.account-history-entry {
+  display: grid;
+  /* TODO: icon */
+  /* grid-template-columns: auto 28px 1fr 32px; */
+  grid-template-columns: auto 1fr var(--account-history-touch-md);
+  gap: var(--account-history-space-sm);
+  align-items: center;
+  padding: var(--account-history-space-xs) var(--account-history-space-sm);
+  border-bottom: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  background: var(--account-history-bg);
+  transition: background-color var(--account-history-transition-fast) var(--easing);
+  min-height: var(--account-history-touch-lg);
+}
+
+.account-history-entry:hover {
+  background: var(--studio-hover-fill, var(--account-history-hover));
+}
+
+/* Time Column */
+.account-history-entry-time {
+  font-size: var(--account-history-text-sm);
+  color: var(--account-history-text-secondary);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Content Column - Clickable */
+.account-history-entry-content {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--account-history-space-xs);
+  min-width: 0;
+  cursor: var(--studio-cursor-pointer, pointer);
+}
+
+.account-history-entry-title {
+  font-size: var(--account-history-text-base);
+  font-weight: 500;
+  color: var(--account-history-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-history-entry-content:hover .account-history-entry-title {
+  color: var(--account-history-primary);
+}
+
+.account-history-entry-tool {
+  font-size: var(--account-history-text-base);
+  color: var(--account-history-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* URL - Secondary Appearance (inline with title/tool) */
+.account-history-entry-url {
+  font-size: var(--account-history-text-xs);
+  color: var(--account-history-text-tertiary);
+  opacity: 0.6;
+  font-family: var(--account-history-family-code);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+/* Actions Column */
+.account-history-entry-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.account-history-entry-delete {
+  width: var(--account-history-icon-xl);
+  height: var(--account-history-icon-xl);
+  border: none;
+  background: transparent;
+  cursor: var(--studio-cursor-pointer, pointer);
+  border-radius: var(--account-history-radius);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--account-history-text-tertiary);
+  transition: all var(--account-history-transition-fast) var(--easing);
+  padding: 0;
+  opacity: 0;
+}
+
+.account-history-entry:hover .account-history-entry-delete {
+  opacity: 1;
+}
+
+.account-history-entry-delete:hover {
+  background: var(--account-history-danger-bg);
+  color: var(--account-history-danger);
+}
+
+.account-history-entry-delete svg {
+  width: var(--account-history-icon-sm);
+  height: var(--account-history-icon-sm);
+}
+
+/* Empty State */
+.account-history-empty {
+  padding: var(--account-history-space-2xl) var(--account-history-space-lg);
+  text-align: center;
+  color: var(--account-history-text-tertiary);
+  font-size: var(--account-history-text-md);
+}
+
+/* Responsive Design */
+
+/* Mobile (<640px) */
+@media (max-width: 640px) {
+  .account-history-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .account-history-header-controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .account-history-toggle-button {
+    flex: 1;
+  }
+
+  .account-history-sort-label {
+    margin-left: 0;
+    margin-top: var(--account-history-space-xs);
+    width: 100%;
+  }
+
+  .account-history-sort-button {
+    flex: 1;
+  }
+
+  .account-history-group {
+    margin-bottom: var(--account-history-space-lg);
+  }
+
+  .account-history-entry {
+    grid-template-columns: 1fr var(--account-history-touch-sm);
+    grid-template-rows: auto auto;
+    gap: var(--account-history-space-2xs) var(--account-history-space-xs);
+    min-height: auto;
+  }
+
+  .account-history-entry-time {
+    grid-column: 1 / 2;
+    grid-row: 1 / 2;
+  }
+
+  .account-history-entry-content {
+    grid-column: 1 / 2;
+    grid-row: 2 / 3;
+  }
+
+  .account-history-entry-url {
+    display: none;
+  }
+
+  .account-history-entry-actions {
+    grid-column: 2 / 3;
+    grid-row: 1 / 3;
+  }
+
+  .account-history-entry-delete {
+    opacity: 1;
+  }
+
+}

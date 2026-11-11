@@ -1,0 +1,29 @@
+{
+  "name": "@inkandswitch/patchwork-pkg-base",
+  "version": "0.0.1",
+  "type": "module",
+  "description": "Base packages for the Patchwork system",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inkandswitch/patchwork-pkg-base.git"
+  },
+  "scripts": {
+    "lint": "node scripts/lint-standalone.mjs",
+    "test": "node scripts/each.mjs test",
+    "build": "node scripts/each.mjs build",
+    "each": "node scripts/each.mjs",
+    "build:static": "node scripts/build-static.mjs",
+    "build:static:fresh": "node scripts/build-static.mjs --build",
+    "build:ci": "node scripts/build-static.mjs --install",
+    "modules-doc": "pnpm --dir scripts/modules-doc install --frozen-lockfile && node scripts/modules-doc/index.mjs",
+    "bundle": "node scripts/bundle.mjs",
+    "serve:tools": "node scripts/serve-tools.mjs",
+    "dev:tools": "pnpm build:static && pnpm serve:tools",
+    "dev": "node scripts/serve-tools.mjs --port 2121",
+    "watch": "node scripts/watch.mjs",
+    "deploy:tools": "pnpm build:static && pnpm dlx netlify-cli deploy --dir=static-dist --prod"
+  },
+  "packageManager": "pnpm@11.15.1",
+  "patchwork": {"static": "static-dist"}
+}

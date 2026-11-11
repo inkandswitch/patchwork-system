@@ -1,0 +1,8 @@
+node_modules/
+dist/
+static-dist/
+
+# Regenerated from the es-module-shims dependency on every `prebuild`
+# (scripts/generate-esms-source.mjs). Not committed — it's a 70KB vendored blob
+# derived from a pinned dependency.
+src/esms-source.generated.ts

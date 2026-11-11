@@ -1,0 +1,17 @@
+{
+  "name": "tasks",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "@automerge/automerge": "3.1.2",
+    "@automerge/automerge-repo": "2.3.0",
+    "@automerge/automerge-repo-network-messagechannel": "2.3.0",
+    "@automerge/automerge-repo-network-websocket": "^2.4.0",
+    "boring-name-generator": "1.0.3",
+    "web-worker": "^1.5.0"
+  },
+  "scripts": {
+    "register": "pw-modules add \"$MODULE_SETTINGS_DOC_URL\" \"$(pushwork url)\""
+  }
+}

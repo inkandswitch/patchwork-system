@@ -1,0 +1,21 @@
+{
+  "name": "@patchwork/patternwitch",
+  "version": "0.0.1",
+  "description": "PatternWitch — a pixel painter for Patchwork",
+  "type": "module",
+  "main": "patternwitch.js",
+  "exports": "./patternwitch.js",
+  "scripts": {
+    "build": "echo 'bundleless — nothing to build'",
+    "push": "pushwork sync",
+    "register": "pw-modules add \"$MODULE_SETTINGS_DOC_URL\" \"$(pushwork url)\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [],
+  "author": "Ink & Switch",
+  "devDependencies": {
+    "happy-dom": "^15.11.7",
+    "vitest": "^3.2.4"
+  }
+}

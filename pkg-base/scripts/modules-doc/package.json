@@ -1,0 +1,18 @@
+{
+  "name": "@patchwork/modules-doc",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "pushwork init every package in static-dist and publish a module-settings doc listing them",
+  "bin": {
+    "modules-doc": "./index.mjs"
+  },
+  "scripts": {
+    "start": "node index.mjs"
+  },
+  "dependencies": {
+    "@automerge/automerge": "3.3.2",
+    "@automerge/automerge-repo": "2.6.0-subduction.48",
+    "@automerge/automerge-subduction": "0.16.1"
+  }
+}

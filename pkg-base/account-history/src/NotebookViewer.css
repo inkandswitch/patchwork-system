@@ -1,0 +1,360 @@
+/* ===== Notebook Viewer Layout ===== */
+
+.notebook-viewer {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--account-history-text);
+  background: var(--account-history-hover);
+  overflow: hidden;
+  box-sizing: border-box;
+  position: relative;
+}
+
+/* ===== Timeline Controls (top section) ===== */
+
+.notebook-viewer-timeline {
+  flex-shrink: 0;
+  padding: var(--account-history-space-sm) var(--account-history-space-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--account-history-space-2xs);
+  background: transparent;
+  z-index: 2;
+}
+
+.notebook-viewer-date-label {
+  font-size: var(--account-history-text-md);
+  font-weight: 600;
+  color: var(--account-history-text);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Playback controls — floating top-left */
+.notebook-viewer-playback {
+  position: absolute;
+  top: var(--account-history-space-sm);
+  left: var(--account-history-space-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--account-history-space-xs);
+  z-index: 3;
+}
+
+.notebook-viewer-play-button {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  background: var(--account-history-bg);
+  cursor: var(--studio-cursor-pointer, pointer);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--account-history-text);
+  transition: background-color var(--account-history-transition-fast) var(--easing),
+              color var(--account-history-transition-fast) var(--easing);
+  padding: 0;
+}
+
+.notebook-viewer-play-button:hover {
+  background: var(--account-history-primary);
+  color: var(--account-history-primary-line);
+  border-color: var(--account-history-primary);
+}
+
+/* Direction toggle switch */
+.notebook-viewer-direction-toggle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  border-radius: 12px;
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  background: var(--account-history-bg);
+  cursor: var(--studio-cursor-pointer, pointer);
+  overflow: hidden;
+  user-select: none;
+  height: 24px;
+}
+
+.notebook-viewer-direction-option {
+  position: relative;
+  z-index: 1;
+  padding: 0 var(--account-history-space-xs);
+  font-size: var(--account-history-text-2xs);
+  font-weight: 600;
+  color: var(--account-history-text-tertiary);
+  transition: color var(--account-history-transition-fast) var(--easing);
+  line-height: 24px;
+}
+
+.notebook-viewer-direction-option.active {
+  color: var(--account-history-primary-line);
+}
+
+.notebook-viewer-direction-thumb {
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 50%;
+  border-radius: 10px;
+  background: var(--account-history-primary);
+  transition: left var(--account-history-transition-base) var(--easing);
+}
+
+.notebook-viewer-direction-thumb.left {
+  left: 1px;
+}
+
+.notebook-viewer-direction-thumb.right {
+  left: calc(50% - 1px);
+}
+
+.notebook-viewer-timeline-row {
+  display: flex;
+  align-items: center;
+  gap: var(--account-history-space-sm);
+  width: 100%;
+  max-width: 660px;
+}
+
+.notebook-viewer-timeline-label {
+  background: transparent;
+  border: none;
+  cursor: var(--studio-cursor-pointer, pointer);
+  font-size: var(--account-history-text-sm);
+  font-weight: 500;
+  color: var(--account-history-text-secondary);
+  padding: var(--account-history-space-2xs) var(--account-history-space-xs);
+  border-radius: var(--account-history-radius);
+  white-space: nowrap;
+  transition: color var(--account-history-transition-fast) var(--easing);
+  font-family: inherit;
+}
+
+.notebook-viewer-timeline-label:hover {
+  color: var(--account-history-primary);
+}
+
+.notebook-viewer-timeline-slider {
+  flex: 1;
+  min-width: 0;
+  cursor: var(--studio-cursor-pointer, pointer);
+  accent-color: var(--account-history-primary);
+}
+
+/* ===== Page Area (middle section) ===== */
+
+.notebook-viewer-page-area {
+  flex: 1;
+  display: flex;
+  align-items: stretch;
+  min-height: 0;
+  padding: 0 var(--account-history-space-sm);
+  gap: var(--account-history-space-xs);
+}
+
+/* Arrow buttons */
+.notebook-viewer-arrow {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  background: transparent;
+  border: none;
+  cursor: var(--studio-cursor-pointer, pointer);
+  color: var(--account-history-text-secondary);
+  font-size: 2rem;
+  transition: color var(--account-history-transition-fast) var(--easing),
+              opacity var(--account-history-transition-fast) var(--easing);
+  border-radius: var(--account-history-radius);
+  padding: 0;
+}
+
+.notebook-viewer-arrow:hover:not(:disabled) {
+  color: var(--account-history-primary);
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.notebook-viewer-arrow:disabled {
+  opacity: 0.25;
+  cursor: var(--studio-cursor-default, default);
+}
+
+/* The "page" - the central patchwork-view container */
+.notebook-viewer-page {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--account-history-bg);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1), 0 0 1px rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+  position: relative;
+}
+
+.notebook-viewer-page patchwork-view {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ===== Bottom Controls ===== */
+
+.notebook-viewer-bottom {
+  flex-shrink: 0;
+  padding: var(--account-history-space-sm) var(--account-history-space-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--account-history-space-xs);
+  z-index: 2;
+}
+
+/* Step row — single-line layout: [dropdown] [dropdown?] [slider] [value] */
+.notebook-viewer-step-row {
+  display: flex;
+  align-items: center;
+  gap: var(--account-history-space-sm);
+  font-size: var(--account-history-text-sm);
+  color: var(--account-history-text-secondary);
+}
+
+.notebook-viewer-select {
+  padding: var(--account-history-space-2xs) var(--account-history-space-xs);
+  border-radius: var(--account-history-radius);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  background: var(--account-history-bg);
+  color: var(--account-history-text);
+  font-size: var(--account-history-text-sm);
+  font-family: inherit;
+  cursor: var(--studio-cursor-pointer, pointer);
+}
+
+.notebook-viewer-step-slider {
+  width: 150px;
+  accent-color: var(--account-history-primary);
+  cursor: var(--studio-cursor-pointer, pointer);
+}
+
+.notebook-viewer-step-value {
+  min-width: 2em;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.notebook-viewer-entry-info {
+  font-size: var(--account-history-text-sm);
+  color: var(--account-history-text-tertiary);
+  display: flex;
+  gap: var(--account-history-space-sm);
+  align-items: center;
+}
+
+.notebook-viewer-entry-info-position {
+  font-weight: 500;
+  color: var(--account-history-text-secondary);
+}
+
+/* ===== Open Document Button (top-right) ===== */
+
+.notebook-viewer-open-doc {
+  position: absolute;
+  top: var(--account-history-space-sm);
+  right: var(--account-history-space-sm);
+  z-index: 3;
+}
+
+.notebook-viewer-open-doc-button {
+  height: 36px;
+  border-radius: 18px;
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  background: var(--account-history-bg);
+  cursor: var(--studio-cursor-pointer, pointer);
+  display: flex;
+  align-items: center;
+  gap: var(--account-history-space-2xs);
+  color: var(--account-history-text);
+  font-size: var(--account-history-text-sm);
+  font-weight: 500;
+  font-family: inherit;
+  padding: 0 var(--account-history-space-sm) 0 var(--account-history-space-xs);
+  transition: background-color var(--account-history-transition-fast) var(--easing),
+              color var(--account-history-transition-fast) var(--easing);
+  white-space: nowrap;
+}
+
+.notebook-viewer-open-doc-button:hover {
+  background: var(--account-history-primary);
+  color: var(--account-history-primary-line);
+  border-color: var(--account-history-primary);
+}
+
+.notebook-viewer-open-doc-button svg {
+  flex-shrink: 0;
+}
+
+.notebook-viewer-version-dropdown {
+  position: absolute;
+  top: calc(100% + var(--account-history-space-2xs));
+  right: 0;
+  min-width: 160px;
+  background: var(--account-history-bg);
+  border: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+  border-radius: var(--account-history-radius);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12), 0 0 1px rgba(0, 0, 0, 0.08);
+  z-index: 4;
+  overflow: hidden;
+}
+
+.notebook-viewer-version-option {
+  display: block;
+  width: 100%;
+  padding: var(--account-history-space-xs) var(--account-history-space-sm);
+  background: none;
+  border: none;
+  cursor: var(--studio-cursor-pointer, pointer);
+  text-align: left;
+  font-size: var(--account-history-text-sm);
+  font-family: inherit;
+  color: var(--account-history-text);
+  transition: background-color var(--account-history-transition-fast) var(--easing);
+}
+
+.notebook-viewer-version-option:hover {
+  background: var(--studio-hover-fill, var(--account-history-hover));
+}
+
+.notebook-viewer-version-option + .notebook-viewer-version-option {
+  border-top: var(--studio-border-width, 1px) var(--studio-border-style, solid) var(--account-history-border);
+}
+
+/* ===== Empty State ===== */
+
+.notebook-viewer-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--account-history-text-tertiary);
+  font-size: var(--account-history-text-md);
+}
+
+
+
+/* ===== Responsive ===== */
+@media (max-width: 640px) {
+  .notebook-viewer-arrow {
+    width: 32px;
+    font-size: 1.5rem;
+  }
+
+  .notebook-viewer-step-slider {
+    width: 100px;
+  }
+}

@@ -1,0 +1,73 @@
+{
+  "name": "@grjte/patchwork-worker",
+  "version": "0.0.2",
+  "description": "Run a worker in the host realm and hand any consumer a transferable stream pair — the same code inside or outside a Patchwork isolation boundary. Owns the patchwork:worker plugin type and the connect/session/serve transport; the host-realm provider that drives it ships from the providers package.",
+  "type": "module",
+  "main": "index.js",
+  "types": "./types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/index.d.ts",
+      "default": "./index.js"
+    },
+    "./connect": {
+      "types": "./types/connect.d.ts",
+      "default": "./connect.js"
+    },
+    "./connect.js": {
+      "types": "./types/connect.d.ts",
+      "default": "./connect.js"
+    },
+    "./session": {
+      "types": "./types/session.d.ts",
+      "default": "./session.js"
+    },
+    "./session.js": {
+      "types": "./types/session.d.ts",
+      "default": "./session.js"
+    },
+    "./serve": {
+      "types": "./types/serve.d.ts",
+      "default": "./serve.js"
+    },
+    "./serve.js": {
+      "types": "./types/serve.d.ts",
+      "default": "./serve.js"
+    },
+    "./client": {
+      "types": "./types/client.d.ts",
+      "default": "./client.js"
+    },
+    "./client.js": {
+      "types": "./types/client.d.ts",
+      "default": "./client.js"
+    }
+  },
+  "files": [
+    "types",
+    "index.js",
+    "connect.js",
+    "session.js",
+    "serve.js",
+    "client.js",
+    "README.md"
+  ],
+  "author": "grjte",
+  "license": "MIT",
+  "scripts": {
+    "build": "pnpm build:types",
+    "build:types": "tsc",
+    "push": "pnpm build && pushwork sync",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@inkandswitch/patchwork-plugins": "^0.0.11",
+    "@inkandswitch/patchwork-providers": "^0.5.1"
+  },
+  "devDependencies": {
+    "happy-dom": "^15.11.7",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "name": "@tiny-patchwork/sync-indicator",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "source": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "pushwatch": "pnpm dev pushwork",
+    "register": "pw-modules add \"$MODULE_SETTINGS_DOC_URL\" \"$(pushwork url)\"",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@automerge/automerge": "3.3.0-fragments.1",
+    "@automerge/automerge-repo": "2.6.0-subduction.39",
+    "@inkandswitch/patchwork-bootloader": "^0.7.2",
+    "@inkandswitch/patchwork-plugins": "^1.2.5",
+    "@inkandswitch/patchwork-providers-solid": "^0.2.8",
+    "@types/debug": "^4.1.12",
+    "debug": "^4.4.3",
+    "solid-automerge": "^2.1.1",
+    "solid-js": "^1.9.9"
+  },
+  "devDependencies": {
+    "esbuild": "~0.25.0",
+    "happy-dom": "^15.11.7",
+    "typescript": "~5.9.3",
+    "vite": "^7.1.9",
+    "vite-plugin-css-injected-by-js": "^3.5.2",
+    "vite-plugin-solid": "^2.11.10",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild": "~0.25.0"
+    }
+  }
+}

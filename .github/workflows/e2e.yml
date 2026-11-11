@@ -43,8 +43,14 @@ jobs:
           cache: pnpm
 
       # The same build the preview deploys: the shell, against this branch's
-      # packages.
+      # packages and its copy of pkg-base.
+      - name: build this branch's pkg-base
+        working-directory: pkg-base
+        run: node scripts/build-static.mjs --install --strict
+
       - name: build the shell against this branch's packages
+        env:
+          PATCHWORK_PKG_BASE_DIRECTORY: ${{ github.workspace }}/pkg-base
         run: |
           node .github/scripts/use-workspace-packages.mjs "$GITHUB_WORKSPACE/$SITE_DIR"
           pnpm install --no-frozen-lockfile

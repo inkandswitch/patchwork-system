@@ -1,0 +1,9 @@
+# pnpm 11 reads its settings from this file. There is no root workspace, so
+# every package carries the settings it needs rather than inheriting them.
+minimumReleaseAge: 0
+verifyDepsBeforeRun: false
+allowBuilds:
+  "@swc/core": true
+  cbor-extract: true
+  core-js: true
+  esbuild: true

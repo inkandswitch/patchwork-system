@@ -1,0 +1,67 @@
+@import url("@tldraw/tldraw/tldraw.css");
+
+.tlui-layout {
+  padding: 0px;
+}
+
+/* Diff highlighting: glows hug each shape's outline (no bounding boxes). */
+.tl-diff-added {
+  filter: drop-shadow(0 0 6px #22c55e) drop-shadow(0 0 3px #22c55e);
+}
+.tl-diff-changed {
+  filter: drop-shadow(0 0 6px #eab308) drop-shadow(0 0 3px #eab308);
+}
+/* Deleted shapes are re-inserted as locked ghosts. The fade-out (opacity 0.1)
+   is set via the shape record's `opacity` prop in tool.tsx, because tldraw
+   writes `opacity` as an inline style that a CSS class can't override. Here we
+   only tint the glow red so they read as "removed". */
+.tl-diff-deleted {
+  filter: drop-shadow(0 0 5px #ef4444) drop-shadow(0 0 2px #ef4444);
+}
+
+.tldraw5-migrate {
+  --gap: 1rem;
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  align-items: start;
+  max-inline-size: 48ch;
+  margin: auto;
+  padding: calc(var(--gap) * 2);
+  color: var(--text-color, inherit);
+  font-family: var(--font-family, system-ui, sans-serif);
+}
+
+.tldraw5-migrate h2 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.tldraw5-migrate p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.tldraw5-migrate button {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border-color, currentColor);
+  border-radius: var(--radius, 6px);
+  background: var(--button-background, transparent);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.tldraw5-migrate button[disabled] {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.tldraw5-migrate [data-error] {
+  color: #ef4444;
+}
+
+.tldraw5-migrate [data-note] {
+  opacity: 0.7;
+}

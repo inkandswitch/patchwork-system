@@ -36,7 +36,17 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      # pkg-base/ is this branch's copy of patchwork-pkg-base (without drafts).
+      # Each tool in it installs and builds on its own, into pkg-base/static-dist.
+      - name: build this branch's pkg-base
+        working-directory: pkg-base
+        run: node scripts/build-static.mjs --install --strict
+
+      # PATCHWORK_PKG_BASE_DIRECTORY makes the shell serve pkg-base/static-dist
+      # (its modules.json included) in place of the published pkg-base.
       - name: build the shell against this branch's packages
+        env:
+          PATCHWORK_PKG_BASE_DIRECTORY: ${{ github.workspace }}/pkg-base
         run: |
           node .github/scripts/use-workspace-packages.mjs "$GITHUB_WORKSPACE/$SITE_DIR"
           pnpm install --no-frozen-lockfile
@@ -85,7 +95,7 @@ jobs:
               ``,
               `## ${process.env.SHELL_URL}`,
               ``,
-              `A peek at \`${process.env.SHELL_REPO}\`, built with the @inkandswitch/patchwork- packages as of this PR at \`${sha}\`.`,
+              `A peek at \`${process.env.SHELL_REPO}\`, built with the @inkandswitch/patchwork- packages and the \`pkg-base/\` tools as of this PR at \`${sha}\`.`,
             ].join("\n")
             const {owner, repo} = context.repo
             const issue_number = context.issue.number
