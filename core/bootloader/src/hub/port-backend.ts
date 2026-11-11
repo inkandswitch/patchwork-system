@@ -237,16 +237,22 @@ export class PortBackend implements SedimentreeBackend {
     }
   }
 
-  // A session that resumed on a new worker gets that worker's initial load,
-  // which the Repo has seen: its records go in as live ones (Automerge skips
-  // what it has), and the second end-of-load is dropped.
+  readonly #loaded = new WeakSet<Session>();
+
+  // A replacement's initial load is old news only after the first completed.
   #resumeEvent(s: Session, event: SedimentreeEvent): SedimentreeEvent | null {
-    if (!this.#reopened.has(s)) return event;
     if (event.type === "local-load-complete") {
+      const loaded = this.#loaded.has(s);
+      this.#loaded.add(s);
       this.#reopened.delete(s);
-      return null;
+      return loaded ? null : event;
     }
-    if (event.type === "records" && event.phase === "initial") {
+    if (
+      this.#loaded.has(s) &&
+      this.#reopened.has(s) &&
+      event.type === "records" &&
+      event.phase === "initial"
+    ) {
       return { ...event, phase: "live" };
     }
     return event;
