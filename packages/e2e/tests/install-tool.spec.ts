@@ -30,9 +30,9 @@ test("a counter tool installed from an automerge url can be created and clicked"
   await page.waitForSelector(".threepane-sidebar", { timeout: 180_000 });
   await waitForRepoReady(page);
 
-  const packageUrl = await page.evaluate((source) => {
-    const handle = window.repo.create<Record<string, unknown>>();
-    handle.change((d) => {
+  const packageUrl = await page.evaluate(async (source) => {
+    const handle = await window.repo.create<Record<string, unknown>>();
+    await handle.change((d) => {
       d["@patchwork"] = { type: "directory" };
       d["package.json"] = {
         content: JSON.stringify({

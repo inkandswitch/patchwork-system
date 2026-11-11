@@ -44,9 +44,9 @@ export async function createDoc(
   page: Page,
   value: Record<string, unknown>,
 ): Promise<string> {
-  return page.evaluate((val) => {
-    const handle = window.repo.create<Record<string, unknown>>();
-    handle.change((d) => {
+  return page.evaluate(async (val) => {
+    const handle = await window.repo.create<Record<string, unknown>>();
+    await handle.change((d) => {
       Object.assign(d, val);
     });
     return handle.url;
@@ -62,7 +62,7 @@ export async function setDocField(
   await page.evaluate(
     async ([u, f, v]) => {
       const handle = await window.repo.find<Record<string, unknown>>(u as string);
-      handle.change((d) => {
+      await handle.change((d) => {
         d[f as string] = v;
       });
     },
@@ -78,7 +78,7 @@ export async function findDocField<T = unknown>(
   return page.evaluate(
     async ([u, f]) => {
       const handle = await window.repo.find<Record<string, unknown>>(u);
-      return handle.doc()[f] as T;
+      return handle.doc()?.[f] as T;
     },
     [url, field] as const,
   );
