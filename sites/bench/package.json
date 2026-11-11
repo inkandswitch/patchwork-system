@@ -11,10 +11,6 @@
   },
   "dependencies": {
     "@automerge/automerge-repo": "catalog:",
-    "@automerge/automerge-repo-subduction": "catalog:",
-    "@automerge/automerge-repo-subduction-network-websocket": "catalog:",
-    "@automerge/automerge-repo-subduction-storage-indexeddb": "catalog:",
-    "@automerge/subduction": "catalog:",
     "@inkandswitch/patchwork": "workspace:*",
     "@inkandswitch/patchwork-bootloader": "workspace:*"
   },

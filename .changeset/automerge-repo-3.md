@@ -8,6 +8,7 @@
 "@inkandswitch/patchwork-providers-react": patch
 "@inkandswitch/patchwork-providers-solid": patch
 "@inkandswitch/edge-handles": patch
+"@inkandswitch/patchwork-e2e": patch
 ---
 
 Patchwork runs on automerge-repo 3.0.0-alpha.1 (`@automerge/automerge-repo-subduction` 3.0.0-alpha.1, `@automerge/subduction` 0.27.0), and talks to keyhive directly instead of through automerge-repo-keyhive.
@@ -41,3 +42,5 @@ Patchwork runs on automerge-repo 3.0.0-alpha.1 (`@automerge/automerge-repo-subdu
 - The scratch repo is an in-memory `new Repo()`.
 
 **Edge handles.** Awaits `repo.create()` and no longer calls `whenReady()` when creating and opening edge handles, following automerge-repo 3 where handles are always ready.
+
+**e2e.** The suite's helpers await `repo.create()` and `handle.change()`, which automerge-repo 3 made async.

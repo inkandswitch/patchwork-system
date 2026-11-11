@@ -442,18 +442,6 @@ importers:
       '@automerge/automerge-repo':
         specifier: 3.0.0-alpha.1
         version: 3.0.0-alpha.1
-      '@automerge/automerge-repo-subduction':
-        specifier: 3.0.0-alpha.1
-        version: 3.0.0-alpha.1(patch_hash=5a233542801a1e23aff1dd303368e742c9ea02a2cf6ddee0f833687c61850ddb)
-      '@automerge/automerge-repo-subduction-network-websocket':
-        specifier: 3.0.0-alpha.1
-        version: 3.0.0-alpha.1(@automerge/automerge-repo-subduction@3.0.0-alpha.1(patch_hash=5a233542801a1e23aff1dd303368e742c9ea02a2cf6ddee0f833687c61850ddb))(@automerge/automerge-repo@3.0.0-alpha.1)
-      '@automerge/automerge-repo-subduction-storage-indexeddb':
-        specifier: 3.0.0-alpha.1
-        version: 3.0.0-alpha.1(@automerge/automerge-repo-subduction@3.0.0-alpha.1(patch_hash=5a233542801a1e23aff1dd303368e742c9ea02a2cf6ddee0f833687c61850ddb))
-      '@automerge/subduction':
-        specifier: 0.27.0
-        version: 0.27.0
       '@inkandswitch/patchwork':
         specifier: workspace:*
         version: link:../../core/patchwork
