@@ -96,7 +96,7 @@ export async function createHub({
         log,
         onGone,
         status: {
-          peers: () => backend.engine.getConnectedPeerIds(),
+          peers: () => backend.subduction.getConnectedPeerIds(),
           setOffline: (offline) => network.setOffline(offline),
           connected: () => network.status === "connected",
           subscribe: (listener) => {

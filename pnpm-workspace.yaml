@@ -24,12 +24,12 @@ minimumReleaseAgeExclude:
 
 catalog:
   "@automerge/automerge": 3.5.0
-  "@automerge/automerge-repo": 3.0.0-alpha.1
-  "@automerge/automerge-repo-subduction": 3.0.0-alpha.1
-  "@automerge/automerge-repo-subduction-network-websocket": 3.0.0-alpha.1
-  "@automerge/automerge-repo-subduction-storage-indexeddb": 3.0.0-alpha.1
-  "@automerge/automerge-repo-react-hooks": 3.0.0-alpha.1
-  "@automerge/react": 3.0.0-alpha.1
+  "@automerge/automerge-repo": 3.0.0-alpha.2
+  "@automerge/automerge-repo-subduction": 3.0.0-alpha.2
+  "@automerge/automerge-repo-subduction-network-websocket": 3.0.0-alpha.2
+  "@automerge/automerge-repo-subduction-storage-indexeddb": 3.0.0-alpha.2
+  "@automerge/automerge-repo-react-hooks": 3.0.0-alpha.2
+  "@automerge/react": 3.0.0-alpha.2
   "@automerge/subduction": 0.27.0
   "@codemirror/commands": ^6.10.4
   "@codemirror/language": ^6.12.4
@@ -49,4 +49,4 @@ allowBuilds:
   esbuild: true
 
 patchedDependencies:
-  "@automerge/automerge-repo-subduction@3.0.0-alpha.1": patches/@automerge__automerge-repo-subduction@3.0.0-alpha.1.patch
+  "@automerge/automerge-repo-subduction@3.0.0-alpha.2": patches/@automerge__automerge-repo-subduction@3.0.0-alpha.2.patch
