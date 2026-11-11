@@ -209,7 +209,7 @@ export function patches({
                   ): void;
                 }) {
                   build.onLoad(
-                    { filter: /automerge-repo[\\/]dist[\\/]/ },
+                    { filter: /automerge-repo-subduction[\\/]dist[\\/]/ },
                     async ({ path }) => {
                       const contents = await patchFile(path, await load());
                       return contents ? { contents, loader: "js" } : undefined;
