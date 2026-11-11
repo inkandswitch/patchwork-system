@@ -30,20 +30,14 @@ const SCENARIOS: Scenario[] = [
   { name: "S0 about:blank" },
   {
     name: "S1 bundle parsed, no wasm",
-    url: "/?mode=pertab-mesh&server=none&stop=js",
+    url: "/?stop=js",
     ready: "marks",
   },
   {
     name: "S2 wasm instantiated, no Repo",
-    url: "/?mode=pertab-mesh&server=none&stop=wasm",
+    url: "/?stop=wasm",
     ready: "marks",
   },
-  {
-    name: "S3 Repo + IndexedDB + mesh, no socket, no doc",
-    url: "/?mode=pertab-mesh&server=none",
-    ready: "repo",
-  },
-  { name: "S4 pertab-mesh, server, shared doc", mode: "pertab-mesh" },
   { name: "S5 patchwork, server, shared doc", mode: "patchwork" },
 ];
 
@@ -70,7 +64,7 @@ type Row = {
 async function open(context: BrowserContext, scenario: Scenario, n: number): Promise<Page[]> {
   const pages: Page[] = [];
   if (scenario.mode) {
-    for (let i = 0; i < n; i++) pages.push(await openTab(context, scenario.mode));
+    for (let i = 0; i < n; i++) pages.push(await openTab(context));
     await Promise.all(pages.map((page) => online(page)));
     const url = await createDoc(pages[0], { counter: 0 });
     await Promise.all(pages.slice(1).map((page) => timeFind(page, url)));

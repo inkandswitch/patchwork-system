@@ -1,7 +1,6 @@
 import { test } from "@playwright/test";
 import {
   MODES,
-  WORKER_MODES,
   awaitField,
   awaitOnline,
   createDoc,
@@ -17,22 +16,21 @@ import {
 } from "./bench.js";
 
 // Both tabs edit while the link to the server is cut, then it comes back. The
-// cut is a WebSocket proxy closing a tab's own socket, and a control message
-// for a worker's (see offlineSwitch). Modes with a local channel converge
-// while offline; the reconnect timing is only meaningful where they didn't.
+// cut is a control message to the automerge worker, which holds the socket (see
+// offlineSwitch). The tabs share that worker, so they converge while offline;
+// the reconnect timing is only meaningful if they hadn't.
 //
 // The first two rows check the bench, not Patchwork: that the cut held for the
-// whole offline stretch. Where it didn't (a browser whose offline emulation
-// lets a reconnect through, a socket out of the switch's reach) the tabs were
-// never offline, so the rows after them record nothing rather than pass.
+// whole offline stretch. Where it didn't the tabs were never offline, so the
+// rows after them record nothing rather than pass.
 for (const mode of MODES) {
   test(`${mode}: concurrent offline edits converge on reconnect`, async ({
     browser,
     context,
   }) => {
-    const network = await offlineSwitch(context);
-    const a = await openTab(context, mode);
-    const b = await openTab(context, mode);
+    const network = offlineSwitch();
+    const a = await openTab(context);
+    const b = await openTab(context);
     await Promise.all([online(a), online(b)]);
     const url = await createDoc(a, { x: 0, y: 0 });
     // Settled at the server before anyone else asks: the racing find is
@@ -53,7 +51,7 @@ for (const mode of MODES) {
     const stillDown = !(await Promise.all([isOnline(a), isOnline(b)])).some(
       Boolean
     );
-    const stayedDown = wentDown && stillDown && network.leaked() === 0;
+    const stayedDown = wentDown && stillDown;
     // A stranger that can't get the doc at all proves nothing either way.
     const stranger = await strangerSees(browser, url);
     const unseen =
@@ -62,24 +60,19 @@ for (const mode of MODES) {
     const why = [
       !wentDown && "the link never went down",
       wentDown && !stillDown && "a tab was back online before the end",
-      network.leaked() && `${network.leaked()} messages reached the server`,
       stranger === undefined && "the stranger couldn't get the doc",
       stranger && !unseen && "the server had the offline edits",
     ]
       .filter(Boolean)
       .join("; ");
-    // In the worker modes the bench closes the socket itself, so this only
-    // says something about the tab modes' proxy.
-    if (!WORKER_MODES.includes(mode)) {
-      record({
-        metric: "server link seen down while offline",
-        mode,
-        value: stayedDown,
-        unit: "ok",
-        harness: true,
-        note: stayedDown ? undefined : why,
-      });
-    }
+    record({
+      metric: "server link seen down while offline",
+      mode,
+      value: stayedDown,
+      unit: "ok",
+      harness: true,
+      note: stayedDown ? undefined : why,
+    });
     record({
       metric: "…and the server did not see the offline edits",
       mode,
@@ -137,7 +130,7 @@ for (const mode of MODES) {
       unit: "ms",
     });
 
-    const c = await openTab(context, mode);
+    const c = await openTab(context);
     const [x, y] = await Promise.all([
       getField<number>(c, url, "x").catch(() => undefined),
       getField<number>(c, url, "y").catch(() => undefined),

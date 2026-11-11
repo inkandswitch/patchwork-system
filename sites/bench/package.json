@@ -2,7 +2,7 @@
   "name": "patchwork-bench",
   "private": true,
   "type": "module",
-  "description": "Topology benchmarks: shared subduction worker vs a subduction node per tab.",
+  "description": "Benchmarks for the tab, automerge worker and sync server arrangement Patchwork ships.",
   "scripts": {
     "build": "vite build",
     "preview": "vite preview",

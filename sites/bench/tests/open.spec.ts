@@ -6,7 +6,6 @@ import {
   createDoc,
   online,
   openTab,
-  probeServerPeer,
   record,
   serverConfirmed,
   type Mode,
@@ -17,10 +16,9 @@ const TABS = 10;
 for (const mode of MODES) {
   test(`${mode}: boot to an open doc, tab 1 to ${TABS}`, async ({ browser, context }) => {
     test.setTimeout(300_000);
-    await probeServerPeer(browser);
     // Somewhere else puts the doc on the server.
     const seeder = await browser.newContext();
-    const seed = await openTab(seeder, "pertab");
+    const seed = await openTab(seeder);
     await online(seed);
     const url = await createDoc(seed, { title: "open", text: "x".repeat(10_000) });
     await serverConfirmed(seed, url, 30_000);
@@ -29,7 +27,7 @@ for (const mode of MODES) {
     const docMs: Array<number | null> = [];
     const readyMs: Array<number | null> = [];
     for (let i = 0; i < TABS; i++) {
-      const page = await openTab(context, mode, { open: url });
+      const page = await openTab(context, { open: url });
       const marks = await page
         .waitForFunction(() => window.bench.marks.doc !== undefined && window.bench.marks, null, {
           timeout: 30_000,

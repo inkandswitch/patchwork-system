@@ -1,7 +1,6 @@
 import { test } from "@playwright/test";
 import {
   MODES,
-  WORKER_MODES,
   marks,
   online,
   openTab,
@@ -17,7 +16,7 @@ for (const mode of MODES) {
   for (const tabs of [1, 3, 10]) {
     test(`${mode}: boot ${tabs} tab(s)`, async ({ browser, context }) => {
       const pages = [];
-      for (let i = 0; i < tabs; i++) pages.push(await openTab(context, mode));
+      for (let i = 0; i < tabs; i++) pages.push(await openTab(context));
 
       const first = await marks(pages[0]);
       record({
@@ -46,22 +45,6 @@ for (const mode of MODES) {
       });
 
       await Promise.all(pages.map((page) => online(page)));
-      if (WORKER_MODES.includes(mode)) {
-        // The tab's own link is to its worker, handshaken independently of the
-        // worker's server link, so it may land after `online`.
-        await pages[0]
-          .waitForFunction(() => window.bench.marks.linked !== undefined, null, {
-            timeout: 10_000,
-          })
-          .catch(() => {});
-        record({
-          metric: "boot → linked to worker, first tab",
-          mode,
-          tabs,
-          value: (await marks(pages[0])).linked ?? null,
-          unit: "ms",
-        });
-      }
       // Let storage flushes and the first sync rounds settle first.
       await pages[0].waitForTimeout(2_000);
       const memory = await rendererMemory(browser);

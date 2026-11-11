@@ -3,35 +3,14 @@ import { execFileSync } from "node:child_process";
 import { test } from "@playwright/test";
 import type { Browser, BrowserContext, Page } from "@playwright/test";
 
-export type Mode =
-  | "patchwork"
-  | "pertab"
-  | "pertab-bc"
-  | "pertab-mesh"
-  | "pertab-heads"
-  | "tab-worker"
-  | "shared-worker";
-export const MODES: Mode[] = [
-  "patchwork",
-  "pertab",
-  "pertab-bc",
-  "pertab-mesh",
-  "pertab-heads",
-  "tab-worker",
-  "shared-worker",
-];
-export const WORKER_MODES: Mode[] = ["tab-worker", "shared-worker"];
-
-export type Storage = "worker" | "direct";
-export const STORAGES: Storage[] = ["worker", "direct"];
+export type Mode = "patchwork";
+export const MODES: Mode[] = ["patchwork"];
 
 export const RESULTS = "bench-results/results.jsonl";
 
 export type Result = {
   metric: string;
   mode: Mode;
-  /** Set for the storage-adapter comparison, which is its own table. */
-  storage?: Storage;
   tabs?: number;
   /** null: no measurement, printed as – */
   value: number | boolean | null;
@@ -70,52 +49,14 @@ export function median(values: number[]): number {
     : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-// The sync server's subduction peer id, learned once per run from a bare tab
-// in a throwaway context (so nothing it fetches warms the test's own). A
-// worker-hosted node can't tell the server from the tabs it accepts any other
-// way; the tab modes can, but get it too so every mode measures the same peer.
-let serverPeer: Promise<string> | undefined;
-export function probeServerPeer(browser: Browser): Promise<string> {
-  return (serverPeer ??= (async () => {
-    const context = await browser.newContext();
-    try {
-      const page = await context.newPage();
-      await page.goto("/?mode=pertab");
-      await page.waitForFunction(() => window.repo != null, null, {
-        timeout: 60_000,
-      });
-      await page.evaluate(() => window.bench.online());
-      const [peer] = await page.evaluate(() => window.bench.serverPeerIds());
-      if (!peer) throw new Error("couldn't learn the sync server's peer id");
-      return peer;
-    } finally {
-      await context.close();
-    }
-  })());
-}
-
 export async function openTab(
   context: BrowserContext,
-  mode: Mode,
-  {
-    server,
-    storage,
-    open,
-  }: { server?: string; storage?: Storage; open?: string } = {}
+  { open }: { open?: string } = {}
 ): Promise<Page> {
-  const query = new URLSearchParams({ mode });
-  // Extra page options for every tab, e.g. BENCH_QUERY="heads=0&bc=1".
-  for (const [key, value] of new URLSearchParams(process.env.BENCH_QUERY ?? "")) {
-    query.set(key, value);
-  }
-  if (server !== undefined) query.set("server", server);
-  if (storage !== undefined) query.set("storage", storage);
+  const query = new URLSearchParams();
   if (open !== undefined) query.set("open", open);
-  if (server !== "none") {
-    query.set("serverPeer", await probeServerPeer(context.browser()!));
-  }
   const page = await context.newPage();
-  page.on("pageerror", (error) => console.error(`[${mode}]`, error.message));
+  page.on("pageerror", (error) => console.error("[patchwork]", error.message));
   await page.goto(`/?${query}`);
   await page.waitForFunction(() => window.repo != null, null, {
     timeout: 60_000,
@@ -138,114 +79,24 @@ export function isOnline(page: Page): Promise<boolean> {
 export type OfflineSwitch = {
   /** Cut or restore the link to the sync server in every tab. */
   set(pages: Page[], offline: boolean): Promise<void>;
-  /**
-   * Messages a page sent the server through the proxy while offline. Zero when
-   * the cut held.
-   */
-  leaked(): number;
 };
 
 /**
- * A real offline switch. Playwright's `setOffline` doesn't close a WebSocket
- * that is already open, nor stop a routed one from connecting, so every
- * WebSocket a page opens is proxied here: the live ones are closed, and new
- * ones are held going nowhere until it's back online. (Refusing them instead
- * would close the page's socket without an `error` event, which
- * automerge-repo's connect never recovers from — a shape no real network
- * produces.) A worker's socket is out of reach of both, so the worker modes
- * are told to drop theirs and fail reconnects while offline. Install before
- * opening any tab.
+ * An offline switch. The one socket to the sync server is the automerge
+ * worker's, which Playwright's \`setOffline\` and \`routeWebSocket\` can't reach,
+ * so the worker is told to drop it and fail its reconnects while offline
+ * (PortBackend.setOffline, via \`window.bench.setOffline\`).
  */
-export async function offlineSwitch(
-  context: BrowserContext
-): Promise<OfflineSwitch> {
-  const live = new Set<{ close(): void }>();
-  // Sockets a page opened while offline, held open and going nowhere.
-  const held = new Set<{ close(): void }>();
-  let offline = false;
-  let leaked = 0;
-  await context.routeWebSocket(
-    (url) => url.protocol === "wss:" || url.protocol === "ws:",
-    (ws) => {
-      // The proxy's own connection to the server is Playwright's, out of
-      // reach of `setOffline`, so a page that reconnects while offline would
-      // get straight through. Its socket is held open with nothing behind it
-      // instead, the way a network that drops everything looks, until going
-      // back online closes it and the page reconnects for real.
-      if (offline) {
-        const hold = { close: () => ws.close({ code: 1012, reason: "offline" }) };
-        held.add(hold);
-        ws.onClose(() => held.delete(hold));
-        return;
-      }
-      const server = ws.connectToServer();
-      let closed = false;
-      const link = {
-        close() {
-          closed = true;
-          live.delete(link);
-          server.close({ code: 1012, reason: "offline" });
-          ws.close({ code: 1012, reason: "offline" });
-        },
-      };
-      live.add(link);
-      ws.onMessage((message) => {
-        // A message the page sent as its link was being cut goes nowhere.
-        if (closed) return;
-        if (offline && leaked++ === 0) {
-          console.log(`[offline switch] ${ws.url()} reached the server while offline`);
-        }
-        server.send(message);
-      });
-      server.onMessage((message) => {
-        if (!closed) ws.send(message);
-      });
-      ws.onClose((code, reason) => {
-        closed = true;
-        live.delete(link);
-        server.close({ code, reason });
-      });
-      server.onClose((code, reason) => {
-        closed = true;
-        live.delete(link);
-        ws.close({ code, reason });
-      });
-    }
-  );
+export function offlineSwitch(): OfflineSwitch {
   return {
-    async set(pages, to) {
-      // Offline only once the live links are closed, so nothing they had in
-      // flight counts as a leak.
-      if (!to) {
-        offline = false;
-        for (const hold of [...held]) hold.close();
-      }
-      await context.setOffline(to);
-      if (to) {
-        for (const link of [...live]) link.close();
-        offline = true;
-      }
+    async set(pages, offline) {
       await Promise.all(
         pages.map((page) =>
-          page.evaluate((offline) => window.bench.setOffline(offline), to)
+          page.evaluate((offline) => window.bench.setOffline(offline), offline)
         )
       );
     },
-    leaked: () => leaked,
   };
-}
-
-/**
- * No sync server at all, for a build whose server url is baked in: every
- * WebSocket a page opens is closed unopened. The connect attempt hangs rather
- * than errors (see offlineSwitch), which here is the point — nothing but
- * storage can answer.
- */
-export function refuseWebSockets(context: BrowserContext): Promise<void> {
-  return context.routeWebSocket(
-    (url) => url.protocol === "wss:" || url.protocol === "ws:",
-    (ws) => ws.close({ code: 1012, reason: "no server" })
-  );
 }
 
 /** Wait for `isOnline()` to report `expected`; false if it never does. */
@@ -263,9 +114,11 @@ export async function awaitOnline(
 }
 
 export function createDoc(page: Page, value: object): Promise<string> {
-  return page.evaluate((value) => {
-    const handle = window.repo.create<Record<string, unknown>>();
-    handle.change((d) => Object.assign(d, value));
+  return page.evaluate(async (value) => {
+    const handle = await window.repo.create<Record<string, unknown>>();
+    await handle.change((d) => {
+      Object.assign(d, value);
+    });
     return handle.url;
   }, value);
 }
@@ -302,7 +155,8 @@ export function setField(
   return page.evaluate(
     async ([url, field, value]) => {
       const { handle } = await window.bench.find(url);
-      handle.change((d) => {
+      // The change applies at once; the promise is only for persistence.
+      void handle.change((d) => {
         d[field] = value;
       });
       return performance.timeOrigin + performance.now();
@@ -358,7 +212,7 @@ export function getField<T>(page: Page, url: string, field: string): Promise<T> 
   return page.evaluate(
     async ([url, field]) => {
       const { handle } = await window.bench.find(url);
-      return handle.doc()[field] as T;
+      return handle.doc()![field] as T;
     },
     [url, field] as const
   );
@@ -366,7 +220,7 @@ export function getField<T>(page: Page, url: string, field: string): Promise<T> 
 
 /**
  * The doc as a client that shares nothing with these tabs sees it — a fresh
- * browser context, bare per-tab mode, only the server to ask. undefined if it
+ * browser context, so a worker and storage of its own, only the server to ask. undefined if it
  * can't get the doc at all.
  */
 export async function strangerSees(
@@ -376,7 +230,7 @@ export async function strangerSees(
 ): Promise<Record<string, unknown> | undefined> {
   const context = await browser.newContext();
   try {
-    const page = await openTab(context, "pertab");
+    const page = await openTab(context);
     await online(page);
     return await page
       .evaluate(

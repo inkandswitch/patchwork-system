@@ -1,14 +1,12 @@
 import { test, type Page } from "@playwright/test";
 import {
   type Mode,
-  WORKER_MODES,
   awaitField,
   createDoc,
   marks,
   median,
   online,
   openTab,
-  probeServerPeer,
   record,
   rendererMemory,
   said,
@@ -18,16 +16,12 @@ import {
   withStall,
 } from "./bench.js";
 
-const MODES = (process.env.SCALE_MODES ?? "patchwork,pertab-heads")
-  .split(",")
-  .map((mode) => mode.trim())
-  .filter(Boolean) as Mode[];
+const MODES: Mode[] = ["patchwork"];
 const TABS = Number(process.env.SCALE_TABS ?? 40);
 const DOC_KB = Number(process.env.SCALE_DOC_KB ?? 0);
 const ROUNDS = 5;
 const FIND_TIMEOUT_MS = 5_000;
 const EDIT_TIMEOUT_MS = 5_000;
-const LINKED_WAIT_MS = 3_000;
 const WATCHERS_SETTLE_MS = 200;
 
 function settled<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
@@ -50,7 +44,7 @@ function round(value: number | null, places: number): number | null {
 }
 
 type Counters = {
-  rounds: number;
+  rounds: number | null;
   bytes: number | null;
   writes: number | null;
 };
@@ -83,22 +77,15 @@ for (const mode of MODES) {
   test(`${mode}: ${TABS} tabs on one doc`, async ({ browser, context }) => {
     test.setTimeout(Math.max(600_000, TABS * 15_000));
     const N = TABS;
-    await probeServerPeer(browser);
 
     const opening = Date.now();
     const pages: Page[] = [];
-    for (let i = 0; i < N; i++) pages.push(await openTab(context, mode));
+    for (let i = 0; i < N; i++) pages.push(await openTab(context));
     const openMs = Date.now() - opening;
     const connected = await Promise.all(pages.map((page) => online(page)));
     const onlineMs = Date.now() - opening;
 
-    const last = pages[N - 1];
-    await last
-      .waitForFunction(() => window.bench.marks.linked !== undefined, null, {
-        timeout: LINKED_WAIT_MS,
-      })
-      .catch(() => {});
-    const boot = await marks(last);
+    const boot = await marks(pages[N - 1]);
     const sinceStart = (name: string) =>
       boot[name] === undefined ? null : boot[name] - boot.start;
 
@@ -159,17 +146,16 @@ for (const mode of MODES) {
     });
 
     const after = await Promise.all(pages.map(counters));
+    // null: the sync rounds happen in the automerge worker, which keeps no count.
     const roundsPerSiblingEdit = pages
       .map((_, i) => i)
       .filter((i) => !editors.has(i))
-      .map((i) => (after[i].rounds - before[i].rounds) / ROUNDS);
+      .flatMap((i) => {
+        const [a, b] = [after[i].rounds, before[i].rounds];
+        return a === null || b === null ? [] : [(a - b) / ROUNDS];
+      });
 
     const memory = await rendererMemory(browser);
-    const workerErrors = (
-      await Promise.all(
-        pages.map((page) => page.evaluate(() => window.bench.workerErrors()))
-      )
-    ).flat();
 
     const result = {
       mode,
@@ -177,8 +163,6 @@ for (const mode of MODES) {
       openMs,
       onlineMs,
       bootRepoMs: sinceStart("repo"),
-      bootLinkedMs: sinceStart("linked"),
-      bootNodeMs: sinceStart("node"),
       bootReadyMs: boot.ready,
       bootServerMs: connected[N - 1],
       findMedianMs: medianOrNull(findMs),
@@ -199,9 +183,6 @@ for (const mode of MODES) {
       stallMaxMs: stall.maxMs,
       stallLongTasks: stall.longTasks,
       stallLongTaskMs: stall.longTaskMs,
-      // Only the bench's own workers report errors; in the other modes the
-      // row would always say 0, so it says nothing.
-      workerErrors: WORKER_MODES.includes(mode) ? workerErrors.length : null,
       roundsPerSiblingEditInNonEditingTab: round(
         medianOrNull(roundsPerSiblingEdit),
         2
@@ -225,7 +206,6 @@ for (const mode of MODES) {
     > = [
       [`open ${N} tabs, wall clock`, result.openMs, "ms"],
       [`boot → repo, last of ${N} tabs`, result.bootRepoMs, "ms"],
-      [`boot → linked, last of ${N} tabs`, result.bootLinkedMs, "ms"],
       [`boot → server connected, last of ${N} tabs`, result.bootServerMs, "ms"],
       [`renderer memory, ${N} tabs`, result.memoryMb, "MB"],
       [`renderer processes, ${N} tabs`, result.processes, "n"],
@@ -242,7 +222,6 @@ for (const mode of MODES) {
       [`sync rounds per sibling edit, non-editing tab`, result.roundsPerSiblingEditInNonEditingTab, "n"],
       [`server bytes received per edit per tab`, result.serverBytesPerEditPerTab, "n"],
       [`storage writes (saveBatch) per edit per tab`, result.storageWritesPerEditPerTab, "n"],
-      [`worker errors (${N} tabs)`, result.workerErrors, "n"],
     ];
     for (const [metric, value, unit, note] of rows) {
       record({ metric, mode, value, unit, note });

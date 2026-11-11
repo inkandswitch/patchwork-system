@@ -1,14 +1,14 @@
 # bench
 
-Topology benchmarks for the tab ↔ storage ↔ sync-server arrangement, and for
-where IndexedDB runs. Not tests: nothing here gates anything.
+Benchmarks for the tab ↔ automerge worker ↔ sync-server arrangement Patchwork
+ships. Not tests: nothing here gates anything.
 
 ```sh
 pnpm --filter patchwork-bench bench          # build, run, print the tables
 pnpm --filter patchwork-bench bench:headed
 ```
 
-Chromium only (`pnpm exec playwright install chromium` once). Talks to the
+Chromium by default (`pnpm exec playwright install chromium` once). Talks to the
 real sync server named in the site build, so the server columns need network.
 Results land in `bench-results/results.md` and `results.jsonl`. Port 5199 has
 to be free: a `vite preview` left behind by another checkout would otherwise be
@@ -21,84 +21,46 @@ comments only the comparison: `node compare.ts --main <bench-results>... --pr
 and flags a benchmark only when every run of the PR landed on the same side of
 every run of main, with the medians more than 20% apart.
 
-## Modes
+## What the page is
 
-The page at `/` builds one Repo and nothing else — no shell, no account, no
-package list — in one of seven shapes, chosen by `?mode=`:
+The page at `/` builds the tab Repo Patchwork ships, `createRepo()`, and
+nothing else: no shell, no account, no package list. The tab's Repo runs on a
+`PortBackend` that forwards over a MessagePort to the one `SubductionBackend`
+in the automerge SharedWorker, which owns IndexedDB and the socket to the sync
+server. So every tab on the origin is one node on one socket, and the tabs meet
+in the worker. There is one mode, `patchwork`; the topologies earlier versions
+of this bench compared (a subduction node per tab, a node in a dedicated or
+shared worker, BroadcastChannel meshes, the IndexedDB worker storage adapter,
+`?heads=`, `?bc=`, `?throttle=`, `?signer=`, `?server=none`) were automerge-repo
+2 arrangements and no longer exist: a Repo has one backend, and there are no
+storage or network adapters.
 
-| mode | subduction node | storage | server socket | tabs meet via |
-| --- | --- | --- | --- | --- |
-| `patchwork` | in the tab | each tab, in-thread IndexedDB | one per tab | `headsChannel` announcements, as `pertab-heads`, then the server |
-| `pertab` | in the tab | each tab, in-thread IndexedDB | one per tab | the server (or IndexedDB) |
-| `pertab-bc` | in the tab | each tab, in-thread IndexedDB | one per tab | classic automerge sync over a BroadcastChannel, then the server |
-| `pertab-mesh` | in the tab | each tab, in-thread IndexedDB | one per tab | patchwork's old siblings mesh (subduction over a BroadcastChannel), each tab signing as itself |
-| `pertab-heads` | in the tab | each tab, in-thread IndexedDB | one per tab | the origin-wide signer, so one subduction peer on N sockets; the Repo's `headsChannel` announces the heads a tab just persisted and the others reload the doc from IndexedDB |
-| `tab-worker` | a dedicated Worker per tab | the worker, in-thread IndexedDB | one per worker | a BroadcastChannel mesh between the workers, then the server |
-| `shared-worker` | one SharedWorker | the worker, in-thread IndexedDB | one | the worker |
+Query params: `?open=<automerge url>` finds that doc first and marks `doc`;
+`?stop=js|wasm` stops the boot early (memory.spec's baselines); `?ui` adds a
+small playground.
 
-`patchwork` is `createRepo()` as shipped, plus the service worker and the
-automerge worker that resolves URLs for it (that worker builds its Repo on the
-first URL it is asked to resolve, so in this bench it is a spawned but idle
-process); the other six are built in the page. In the two worker modes the tab's Repo has no storage and one subduction
-peer, its worker, reached over a MessagePort (`src/worker-link.ts`); the worker
-runs a Repo of its own as the node (`src/node.ts`) but never opens a document.
-A node like that stores what a tab pushes and answers what a peer asks, but
-doesn't carry one peer's commits to another on its own, so when a tab (or a
-mesh peer) announces heads the node runs a sync round for that document with
-every peer. `?server=none` runs every non-patchwork mode with no socket.
+`window.bench` is what the specs drive: `marks`, `find`, `online` (the worker
+reports connected), `isOnline`, `setOffline`, `serverPeerIds`, `serverHeads` and
+`serverConfirmed`, `stallStart`/`stallStop`. `serverBytes`, `storageWrites` and
+`syncRounds` return null: the socket, storage and sync rounds are in the
+worker, which keeps no counters, so the tab can't measure them and those rows
+print as –. `workerErrors`, `workerLog` and `remoteHeadsSeen` went with the
+bench's own workers.
 
-Two things the worker modes show that aren't bugs in the bench: a `find()`
-that races a sibling's `create()` settles unavailable, and a plain second
-`find()` returns the same settled query (the entry stays initializing, so data
-arriving later is skipped) — the helpers' `find` calls
-`repo.resyncSubduction()` between tries, which is what an app would have to
-do; and a storageless tab's `flush()` resolves before its commits have reached
-the worker, so edits made just before the tab closes can be lost — a dedicated
-worker dies with its tab and a SharedWorker with its last tab, mid-write. Closing
-right after `flush()` loses the whole doc; 300ms later everything is on disk.
-`sync.spec` measures the race with disposable tabs and carries on with fresh
-ones.
+How the server is observed: the server's heads for a document arrive as the
+handle's `remote-heads` events, relayed through the worker, as UrlHeads, like
+`handle.heads()`. `serverConfirmed` waits until every head of the tab's is
+among the server's.
 
-A closed tab's mesh peer lingers: the BroadcastChannel adapter only announces a
-departure from `disconnect()`, which a closing tab (or its terminated worker)
-never calls, so in `pertab-mesh` and `tab-worker` the survivors
-keep a phantom peer. `churn.spec` is where that would show.
-
-`?storage=worker` swaps in-thread IndexedDB for the IndexedDB worker adapter in
-the bare per-tab modes; `storage-adapter.spec` compares the two in `pertab`.
-`?mesh=1` and `?signer=shared` add patchwork's old siblings mesh and its
-origin-wide signer (`@inkandswitch/patchwork-bootloader/signer`) to any bare
-mode, so the shipped topology can be taken apart one piece at a time
-(`pertab-mesh` is `pertab&mesh=1`; `pertab-heads` is `patchwork`
-minus the service worker and the idle automerge worker).
-
-`patchwork` can be taken apart the same way: `?heads=0` drops the Repo's
-heads channel, so the other tabs hear about an edit only from the sync node;
-`?bc=1` adds classic automerge sync between the tabs over a BroadcastChannel;
-`?throttle=N` sets the Repo's `subductionSaveThrottle` (createRepo() uses
-20). Any of them builds the Repo here rather than with createRepo().
-`BENCH_QUERY="heads=0&bc=1"` passes options like these to every tab a spec
-opens.
-
-`pertab&mesh=1&signer=shared` and `pertab-mesh` differ in the signer. With the origin-wide signer
-every tab presents the same subduction peer id, and with three tabs open the
-third stops receiving a sibling's edits over the mesh and the server stops
-confirming that sibling's heads — every run, in the old `patchwork`, in
-`pertab&mesh=1&signer=shared`, and in a keyhive build of it
-(`keyhive: true` in vite.config.ts), whose signer ARK derives from the keypair
-every context shares. With per-tab signers (`pertab-mesh`) the same mesh
-converges. The mechanism is in subduction-core: connections are keyed by peer
-id, a sync round stops at the first connection of a peer that answers, and
-relays exclude every connection of the sender's id.
-
-The sync server's subduction peer id is learned once per run from a bare tab
-in a throwaway context and passed to every page as `?serverPeer=`, so "the
-server holds our heads" means that peer and not a sibling.
+The offline switch is `PortBackend.setOffline`, which cuts and restores the
+worker's socket. Playwright's `setOffline` and `routeWebSocket` can't reach a
+SharedWorker's socket (checked: a refused WebSocket route leaves the worker
+online), so storage.spec cuts the worker the same way before any doc exists,
+which keeps the server from ever having the doc.
 
 ## What's measured
 
-- `boot.spec` — navigation start → `window.repo`, → server connected (and, in
-  the worker modes, → linked to the worker), for 1/3/10 tabs; renderer memory
+- `boot.spec` — navigation start → `window.repo`, → server connected, for 1/3/10 tabs; renderer memory
   (macOS physical footprint via `footprint`, RSS elsewhere) and process count
   once they're all up.
 - `sync.spec` — find a doc a sibling just created (and whether the first
@@ -106,33 +68,27 @@ server holds our heads" means that peer and not a sibling.
   holds our heads; and whether a client in a fresh browser context can get
   the finished doc from the server. Medians over 10 edits.
 - `storage.spec` — a tab writes, flushes and closes; a fresh tab finds the doc
-  through storage alone (no server; patchwork's server is build-time, so its
-  WebSockets are refused instead). Two tabs edit the same doc
-  and close, does a third see everything.
-- `offline.spec` — both tabs edit with the link to the server cut, then it
-  returns. Playwright's `setOffline` fails new connections like a dead network
-  but doesn't close a socket that's already open, so the tabs' sockets are also
-  proxied (`context.routeWebSocket`) purely to close the live ones; a worker's
-  socket is out of reach of both, so the worker node is told to drop it and
-  fails its connect attempts while offline. automerge-repo's reconnect backoff
-  then applies in every mode. Recorded: whether
-  the tab modes' link was seen down, whether a stranger could see the offline
-  edits at the server (it shouldn't), whether the two tabs converged while
-  offline over a local channel, and the reconnect → converged time only where
-  they hadn't.
+  through storage alone (the worker's server link is cut before the doc exists).
+  Two tabs edit the same doc and close, does a third see everything.
+- `offline.spec` — both tabs edit with the worker's link to the server cut,
+  then it returns. Recorded: whether the link was seen down for the whole
+  stretch, whether a stranger could see the offline edits at the server (it
+  shouldn't), whether the two tabs converged while offline (they share the
+  worker), and the reconnect → converged time only where they hadn't.
 - `churn.spec` — close the tab that booted everything, check the rest still sync.
 - `open.spec` — a doc only the server has, opened (`?open=<url>`) in tab after
   tab of one context: navigation start → the doc in hand, for the first tab
   and the tenth.
-- `storage-adapter.spec` — in `pertab`, IndexedDB worker vs in-thread: create
-  40 docs × 20 edits and flush, edit → flushed latency, cold load of the 40
-  from a fresh tab, three tabs flushing concurrently, sync latency with the
-  server; with the longest main-thread stall (a 5ms timer's lateness) and long
-  task time recorded around the heavy parts.
+- `scale.spec` — 40 tabs on one doc (`SCALE_TABS`, `SCALE_DOC_KB`): find,
+  edit → seen, edit → server confirmed, main-thread stall, memory.
+- `memory.spec` — memory by scenario (bare page, bundle, wasm, patchwork with a
+  shared doc) at 1 and 10 tabs; chromium only.
+- `evict.spec` — `repo.removeFromCache` frees memory, and the doc comes back
+  with the same text and heads, sees a sibling's edit, and keeps an unflushed one.
 
 Cross-tab timings use epoch milliseconds, since `performance.now()` counts from
 each page's own navigation start. `find()` in the helpers retries on
-"unavailable" (with a real re-sync each time) and reports how many tries it
+"unavailable" and reports how many tries it
 took.
 
 Each run truncates `bench-results/results.jsonl`; `BENCH_APPEND=1` keeps the

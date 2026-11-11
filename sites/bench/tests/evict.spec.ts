@@ -4,7 +4,7 @@ import { awaitField, online, openTab, record, setField, type Mode } from "./benc
 // Garbage collection and measureUserAgentSpecificMemory are chromium only.
 test.skip(({ browserName }) => browserName !== "chromium", "chromium only");
 
-const mode: Mode = "pertab-mesh";
+const mode: Mode = "patchwork";
 const TEXT_BYTES = 1 << 20;
 const EDIT_TIMEOUT_MS = 5_000;
 
@@ -34,13 +34,13 @@ async function jsAndWasmMB(page: Page): Promise<number> {
 }
 
 test(`${mode}: evict a document, then find it again`, async ({ context }) => {
-  const a = await openTab(context, mode);
-  const b = await openTab(context, mode);
+  const a = await openTab(context);
+  const b = await openTab(context);
   await Promise.all([online(a), online(b)]);
 
-  const { url, documentId, heads } = await a.evaluate((bytes) => {
-    const handle = window.repo.create<{ text: string }>();
-    handle.change((d) => {
+  const { url, documentId, heads } = await a.evaluate(async (bytes) => {
+    const handle = await window.repo.create<{ text: string }>();
+    await handle.change((d) => {
       d.text = "x".repeat(bytes);
     });
     return {
@@ -53,7 +53,7 @@ test(`${mode}: evict a document, then find it again`, async ({ context }) => {
   const bHasText = await b.evaluate(
     async ([url, bytes]) => {
       const { handle } = await window.bench.find(url);
-      return (handle.doc().text as string | undefined)?.length === bytes;
+      return (handle.doc()!.text as string | undefined)?.length === bytes;
     },
     [url, TEXT_BYTES] as const
   );
@@ -85,7 +85,7 @@ test(`${mode}: evict a document, then find it again`, async ({ context }) => {
       const { handle } = await window.bench.find(url);
       return {
         sameText:
-          (handle.doc().text as string | undefined)?.length === bytes,
+          (handle.doc()!.text as string | undefined)?.length === bytes,
         sameHeads:
           JSON.stringify([...handle.heads()].sort()) === JSON.stringify(heads),
       };
@@ -127,7 +127,7 @@ test(`${mode}: evict a document, then find it again`, async ({ context }) => {
   await a.evaluate(
     async ([url, documentId]) => {
       const { handle } = await window.bench.find(url);
-      handle.change((d) => {
+      void handle.change((d) => {
         d.marker = "unflushed";
       });
       await window.repo.removeFromCache(documentId);

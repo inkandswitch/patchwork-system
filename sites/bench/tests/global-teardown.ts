@@ -1,7 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { MODES, RESULTS, STORAGES, type Result } from "./bench.js";
-
-const STORAGE_LABELS = { worker: "idb worker", direct: "idb in-thread" };
+import { MODES, RESULTS, type Result } from "./bench.js";
 
 function cell({ value, unit }: Result): string {
   if (value === null || (typeof value === "number" && !Number.isFinite(value))) {
@@ -37,9 +35,7 @@ function table(
   ].join("\n");
 }
 
-// One row per metric, one column per topology, so they read side by side;
-// then the same for the two storage adapters. Also written to
-// bench-results/results.md.
+// One row per metric. Also written to bench-results/results.md.
 export default function globalTeardown(): void {
   const results: Result[] = readFileSync(RESULTS, "utf8")
     .split("\n")
@@ -47,25 +43,9 @@ export default function globalTeardown(): void {
     .map((line) => JSON.parse(line));
   if (!results.length) return;
 
-  const sections: string[] = [];
-  const topology = results.filter((result) => result.storage === undefined);
-  if (topology.length) {
-    sections.push(
-      "## Topology\n\n" + table(topology, MODES, MODES, (r) => r.mode)
-    );
-  }
-  const storage = results.filter((result) => result.storage !== undefined);
-  if (storage.length) {
-    sections.push(
-      "## Storage adapter (pertab mode)\n\n" +
-        table(
-          storage,
-          STORAGES,
-          STORAGES.map((s) => STORAGE_LABELS[s]),
-          (r) => r.storage!
-        )
-    );
-  }
+  const sections = [
+    "## Patchwork\n\n" + table(results, MODES, MODES, (r) => r.mode),
+  ];
   const out = sections.join("\n\n");
   writeFileSync("bench-results/results.md", out + "\n");
   console.log("\n" + out + "\n");

@@ -24,7 +24,7 @@ const EDIT_TIMEOUT_MS = 5_000;
 for (const mode of MODES) {
   test(`${mode}: cross-tab and server latency`, async ({ browser, context }) => {
     const pages = [];
-    for (let i = 0; i < TABS; i++) pages.push(await openTab(context, mode));
+    for (let i = 0; i < TABS; i++) pages.push(await openTab(context));
     await Promise.all(pages.map((page) => online(page)));
     const [a, ...others] = pages;
 
@@ -73,7 +73,7 @@ for (const mode of MODES) {
         continue;
       }
       await others[i].close();
-      const fresh = await openTab(context, mode);
+      const fresh = await openTab(context);
       await online(fresh);
       const { ms } = await timeFind(fresh, url);
       record({

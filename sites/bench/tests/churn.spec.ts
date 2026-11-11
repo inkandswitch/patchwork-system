@@ -12,16 +12,14 @@ import {
 } from "./bench.js";
 
 // Close the tab that booted everything and check the survivors still sync.
-// In patchwork mode that tab spawned the automerge worker; in tab-worker mode
-// its subduction node dies with it; in shared-worker mode the node it spawned
-// outlives it.
+// That tab spawned the automerge worker, which has to outlive it.
 for (const mode of MODES) {
   test(`${mode}: closing the first tab doesn't strand the rest`, async ({
     context,
   }) => {
-    const first = await openTab(context, mode);
-    const b = await openTab(context, mode);
-    const c = await openTab(context, mode);
+    const first = await openTab(context);
+    const b = await openTab(context);
+    const c = await openTab(context);
     await Promise.all([online(first), online(b), online(c)]);
     const url = await createDoc(first, { n: 0 });
     await serverConfirmed(first, url);
