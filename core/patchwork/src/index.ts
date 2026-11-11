@@ -168,6 +168,16 @@ async function doSetup(
     resolveHandoffsWith(repo, () => portBackend.serverConnected);
   }
 
+  // Published tools still call automerge-repo 2's `repo.create2()`, which
+  // automerge-repo 3 dropped now that `create()` is the async one. Alias it on
+  // the Repo class, so overlay repos (which forward to theirs) and the scratch
+  // repo have it too, until those tools `await repo.create()` instead.
+  const repoPrototype = Object.getPrototypeOf(repo) as {
+    create: Repo["create"];
+    create2?: Repo["create"];
+  };
+  repoPrototype.create2 ??= repoPrototype.create;
+
   // Loaded tools and e2e read these. `window.patchwork` is the caller's to set.
   window.repo = repo;
   window.Automerge = Automerge as typeof import("@automerge/automerge/slim");
