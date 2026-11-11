@@ -138,23 +138,24 @@ describe("fuzz: handles across edits and swaps", () => {
       const r = rng(seed);
       const steps: string[] = [];
       const repo = new Repo();
-      const note = repo.create<Note>(initial());
+      const note = await repo.create<Note>(initial());
       // Backings: the note itself, clones that diverge, and scratch forks.
       const pool: { handle: H; descriptor: DocHandleDescriptor }[] = [
         { handle: note, descriptor: { url: note.url } },
       ];
       for (let i = 0; i < 3; i++) {
-        const clone = repo.clone(note);
-        for (let j = r.int(3); j > 0; j--) clone.change((d) => mutate(d, r));
+        const clone = await repo.clone(note);
+        for (let j = r.int(3); j > 0; j--)
+          await clone.change((d) => mutate(d, r));
         pool.push({
           handle: clone,
           descriptor: { url: note.url, cloneUrl: clone.url },
         });
       }
       for (let i = 0; i < 2; i++) {
-        const laid = scratch.create<Note>();
-        laid.update(() => A.clone(note.doc()));
-        for (let j = r.int(3); j > 0; j--) laid.change((d) => mutate(d, r));
+        const laid = await scratch.clone(note);
+        for (let j = r.int(3); j > 0; j--)
+          await laid.change((d) => mutate(d, r));
         pool.push({
           handle: laid,
           descriptor: { url: note.url, scratchUrl: laid.url },
@@ -261,9 +262,26 @@ describe("fuzz: handles across edits and swaps", () => {
         const ping = ++pings;
         const peers = current.descriptor.scratchUrl ? note : current.handle;
         const heard = recorders.map((x) => x.log.length);
-        peers._receiveInboundEphemeral("fuzz", ping);
+        // As the repo does: to every handle on the document it came for.
+        const everyHandle = new Set<H>([
+          note,
+          ...seenBackings,
+          ...pool.map((x) => x.handle),
+        ]);
+        const receive = (on: H, message: number) => {
+          for (const h of everyHandle) {
+            if (h.documentId !== on.documentId) continue;
+            h.emit("ephemeral-message", {
+              handle: h,
+              senderId: "fuzz" as never,
+              originId: "origin" as never,
+              message,
+            });
+          }
+        };
+        receive(peers, ping);
         for (const { handle } of pool) {
-          if (handle !== peers) handle._receiveInboundEphemeral("fuzz", -ping);
+          if (handle.documentId !== peers.documentId) receive(handle, -ping);
         }
         recorders.forEach((x, i) => {
           const hears = x.event === PEER && !x.owner.detached;
@@ -305,15 +323,15 @@ describe("fuzz: handles across edits and swaps", () => {
         } else if (op === 2 && !t.view) {
           label = `change through ${t.h.url}`;
           try {
-            if (t.h === root) root.change((d) => mutate(d, r));
+            if (t.h === root) await root.change((d) => mutate(d, r));
             else {
               const scoped = t.h.doc();
-              if (typeof scoped === "string") t.h.change(`s${r.int(9)}`);
+              if (typeof scoped === "string") await t.h.change(`s${r.int(9)}`);
               else if (scoped && typeof scoped === "object" && "y" in scoped)
-                t.h.change((d: { y: number }) => {
+                await t.h.change((d: { y: number }) => {
                   d.y = r.int(100);
                 });
-              else root.change((d) => mutate(d, r));
+              else await root.change((d) => mutate(d, r));
             }
           } catch {
             // A path that doesn't resolve can't be written; the real handle
@@ -321,11 +339,11 @@ describe("fuzz: handles across edits and swaps", () => {
           }
         } else if (op === 3) {
           label = `remote change on ${current.handle.url}`;
-          current.handle.change((d: Note) => mutate(d, r));
+          await current.handle.change((d: Note) => mutate(d, r));
         } else if (op === 4) {
           const other = r.pick(pool);
           label = `change on bystander ${other.handle.url}`;
-          other.handle.change((d: Note) => mutate(d, r));
+          await other.handle.change((d: Note) => mutate(d, r));
         } else if (op === 5) {
           const event = r.pick(LISTENED);
           label = `listen for ${event} on ${t.h.url}`;
@@ -364,11 +382,7 @@ describe("fuzz: handles across edits and swaps", () => {
             expect(view.openLeases()).toBe(next.descriptor.scratchUrl ? 1 : 0)
           );
           for (const x of tracked) {
-            if (
-              x.view &&
-              !x.detached &&
-              !next.handle.containsHeads(x.view.heads)
-            )
+            if (x.view && !x.detached && !next.handle.hasHeads(x.view.heads))
               x.detached = true;
             if (!x.detached) seenBackings.add(backingOf(x.h));
           }
@@ -439,16 +453,15 @@ describe("fuzz: descriptor races", () => {
       const r = rng(seed);
       const steps: string[] = [];
       const repo = new Repo();
-      const note = repo.create<Note>(initial());
-      const clones = [repo.clone(note), repo.clone(note)];
-      const laid = scratch.create<Note>();
-      laid.update(() => A.clone(note.doc()));
+      const note = await repo.create<Note>(initial());
+      const clones = [await repo.clone(note), await repo.clone(note)];
+      const laid = await scratch.clone(note);
       // A document nobody has, until it arrives.
       const missing = generateAutomergeUrl();
       // Heads the third clone doesn't have, until they arrive.
-      const late = repo.clone(note);
-      const ahead = new Repo().import<Note>(A.save(late.doc()));
-      ahead.change((d) => {
+      const late = await repo.clone(note);
+      const ahead = await new Repo().import<Note>(A.save(late.fullDoc()));
+      await ahead.change((d) => {
         d.title = "ahead";
       });
       const pinnedLate = stringifyAutomergeUrl({
@@ -502,10 +515,11 @@ describe("fuzz: descriptor races", () => {
           find(note.sub("nested", "x").url);
         } else if (op === 4) {
           steps.push("subscribe to progress");
-          // Transitions only, so start from what it says now.
-          const progress = view.overlay.findWithProgress(note.url);
-          const seen: string[] = [progress.peek().state];
-          progress.subscribe((s: QueryState<unknown>) => seen.push(s.state));
+          // Calls back at once with what it says now.
+          const seen: string[] = [];
+          view.overlay
+            .query(note.url)
+            .subscribe((s: QueryState<unknown>) => seen.push(s.status));
           progressions.push(seen);
         } else if (op === 5) {
           const controller = new AbortController();
@@ -516,7 +530,7 @@ describe("fuzz: descriptor races", () => {
           const which = r.int(3);
           if (which === 0) {
             steps.push("missing document arrives");
-            repo.import(A.save(note.doc()), {
+            await repo.import(A.save(note.fullDoc()), {
               docId: parseAutomergeUrl(missing).documentId,
             });
           } else if (which === 1) {
@@ -557,8 +571,8 @@ describe("fuzz: descriptor races", () => {
       }
       expect(handle.url).toBe(note.url);
       expect(handle.doc(), where).toEqual(finalBacking.doc());
-      const state = view.overlay.findWithProgress(note.url).peek();
-      expect(state.state, where).toBe("ready");
+      const state = view.overlay.query(note.url).state();
+      expect(state.status, where).toBe("ready");
       for (const seen of progressions) {
         expect(seen.at(-1), `${where}\n  progress saw ${seen}`).toBe("ready");
       }

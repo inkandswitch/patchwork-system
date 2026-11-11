@@ -19,8 +19,11 @@ let resolver: Resolver | undefined;
  * rather than leaving them to the automerge worker. What they load stays in
  * `repo`.
  */
-export function resolveHandoffsWith(repo: Repo): void {
-  resolver = createResolver(() => Promise.resolve(repo));
+export function resolveHandoffsWith(
+  repo: Repo,
+  connected?: () => boolean
+): void {
+  resolver = createResolver(() => Promise.resolve(repo), undefined, connected);
 }
 
 /** Answer a ResolveRequestMessage; false if `event` isn't one. */
@@ -31,20 +34,20 @@ export function handleResolveRequest(event: MessageEvent): boolean {
   const message = event.data as ResolveRequestMessage;
   const current = resolver;
   if (!current) {
-    port.postMessage({ type: "unavailable" } satisfies ResolveUnavailableMessage);
+    port.postMessage({
+      type: "unavailable",
+    } satisfies ResolveUnavailableMessage);
     return true;
   }
 
   const answer = () =>
     current
       .answer({ ...message, type: "request" })
-      .catch(
-        (error): HandoffReplyMessage => ({
-          id: message.id,
-          type: "response",
-          response: { status: 557, body: String(error) },
-        })
-      )
+      .catch((error): HandoffReplyMessage => ({
+        id: message.id,
+        type: "response",
+        response: { status: 557, body: String(error) },
+      }))
       .then((reply) =>
         port.postMessage(
           reply ?? ({ type: "unavailable" } satisfies ResolveUnavailableMessage)
@@ -59,7 +62,10 @@ export function handleResolveRequest(event: MessageEvent): boolean {
   // Released once the reply is posted, or when this tab goes.
   const lock = `@patchwork/resolve/${message.id}/${crypto.randomUUID()}`;
   void navigator.locks.request(lock, () => {
-    port.postMessage({ type: "accepted", lock } satisfies ResolveAcceptedMessage);
+    port.postMessage({
+      type: "accepted",
+      lock,
+    } satisfies ResolveAcceptedMessage);
     return answer();
   });
   return true;

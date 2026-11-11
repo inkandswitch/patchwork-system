@@ -136,7 +136,9 @@ function isValidHandleUrl(url: string): boolean {
 
 function assertValidHandleUrl(url: string): asserts url is HandleUrl {
   if (!isValidHandleUrl(url)) {
-    throw new Error(`[edge-handles] invalid handle URL: ${JSON.stringify(url)}`);
+    throw new Error(
+      `[edge-handles] invalid handle URL: ${JSON.stringify(url)}`
+    );
   }
 }
 
@@ -180,9 +182,9 @@ const finalRegistry = new FinalizationRegistry<TeardownBundle>(
   }
 );
 
-export class EdgeHandle<TValue = unknown>
-  implements Handle<TValue | undefined>
-{
+export class EdgeHandle<TValue = unknown> implements Handle<
+  TValue | undefined
+> {
   readonly repo: Repo;
   readonly doc: DocHandle<EdgeHandleDoc>;
   readonly url: AutomergeUrl;
@@ -274,7 +276,9 @@ export class EdgeHandle<TValue = unknown>
    * target, `undefined` too (what a target makes of a clear is its business).
    * A `change` made while one is fanning out (a cycle) is dropped.
    */
-  change(fnOrValue: SubChangeFn<TValue | undefined> | TValue | undefined): void {
+  change(
+    fnOrValue: SubChangeFn<TValue | undefined> | TValue | undefined
+  ): void {
     if (this.#destroyed) return;
     if (this.#writing) {
       console.warn(
@@ -447,8 +451,7 @@ export class EdgeHandle<TValue = unknown>
     if (docPersist) {
       this.#persisted = true;
       const docValue = ("value" in next ? next.value : undefined) as
-        | TValue
-        | undefined;
+        TValue | undefined;
       if (!valuesEqual(docValue, this.#value)) {
         this.#value = docValue;
         this.#valueSubscribers.notify(this.#value);
@@ -712,8 +715,7 @@ export async function createEdgeHandle<T = unknown>(
     if (init.value !== undefined) initial.value = init.value;
   }
 
-  const handle = repo.create<EdgeHandleDoc>(initial);
-  await handle.whenReady();
+  const handle = await repo.create<EdgeHandleDoc>(initial);
   return openForDoc<T>(repo, handle, new Set());
 }
 
@@ -745,7 +747,6 @@ async function openEdgeHandle<T = unknown>(
   const promise = (async () => {
     const { documentId } = parseAutomergeUrl(url);
     const handle = await repo.find<EdgeHandleDoc>(documentId);
-    await handle.whenReady();
     let doc: { "@patchwork"?: { type?: string } } | undefined;
     try {
       doc = handle.doc();

@@ -1,5 +1,8 @@
-import type { AutomergeUrl, DocHandle, Repo } from "@automerge/vanillajs/slim";
-import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type {
+  AutomergeUrl,
+  DocHandle,
+  Repo,
+} from "@automerge/automerge-repo/slim";
 import type {
   ModuleWatcher,
   HasPatchworkMetadata,
@@ -7,9 +10,9 @@ import type {
 import type {
   AccountCreator,
   AccountDoc,
+  PatchworkHive,
 } from "@inkandswitch/patchwork-plugins";
 import type * as pluginsNS from "@inkandswitch/patchwork-plugins";
-import type { PublicReaderStatus } from "@inkandswitch/patchwork-bootloader";
 
 export type PluginsApi = typeof pluginsNS;
 
@@ -25,7 +28,6 @@ export interface SyncStateDocMessage {
 }
 
 export interface ServiceWorkerApi {
-  connectClassicSync: (server?: string) => Promise<void>;
   /**
    * Watch one document's heads at the sync server. Calls `listener` with
    * what the server holds now, then on every update. Returns unsubscribe.
@@ -97,8 +99,8 @@ export interface PatchworkOptions {
    */
   repo?: Repo;
 
-  /** The keyhive instance accompanying a provided {@link PatchworkOptions.repo}. */
-  hive?: AutomergeRepoKeyhive;
+  /** @deprecated Patchwork no longer uses keyhive: ignored. */
+  hive?: PatchworkHive;
 
   /**
    * How document navigation maps onto the URL. `"hash"` (the default) drives
@@ -144,12 +146,6 @@ export type BootStage =
 
 export interface BootProgress {
   stage: BootStage;
-  /**
-   * The public reader, which fetches documents made public to Patchwork
-   * (system packages are). On a first visit it catches up on every keyhive
-   * event the sync server holds before it can decrypt any of them.
-   */
-  publicReader?: PublicReaderStatus;
   /** How many of the listed packages have loaded, and the name of the last. */
   packages?: { loaded: number; total: number; latest?: string };
   /**
@@ -167,7 +163,8 @@ export interface BootProgress {
  */
 export interface Patchwork {
   readonly repo: Repo;
-  readonly hive?: AutomergeRepoKeyhive;
+  /** @deprecated Patchwork no longer uses keyhive: never set. */
+  readonly hive?: PatchworkHive;
   readonly account: DocHandle<AccountDoc>;
   readonly signer?: SignerIdentity;
 

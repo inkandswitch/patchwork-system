@@ -29,4 +29,4 @@ Bumping a version in the `catalog:` block of `pnpm-workspace.yaml` needs a chang
 
 Which packages to list: every published package that has the bumped entry in its `dependencies` or `peerDependencies`. Packages that only have it in `devDependencies` don't need a bump — their tarball is unchanged, and their `.d.ts` resolve the types against whatever the consumer installed.
 
-The `@automerge/*` and `@keyhive/*` entries are exact pins, not ranges. Two of our packages published against different pins means two copies of automerge-repo in the consumer's tree, which breaks document handle identity. Bump them together in one changeset and say which version they moved to.
+The `@automerge/*` entries are exact pins, not ranges. Two of our packages published against different pins means two copies of automerge-repo in the consumer's tree, which breaks document handle identity. Bump them together in one changeset and say which version they moved to.

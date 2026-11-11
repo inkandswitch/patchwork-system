@@ -10,8 +10,8 @@ async function createSubdoc<D>(
   type: string,
   init: (doc: D) => void
 ) {
-  const handle = await repo.create2<D & HasPatchworkMetadata>();
-  handle.change((doc: D & HasPatchworkMetadata) => {
+  const handle = await repo.create<D & HasPatchworkMetadata>();
+  await handle.change((doc: D & HasPatchworkMetadata) => {
     doc["@patchwork"] = { type };
     init(doc);
   });

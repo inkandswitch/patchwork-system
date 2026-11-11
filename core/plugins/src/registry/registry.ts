@@ -42,8 +42,11 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
       if (sourceOf(existing.importUrl) == sourceOf(importUrl)) {
         log(`updating ${plugin.id} provided by "${existing.importUrl}"`);
       } else {
+        // The stack says who registered the newcomer: a package list, a
+        // suggested import, or a tool importing a package itself.
         console.warn(
-          `overriding "${plugin.id}" provided by "${existing.importUrl}" with new plugin provided by "${importUrl}"`
+          `overriding "${plugin.id}" provided by "${existing.importUrl}" with new plugin provided by "${importUrl}"`,
+          new Error().stack
         );
       }
     }

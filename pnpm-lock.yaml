@@ -36,36 +36,17 @@ catalogs:
 
 overrides:
   '@automerge/automerge': 3.5.0
-  '@automerge/automerge-repo': 2.6.0-subduction.49
-  '@automerge/automerge-repo-keyhive': 0.8.0-alpha.1
-  '@automerge/automerge-repo-network-broadcastchannel': 2.6.0-subduction.49
-  '@automerge/automerge-repo-network-messagechannel': 2.6.0-subduction.49
-  '@automerge/automerge-repo-network-websocket': 2.6.0-subduction.49
-  '@automerge/automerge-repo-react-hooks': 2.6.0-subduction.49
-  '@automerge/automerge-repo-storage-indexeddb': 2.6.0-subduction.49
-  '@automerge/automerge-subduction': 0.20.1
-  '@automerge/react': 2.6.0-subduction.49
-  '@automerge/vanillajs': 2.6.0-subduction.49
-  '@keyhive/keyhive': 0.6.0
+  '@automerge/automerge-repo': 3.0.0-alpha.2
+  '@automerge/automerge-repo-subduction': 3.0.0-alpha.2
+  '@automerge/automerge-repo-subduction-network-websocket': 3.0.0-alpha.2
+  '@automerge/automerge-repo-subduction-storage-indexeddb': 3.0.0-alpha.2
+  '@automerge/automerge-repo-react-hooks': 3.0.0-alpha.2
+  '@automerge/react': 3.0.0-alpha.2
+  '@automerge/subduction': 0.27.0
   solid-automerge: ^2.0.1
-  '@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@automerge/automerge-repo': 2.6.0-subduction.48
-  '@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@automerge/automerge-repo-network-websocket': 2.6.0-subduction.48
-  '@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@automerge/automerge-subduction': 0.16.1
-  '@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@keyhive/keyhive': 0.3.0-alpha.1
-  '@automerge/automerge-repo@2.6.0-subduction.48>@automerge/automerge-subduction': 0.16.1
-  '@automerge/automerge-repo-network-broadcastchannel@2.6.0-subduction.48>@automerge/automerge-repo': 2.6.0-subduction.48
-  '@automerge/automerge-repo-network-messagechannel@2.6.0-subduction.48>@automerge/automerge-repo': 2.6.0-subduction.48
-  '@automerge/automerge-repo-network-websocket@2.6.0-subduction.48>@automerge/automerge-repo': 2.6.0-subduction.48
-  '@automerge/automerge-repo-storage-indexeddb@2.6.0-subduction.48>@automerge/automerge-repo': 2.6.0-subduction.48
-  '@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo': 2.6.0-subduction.48
-  '@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo-network-broadcastchannel': 2.6.0-subduction.48
-  '@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo-network-messagechannel': 2.6.0-subduction.48
-  '@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo-network-websocket': 2.6.0-subduction.48
-  '@automerge/vanillajs@2.6.0-subduction.48>@automerge/automerge-repo-storage-indexeddb': 2.6.0-subduction.48
 
 patchedDependencies:
-  '@automerge/automerge-repo@2.6.0-subduction.48': 3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e
-  '@automerge/automerge-repo@2.6.0-subduction.49': 21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1
+  '@automerge/automerge-repo-subduction@3.0.0-alpha.2': ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2
 
 importers:
 
@@ -96,29 +77,20 @@ importers:
         specifier: 3.5.0
         version: 3.5.0
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      '@automerge/automerge-repo-keyhive':
-        specifier: 0.8.0-alpha.1
-        version: 0.8.0-alpha.1(ws@8.21.1)
-      '@automerge/automerge-repo-network-broadcastchannel':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
-      '@automerge/automerge-repo-network-messagechannel':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
-      '@automerge/automerge-repo-network-websocket':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
-      '@automerge/automerge-repo-storage-indexeddb':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
-      '@automerge/automerge-subduction':
-        specifier: 0.20.1
-        version: 0.20.1
-      '@automerge/vanillajs':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
+      '@automerge/automerge-repo-subduction':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2)
+      '@automerge/automerge-repo-subduction-network-websocket':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(@automerge/automerge-repo-subduction@3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2))(@automerge/automerge-repo@3.0.0-alpha.2)
+      '@automerge/automerge-repo-subduction-storage-indexeddb':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(@automerge/automerge-repo-subduction@3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2))
+      '@automerge/subduction':
+        specifier: 0.27.0
+        version: 0.27.0
       '@codemirror/commands':
         specifier: 'catalog:'
         version: 6.10.4
@@ -143,9 +115,6 @@ importers:
       '@inkandswitch/patchwork-providers':
         specifier: workspace:^
         version: link:../../packages/providers/core
-      '@keyhive/keyhive':
-        specifier: 0.6.0
-        version: 0.6.0
       '@types/debug':
         specifier: ^4.1.13
         version: 4.1.13
@@ -165,6 +134,9 @@ importers:
         specifier: ^0.1.4
         version: 0.1.4
     devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.13.3
       esbuild:
         specifier: ^0.23.1
         version: 0.23.1
@@ -185,14 +157,14 @@ importers:
         specifier: 3.5.0
         version: 3.5.0
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      '@automerge/automerge-repo-keyhive':
-        specifier: 0.8.0-alpha.1
-        version: 0.8.0-alpha.1(ws@8.21.1)
-      '@automerge/automerge-subduction':
-        specifier: 0.20.1
-        version: 0.20.1
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
+      '@automerge/automerge-repo-subduction':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2)
+      '@automerge/subduction':
+        specifier: 0.27.0
+        version: 0.27.0
       '@inkandswitch/patchwork-filesystem':
         specifier: workspace:^
         version: link:../filesystem
@@ -230,8 +202,8 @@ importers:
         specifier: 3.5.0
         version: 3.5.0
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
       debug:
         specifier: ^4.4.3
         version: 4.4.3
@@ -239,12 +211,12 @@ importers:
         specifier: ^2.0.3
         version: 2.0.3
     devDependencies:
-      '@automerge/automerge-repo-network-messagechannel':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
-      '@automerge/automerge-subduction':
-        specifier: 0.20.1
-        version: 0.20.1
+      '@automerge/automerge-repo-subduction':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2)
+      '@automerge/subduction':
+        specifier: 0.27.0
+        version: 0.27.0
       '@types/debug':
         specifier: ^4.1.13
         version: 4.1.13
@@ -257,51 +229,24 @@ importers:
 
   core/patchwork:
     dependencies:
-      '@ark-0.6/automerge-repo':
-        specifier: npm:@automerge/automerge-repo@2.6.0-subduction.48
-        version: '@automerge/automerge-repo@2.6.0-subduction.48(patch_hash=3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e)'
-      '@ark-0.6/automerge-repo-keyhive':
-        specifier: npm:@automerge/automerge-repo-keyhive@0.6.0-alpha.1
-        version: '@automerge/automerge-repo-keyhive@0.6.0-alpha.1(ws@8.21.1)'
-      '@ark-0.6/automerge-repo-network-broadcastchannel':
-        specifier: npm:@automerge/automerge-repo-network-broadcastchannel@2.6.0-subduction.48
-        version: '@automerge/automerge-repo-network-broadcastchannel@2.6.0-subduction.48'
-      '@ark-0.6/automerge-repo-network-messagechannel':
-        specifier: npm:@automerge/automerge-repo-network-messagechannel@2.6.0-subduction.48
-        version: '@automerge/automerge-repo-network-messagechannel@2.6.0-subduction.48'
-      '@ark-0.6/automerge-repo-network-websocket':
-        specifier: npm:@automerge/automerge-repo-network-websocket@2.6.0-subduction.48
-        version: '@automerge/automerge-repo-network-websocket@2.6.0-subduction.48'
-      '@ark-0.6/automerge-repo-storage-indexeddb':
-        specifier: npm:@automerge/automerge-repo-storage-indexeddb@2.6.0-subduction.48
-        version: '@automerge/automerge-repo-storage-indexeddb@2.6.0-subduction.48'
-      '@ark-0.6/automerge-subduction':
-        specifier: npm:@automerge/automerge-subduction@0.16.1
-        version: '@automerge/automerge-subduction@0.16.1'
-      '@ark-0.6/keyhive':
-        specifier: npm:@keyhive/keyhive@0.3.0-alpha.1
-        version: '@keyhive/keyhive@0.3.0-alpha.1'
-      '@ark-0.6/vanillajs':
-        specifier: npm:@automerge/vanillajs@2.6.0-subduction.48
-        version: '@automerge/vanillajs@2.6.0-subduction.48'
       '@automerge/automerge':
         specifier: 3.5.0
         version: 3.5.0
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      '@automerge/automerge-repo-keyhive':
-        specifier: 0.8.0-alpha.1
-        version: 0.8.0-alpha.1(ws@8.21.1)
-      '@automerge/automerge-repo-storage-indexeddb':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
-      '@automerge/automerge-subduction':
-        specifier: 0.20.1
-        version: 0.20.1
-      '@automerge/vanillajs':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
+      '@automerge/automerge-repo-subduction':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2)
+      '@automerge/automerge-repo-subduction-network-websocket':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(@automerge/automerge-repo-subduction@3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2))(@automerge/automerge-repo@3.0.0-alpha.2)
+      '@automerge/automerge-repo-subduction-storage-indexeddb':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(@automerge/automerge-repo-subduction@3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2))
+      '@automerge/subduction':
+        specifier: 0.27.0
+        version: 0.27.0
       '@inkandswitch/patchwork-bootloader':
         specifier: workspace:^
         version: link:../bootloader
@@ -365,11 +310,8 @@ importers:
         specifier: 3.5.0
         version: 3.5.0
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      '@automerge/automerge-repo-keyhive':
-        specifier: 0.8.0-alpha.1
-        version: 0.8.0-alpha.1(ws@8.21.1)
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
       '@inkandswitch/patchwork-filesystem':
         specifier: workspace:^
         version: link:../filesystem
@@ -396,11 +338,14 @@ importers:
         specifier: 3.5.0
         version: 3.5.0
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      '@automerge/automerge-subduction':
-        specifier: 0.20.1
-        version: 0.20.1
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
+      '@automerge/automerge-repo-subduction':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2)
+      '@automerge/subduction':
+        specifier: 0.27.0
+        version: 0.27.0
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -414,11 +359,14 @@ importers:
         specifier: 3.5.0
         version: 3.5.0
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      '@automerge/automerge-subduction':
-        specifier: 0.20.1
-        version: 0.20.1
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
+      '@automerge/automerge-repo-subduction':
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2)
+      '@automerge/subduction':
+        specifier: 0.27.0
+        version: 0.27.0
       happy-dom:
         specifier: ^20.0.0
         version: 20.11.0
@@ -436,11 +384,11 @@ importers:
         version: link:../../core
     devDependencies:
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
       '@automerge/automerge-repo-react-hooks':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@types/react':
         specifier: 'catalog:'
         version: 18.3.1
@@ -458,11 +406,11 @@ importers:
         version: link:../../core
     devDependencies:
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
       solid-automerge:
         specifier: ^2.0.1
-        version: 2.0.1(@automerge/automerge-repo@2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1))(solid-js@1.9.14)
+        version: 2.0.1(@automerge/automerge-repo@3.0.0-alpha.2)(solid-js@1.9.14)
       solid-js:
         specifier: ^1.9.13
         version: 1.9.14
@@ -473,17 +421,8 @@ importers:
   sites/bench:
     dependencies:
       '@automerge/automerge-repo':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      '@automerge/automerge-repo-network-broadcastchannel':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
-      '@automerge/automerge-repo-storage-indexeddb':
-        specifier: 2.6.0-subduction.49
-        version: 2.6.0-subduction.49
-      '@automerge/automerge-subduction':
-        specifier: 0.20.1
-        version: 0.20.1
+        specifier: 3.0.0-alpha.2
+        version: 3.0.0-alpha.2
       '@inkandswitch/patchwork':
         specifier: workspace:*
         version: link:../../core/patchwork
@@ -506,77 +445,39 @@ importers:
 
 packages:
 
-  '@automerge/automerge-repo-keyhive@0.6.0-alpha.1':
-    resolution: {integrity: sha512-U/KVwRlKevLfqsZ37uSZgOXfQsR1pwQ0soRgq+BnERf7nhKN+LrdpK7xHDXv8Z4xTa1bAmnmCSAnvARjVZ3+Iw==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo-keyhive@0.8.0-alpha.1':
-    resolution: {integrity: sha512-CdytRHw97dxfo9ikcYLTnyXknoXwRYlSXA5goDuB9+/W+VpbZPUtaggWx6NB5/CZEqcq5Qflvkdq9AIfDLBXKg==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo-network-broadcastchannel@2.6.0-subduction.48':
-    resolution: {integrity: sha512-fyq/ZqWkrYOuNrQ917KeCaRSuY6fzqH6Q4KCb5czjwKPKO2zFIGKVfK5hZjYsHGWRKuh5BzViaONHn6bJ0Jk4w==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo-network-broadcastchannel@2.6.0-subduction.49':
-    resolution: {integrity: sha512-n9G5Kb4fr8nX9vt2sStVtA2AYlgVIlJL/UOz4G/uW6Wp6v4Tr2OWzLSa+dL0MyrDjumFUhXlqjulzKVtHOMkGA==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo-network-messagechannel@2.6.0-subduction.48':
-    resolution: {integrity: sha512-pf+cmCi/TWQZpqrm+iinVpIM2Ecfzp8JpGEo28SPbE2Q8+eLyO2cz1Dssnuep1+KQ8k7Dfx7aUF9AD7/6jAvTQ==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo-network-messagechannel@2.6.0-subduction.49':
-    resolution: {integrity: sha512-4ciBhzHzghEGF7u+koATwu5erKgdYmAWjxiVSLeUUds+d60xOvXU38f/75aZ94CmJdbBhwpz3C+vlsU+lV2CHg==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo-network-websocket@2.6.0-subduction.48':
-    resolution: {integrity: sha512-TRKAq4iTdrSpOQYxyKZMJDJ5Civa+vONrAHBZkpK+DGShzqBB6vCdTCsrBGBF2Q63H33qQM0XYBQEQKIa/zM+Q==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo-network-websocket@2.6.0-subduction.49':
-    resolution: {integrity: sha512-9kDSyUW0Zcgz0nOYfu8K3c0IQqkPgdTrJPuhjke11lJ7oM+vJxtOYEstkJ/6xH78vkZU8i/96GbpjpTOAZgw8g==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo-react-hooks@2.6.0-subduction.49':
-    resolution: {integrity: sha512-r/GE1HBEuaG0njchLKGprfev7m2MwMlY9uN4l4kyFN2ahemPtel0Lmr/Z27B+4avpNceYzcGIpcwaQvLrgoJGg==}
+  '@automerge/automerge-repo-react-hooks@3.0.0-alpha.2':
+    resolution: {integrity: sha512-Mpg2XRZ+aEqTVVJVuy/rpDlqJsGJjnXv9ea4t4d8/+9AXe2ToWdgQC46iVu7rjDl50Z9IFH1r3Smlg6AjM2Yow==}
     engines: {node: '>=22.13'}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
 
-  '@automerge/automerge-repo-storage-indexeddb@2.6.0-subduction.48':
-    resolution: {integrity: sha512-7XIn/iGrAVS4ugva8m0bU1shhRtuy/fdCAgF6qaIEvbi7XQllLVn3miTTiusLaksNhnRtbMfDLUknazU+vVHew==}
+  '@automerge/automerge-repo-subduction-network-websocket@3.0.0-alpha.2':
+    resolution: {integrity: sha512-rEauJ1qxQS/YDFZnBzibQ20UUCdwCVoUfpnN2V/WQC5RNu7BLfA0BIPjZXJ4SS1PG8QDL1+DB/3Axb5YkX8qzQ==}
+    engines: {node: '>=22.13'}
+    peerDependencies:
+      '@automerge/automerge-repo': 3.0.0-alpha.2
+      '@automerge/automerge-repo-subduction': 3.0.0-alpha.2
+
+  '@automerge/automerge-repo-subduction-storage-indexeddb@3.0.0-alpha.2':
+    resolution: {integrity: sha512-X0O849lqOowquEetGw4JqKLjdQzspQjL39x9mCWHK3uXXZpllELP9eYm4G3kT3QgVTEd58JbQ21jFHhYc1YsKg==}
+    engines: {node: '>=22.13'}
+    peerDependencies:
+      '@automerge/automerge-repo-subduction': 3.0.0-alpha.2
+
+  '@automerge/automerge-repo-subduction@3.0.0-alpha.2':
+    resolution: {integrity: sha512-RDK7jJFwPCz90iuYK4WlX2S1jsNcpiOXmDJzRkMJXyn2JTWIDQebqVQLw8pnEo1J+VTKvz9vImq8UY+6QdMO7w==}
     engines: {node: '>=22.13'}
 
-  '@automerge/automerge-repo-storage-indexeddb@2.6.0-subduction.49':
-    resolution: {integrity: sha512-IWqLJUnVx2+3ieKdSCEJ19FSjnBf9JWhsSf1Jj7VlRqpmQjrgbzVhj/90ojFZA9mdjvDZjHvVbAr+jiA/rd3Kw==}
+  '@automerge/automerge-repo@3.0.0-alpha.2':
+    resolution: {integrity: sha512-M7HCT5fKVcsW3Tu9NNfIoMkiKHdOLipfIUifuGIIrDFCHkNGjuZG3TPkq0+c7cxjshqgym7Oh7j63MhbF0RD0g==}
     engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo@2.6.0-subduction.48':
-    resolution: {integrity: sha512-HNS1YsD0XmQ0vtwIincF7NvEBrQuOMnk+mjCVluRiIpUFvcaVeNAFXCCyBVeXubmg88AHe+LkIQ96v/lyHZ7Wg==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-repo@2.6.0-subduction.49':
-    resolution: {integrity: sha512-2RRd2rrgrAMIj4hXtDCvNtqqpurjkw9I8Hdv9W+CRhMIZPl8QaAVmG1Bs4+TKBELw6WLQA6ISlrpnIChGzhpDA==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/automerge-subduction@0.16.1':
-    resolution: {integrity: sha512-alH7U4eYn0O7sT6hNLv7CJhNODJi+QD6qfRQTNfZCxL3Q5JZdJ8lFpdvXUkBf+I3bu0GLvVlTaYPWGrBihjpIw==}
-
-  '@automerge/automerge-subduction@0.20.1':
-    resolution: {integrity: sha512-lkRDaVr1I+C1N/IKSvn+TtT7WJnmxM0ntfUshG40Xi3INTL2//e8NcMJ8tEXh4GZYdCof37aG/diNuMLndHApQ==}
 
   '@automerge/automerge@3.5.0':
     resolution: {integrity: sha512-ejbqJWfXWM2QbTcUK/5ugYiQiyOP7LYVAp/RuSvthCc07oek0FClMxEuouuhjrLjVPDSI34RP1ftGc45PF7WRA==}
 
-  '@automerge/vanillajs@2.6.0-subduction.48':
-    resolution: {integrity: sha512-pmgwTtukitG5kY60cJ7x527IQgeG0NSnoSU35Is1xmswS+05QYpZ1vVdeyKNlGcIz2Kttdvn4vzm/45h0eicYQ==}
-    engines: {node: '>=22.13'}
-
-  '@automerge/vanillajs@2.6.0-subduction.49':
-    resolution: {integrity: sha512-hcIvt0lSiYAwrSZ4ruatnZpPssjGJ0sJSyWsnytuBhQ2cgEDlFz8YesUf9Us4N7UeREMOo9cDsNZwE52XUSdkw==}
-    engines: {node: '>=22.13'}
+  '@automerge/subduction@0.27.0':
+    resolution: {integrity: sha512-A4EQ9+iiQS8gZ79ZouDvLoaxkuPex2mhzsZ7Aq3JS0KqlKbrWcSfqiAzVCeJ8nvkeVkadFgsT/mozJqCJ+0/OQ==}
 
   '@babel/runtime@7.29.7':
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
@@ -1159,12 +1060,6 @@ packages:
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
 
-  '@keyhive/keyhive@0.3.0-alpha.1':
-    resolution: {integrity: sha512-2MsnK989GTGR+j+2LwyiekeaXYAWcBUY5Em4b6nVOLRmLJn/rtdgaB9EfOi52gkxW0TqAi3njrHXX0eJBdoxXA==}
-
-  '@keyhive/keyhive@0.6.0':
-    resolution: {integrity: sha512-Y9Vikg1EWAxs7doLgKVNY0qxqANmiP0O5UT25G+UAqNY4FkClEjH3VVE2iuzAaof0cZ9lP0bIvw8iL49pqoeRw==}
-
   '@lezer/common@1.5.2':
     resolution: {integrity: sha512-sxQE460fPZyU3sdc8lafxiPwJHBzZRy/udNFynGQky1SePYBdhkBl1kOagA9uT3pxR8K09bOrmTUqA9wb/PjSQ==}
 
@@ -1186,10 +1081,6 @@ packages:
   '@noble/hashes@1.8.0':
     resolution: {integrity: sha512-jCs9ldd7NwzpgXDIf6P3+NrHh9/sD6CQdxHyjQI+h/6rDNo88ypBxxz45UDuZHz9r3tNz7N/VInSVoVdtXEI4A==}
     engines: {node: ^14.21.3 || >=16}
-
-  '@noble/hashes@2.2.0':
-    resolution: {integrity: sha512-IYqDGiTXab6FniAgnSdZwgWbomxpy9FtYvLKs7wCUs2a8RkITG+DFGO1DM9cr+E3/RgADRpFjrKVaJ1z6sjtEg==}
-    engines: {node: '>= 20.19.0'}
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -1578,9 +1469,6 @@ packages:
     resolution: {integrity: sha512-7MptL8U0cqcFdzIzwOTHoilX9x5BrNqye7Z/LuC7kCMRio1EMSyqRK3BEAUD7sXRq4iT4AzTVuZdhgQ2TCvYLg==}
     engines: {node: '>=8.6.0'}
 
-  fast-sha256@1.3.0:
-    resolution: {integrity: sha512-n11RGP/lrWEFI/bWdygLxhI+pVeo1ZYIVwvvPkW7azl/rOy+F3HYRZ2K5zeE9mmkhQppyv9sQFx0JM9UabnpPQ==}
-
   fastq@1.20.1:
     resolution: {integrity: sha512-GGToxJ/w1x32s/D2EKND7kTil4n8OVk/9mycTc4VDza13lOvpUZTGX3mFSCtV9ksdGBVzvsyAVLM6mHFThxXxw==}
 
@@ -1674,11 +1562,6 @@ packages:
 
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
-
-  isomorphic-ws@5.0.0:
-    resolution: {integrity: sha512-muId7Zzn9ywDsyXgTIafTry2sV3nySZeUDe6YedVd1Hvuuep5AsIlqK+XefWpYTyJG5e503F2xIuT2lcU6rCSw==}
-    peerDependencies:
-      ws: '*'
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
@@ -1921,7 +1804,7 @@ packages:
   solid-automerge@2.0.1:
     resolution: {integrity: sha512-GhYw6/KGYH5q2a44UMnGOFdJ91YW8TGa4S5UFFRw/IC2Q6B0lfLGizUNitqYu39zt1citmILxqFrGhHThqNlOQ==}
     peerDependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.49
+      '@automerge/automerge-repo': 3.0.0-alpha.2
       solid-js: ^1.9.13
 
   solid-js@1.9.14:
@@ -2012,10 +1895,6 @@ packages:
   universalify@0.1.2:
     resolution: {integrity: sha512-rBJeI5CXAlmy1pV+617WB9J63U6XcazHHF2f2dbJix4XzpUF0RS3Zbj0FGIOCAva5P/d/GBOYaACQ1w+0azUkg==}
     engines: {node: '>= 4.0.0'}
-
-  uuid@14.0.1:
-    resolution: {integrity: sha512-6ZxzVpzDXDa3bJWaHilVayA+BH/1zmxCJoVgvmqJnid/gPoKHxUrS/aC/T6LGQtNHT+XHG9fXPJB4d+IrU30Ew==}
-    hasBin: true
 
   vite-node@3.2.4:
     resolution: {integrity: sha512-EbKSKh+bh1E1IFxeO0pg1n4dvoOTt0UDiXMd/qn++r98+jPO1xtJilvXldeuQ8giIB5IkpjCgMleHMNEsGH6pg==}
@@ -2124,194 +2003,48 @@ packages:
       utf-8-validate:
         optional: true
 
-  xstate@5.32.5:
-    resolution: {integrity: sha512-ULazi1oe6wGrXl0Frb6otSlkm5HLifbbVTkMk5kkSKqz4TkxJaVpnl6jOJwKeid3ORPxYyZQgNLUSYX9q65SIA==}
-
 snapshots:
 
-  '@automerge/automerge-repo-keyhive@0.6.0-alpha.1(ws@8.21.1)':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.48(patch_hash=3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e)
-      '@automerge/automerge-repo-network-websocket': 2.6.0-subduction.48
-      '@automerge/automerge-subduction': 0.16.1
-      '@keyhive/keyhive': 0.3.0-alpha.1
-      '@noble/hashes': 2.2.0
-      cbor-x: 1.6.4
-      eventemitter3: 5.0.4
-      isomorphic-ws: 5.0.0(ws@8.21.1)
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-
-  '@automerge/automerge-repo-keyhive@0.8.0-alpha.1(ws@8.21.1)':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      '@automerge/automerge-repo-network-websocket': 2.6.0-subduction.49
-      '@automerge/automerge-subduction': 0.20.1
-      '@keyhive/keyhive': 0.6.0
-      '@noble/hashes': 2.2.0
-      cbor-x: 1.6.4
-      eventemitter3: 5.0.4
-      isomorphic-ws: 5.0.0(ws@8.21.1)
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-      - ws
-
-  '@automerge/automerge-repo-network-broadcastchannel@2.6.0-subduction.48':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.48(patch_hash=3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e)
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@automerge/automerge-repo-network-broadcastchannel@2.6.0-subduction.49':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@automerge/automerge-repo-network-messagechannel@2.6.0-subduction.48':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.48(patch_hash=3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e)
-      eventemitter3: 5.0.4
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@automerge/automerge-repo-network-messagechannel@2.6.0-subduction.49':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      eventemitter3: 5.0.4
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@automerge/automerge-repo-network-websocket@2.6.0-subduction.48':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.48(patch_hash=3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e)
-      cbor-x: 1.6.4
-      debug: 4.4.3
-      eventemitter3: 5.0.4
-      ws: 8.21.1
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@automerge/automerge-repo-network-websocket@2.6.0-subduction.49':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      cbor-x: 1.6.4
-      debug: 4.4.3
-      eventemitter3: 5.0.4
-      ws: 8.21.1
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@automerge/automerge-repo-react-hooks@2.6.0-subduction.49(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
+  '@automerge/automerge-repo-react-hooks@3.0.0-alpha.2(react-dom@18.3.1(react@18.3.1))(react@18.3.1)':
     dependencies:
       '@automerge/automerge': 3.5.0
-      '@automerge/automerge-repo': 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
+      '@automerge/automerge-repo': 3.0.0-alpha.2
       eventemitter3: 5.0.4
       react: 18.3.1
       react-dom: 18.3.1(react@18.3.1)
     transitivePeerDependencies:
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
-  '@automerge/automerge-repo-storage-indexeddb@2.6.0-subduction.48':
+  '@automerge/automerge-repo-subduction-network-websocket@3.0.0-alpha.2(@automerge/automerge-repo-subduction@3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2))(@automerge/automerge-repo@3.0.0-alpha.2)':
     dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.48(patch_hash=3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e)
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
+      '@automerge/automerge-repo': 3.0.0-alpha.2
+      '@automerge/automerge-repo-subduction': 3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2)
 
-  '@automerge/automerge-repo-storage-indexeddb@2.6.0-subduction.49':
+  '@automerge/automerge-repo-subduction-storage-indexeddb@3.0.0-alpha.2(@automerge/automerge-repo-subduction@3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2))':
     dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
+      '@automerge/automerge-repo-subduction': 3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2)
 
-  '@automerge/automerge-repo@2.6.0-subduction.48(patch_hash=3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e)':
+  '@automerge/automerge-repo-subduction@3.0.0-alpha.2(patch_hash=ab9f87d3734731318c58ac0a27fcf0f602b68dc6cc4e589cfb2601fcb18addf2)':
+    dependencies:
+      '@automerge/automerge-repo': 3.0.0-alpha.2
+      '@automerge/subduction': 0.27.0
+      cbor-x: 1.6.4
+    transitivePeerDependencies:
+      - supports-color
+
+  '@automerge/automerge-repo@3.0.0-alpha.2':
     dependencies:
       '@automerge/automerge': 3.5.0
-      '@automerge/automerge-subduction': 0.16.1
       bs58check: 4.0.0
       cbor-x: 1.6.4
       debug: 4.4.3
       eventemitter3: 5.0.4
-      fast-sha256: 1.3.0
-      isomorphic-ws: 5.0.0(ws@8.21.1)
-      uuid: 14.0.1
-      ws: 8.21.1
-      xstate: 5.32.5
     transitivePeerDependencies:
-      - bufferutil
       - supports-color
-      - utf-8-validate
-
-  '@automerge/automerge-repo@2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)':
-    dependencies:
-      '@automerge/automerge': 3.5.0
-      '@automerge/automerge-subduction': 0.20.1
-      bs58check: 4.0.0
-      cbor-x: 1.6.4
-      debug: 4.4.3
-      eventemitter3: 5.0.4
-      fast-sha256: 1.3.0
-      isomorphic-ws: 5.0.0(ws@8.21.1)
-      uuid: 14.0.1
-      ws: 8.21.1
-      xstate: 5.32.5
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@automerge/automerge-subduction@0.16.1': {}
-
-  '@automerge/automerge-subduction@0.20.1': {}
 
   '@automerge/automerge@3.5.0': {}
 
-  '@automerge/vanillajs@2.6.0-subduction.48':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.48(patch_hash=3560381ba62410bed0716e7ef08af4200bcf8c0af4aa0794c1d5d05d23e97d5e)
-      '@automerge/automerge-repo-network-broadcastchannel': 2.6.0-subduction.48
-      '@automerge/automerge-repo-network-messagechannel': 2.6.0-subduction.48
-      '@automerge/automerge-repo-network-websocket': 2.6.0-subduction.48
-      '@automerge/automerge-repo-storage-indexeddb': 2.6.0-subduction.48
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
-
-  '@automerge/vanillajs@2.6.0-subduction.49':
-    dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
-      '@automerge/automerge-repo-network-broadcastchannel': 2.6.0-subduction.49
-      '@automerge/automerge-repo-network-messagechannel': 2.6.0-subduction.49
-      '@automerge/automerge-repo-network-websocket': 2.6.0-subduction.49
-      '@automerge/automerge-repo-storage-indexeddb': 2.6.0-subduction.49
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
+  '@automerge/subduction@0.27.0': {}
 
   '@babel/runtime@7.29.7': {}
 
@@ -2775,10 +2508,6 @@ snapshots:
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
 
-  '@keyhive/keyhive@0.3.0-alpha.1': {}
-
-  '@keyhive/keyhive@0.6.0': {}
-
   '@lezer/common@1.5.2': {}
 
   '@lezer/highlight@1.2.3':
@@ -2808,8 +2537,6 @@ snapshots:
   '@marijn/find-cluster-break@1.0.3': {}
 
   '@noble/hashes@1.8.0': {}
-
-  '@noble/hashes@2.2.0': {}
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:
@@ -3190,8 +2917,6 @@ snapshots:
       merge2: 1.4.1
       micromatch: 4.0.8
 
-  fast-sha256@1.3.0: {}
-
   fastq@1.20.1:
     dependencies:
       reusify: 1.1.0
@@ -3284,10 +3009,6 @@ snapshots:
   is-windows@1.0.2: {}
 
   isexe@2.0.0: {}
-
-  isomorphic-ws@5.0.0(ws@8.21.1):
-    dependencies:
-      ws: 8.21.1
 
   js-tokens@4.0.0: {}
 
@@ -3529,9 +3250,9 @@ snapshots:
 
   slash@3.0.0: {}
 
-  solid-automerge@2.0.1(@automerge/automerge-repo@2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1))(solid-js@1.9.14):
+  solid-automerge@2.0.1(@automerge/automerge-repo@3.0.0-alpha.2)(solid-js@1.9.14):
     dependencies:
-      '@automerge/automerge-repo': 2.6.0-subduction.49(patch_hash=21f240da042b5b197fd48a9391ebaa35217f6a768d11b503014baf8d2d3c5df1)
+      '@automerge/automerge-repo': 3.0.0-alpha.2
       '@solid-primitives/utils': 6.4.1(solid-js@1.9.14)
       cabbages: 0.2.10
       solid-js: 1.9.14
@@ -3605,8 +3326,6 @@ snapshots:
   undici-types@7.18.2: {}
 
   universalify@0.1.2: {}
-
-  uuid@14.0.1: {}
 
   vite-node@3.2.4(@types/node@24.13.3):
     dependencies:
@@ -3703,5 +3422,3 @@ snapshots:
       stackback: 0.0.2
 
   ws@8.21.1: {}
-
-  xstate@5.32.5: {}

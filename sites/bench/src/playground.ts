@@ -36,13 +36,13 @@ async function start() {
   const bench = window.bench;
   const repo = window.repo;
   if (!repo) {
-    document.body.textContent = `${bench.mode}: no repo in this mode`;
+    document.body.textContent = `${bench.mode}: no repo`;
     return;
   }
 
   let url = params.get("doc") as AutomergeUrl | null;
   if (!url) {
-    const created = repo.create<Doc>({ items: [] });
+    const created = await repo.create<Doc>({ items: [] });
     url = created.url;
     params.set("doc", url);
     history.replaceState(null, "", `?${params}`);
@@ -51,7 +51,6 @@ async function start() {
   const { handle } = (await bench.find(url)) as unknown as {
     handle: DocHandle<Doc>;
   };
-  await handle.whenReady();
 
   document.head.append(
     Object.assign(document.createElement("style"), { textContent: css })
@@ -73,8 +72,6 @@ async function start() {
           <dt>server heads</dt><dd id="sheads"></dd>
           <dt>in step</dt><dd id="instep"></dd>
           <dt>sync rounds</dt><dd id="rounds"></dd>
-          <dt>storage writes</dt><dd id="writes"></dd>
-          <dt>server bytes</dt><dd id="bytes"></dd>
           <dt>items</dt><dd id="count"></dd>
         </dl>
       </aside>
@@ -138,10 +135,7 @@ async function start() {
         ? "yes"
         : "no"
       : "unknown";
-    $("rounds").textContent = String(bench.syncRounds());
-    $("writes").textContent = String(bench.storageWrites() ?? "—");
-    $("bytes").textContent = String(bench.serverBytes() ?? "—");
-    const up = await bench.isOnline();
+        const up = await bench.isOnline();
     $("dot").className = `dot ${up ? "on" : "off"}`;
     $("net").textContent = up ? "connected" : "offline";
   }, 300);

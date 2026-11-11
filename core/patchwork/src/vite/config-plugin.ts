@@ -58,7 +58,6 @@ export function config(options: PatchworkVitePluginOptions = {}): Plugin {
         envPrefix: ["VITE_", "PATCHWORK_"],
         define: buildDefines(options),
         optimizeDeps: {
-          exclude: ["@automerge/automerge-repo-storage-indexeddb"],
           // Dep pre-bundling runs esbuild directly, outside the plugin
           // pipeline that applies `define`. Without this the page would fall
           // back to the built-in storage prefix while the workers used the

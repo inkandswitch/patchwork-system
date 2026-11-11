@@ -5,8 +5,6 @@ import {
   type Repo,
 } from "@automerge/automerge-repo/slim";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { isKeyhiveDoc } from "./keyhive.js";
 
 /**
  * Site-facing view of the account document. Scalar tool-id fields are written
@@ -41,7 +39,6 @@ export async function resolveAccountHandle<D = AccountDoc>(
   repo: Repo,
   options: {
     storageKey: string;
-    hive?: AutomergeRepoKeyhive;
     storage?: Pick<Storage, "getItem" | "setItem">;
     createAccount?: AccountCreator<D>;
   }
@@ -78,25 +75,17 @@ export async function resolveAccountHandle<D = AccountDoc>(
     );
   }
 
-  const handle = await createAccountDocument<D>(
-    repo,
-    options.hive,
-    options.createAccount
-  );
+  const handle = await createAccountDocument<D>(repo, options.createAccount);
   storage.setItem(options.storageKey, handle.url);
   return handle;
 }
 
 async function createAccountDocument<D>(
   repo: Repo,
-  hive: AutomergeRepoKeyhive | undefined,
   createAccount: AccountCreator<D> | undefined
 ): Promise<DocHandle<D & HasPatchworkMetadata>> {
-  const handle = await repo.create2<D & HasPatchworkMetadata>();
-  if (hive && isKeyhiveDoc(handle.url)) {
-    await hive.addSyncServerRelayToDoc(handle.url);
-  }
-  handle.change((doc: D & HasPatchworkMetadata) => {
+  const handle = await repo.create<D & HasPatchworkMetadata>();
+  await handle.change((doc: D & HasPatchworkMetadata) => {
     doc["@patchwork"] = { type: "account" };
   });
   await createAccount?.(handle, repo);

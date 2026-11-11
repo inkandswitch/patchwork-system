@@ -27,8 +27,8 @@
     "resolve.exports": "^2.0.3"
   },
   "devDependencies": {
-    "@automerge/automerge-repo-network-messagechannel": "catalog:",
-    "@automerge/automerge-subduction": "catalog:",
+    "@automerge/automerge-repo-subduction": "catalog:",
+    "@automerge/subduction": "catalog:",
     "@types/debug": "^4.1.13",
     "@types/node": "catalog:",
     "vitest": "^3.2.6"

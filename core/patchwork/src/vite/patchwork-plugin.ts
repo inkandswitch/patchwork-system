@@ -1,7 +1,6 @@
 import type { Plugin, ServerOptions, PreviewOptions, BuildOptions } from "vite";
 
 import { importmap } from "./importmap-plugin.js";
-import { ark } from "./ark-plugin.js";
 import { patches } from "./patches-plugin.js";
 import {
   preloadErrorInWorkers,
@@ -35,7 +34,6 @@ import type { PatchworkSiteOptions } from "../site-kit/options.js";
 export default function patchwork(options?: PatchworkVitePluginOptions) {
   return [
     wasm(),
-    ark(options),
     config(options),
     icons(options),
     html(options),
@@ -54,7 +52,6 @@ export default function patchwork(options?: PatchworkVitePluginOptions) {
 
 export { importmap, builtins, devDependencyId } from "./importmap-plugin.js";
 export { patches } from "./patches-plugin.js";
-export { ark, arkAliases, arkStack } from "./ark-plugin.js";
 export {
   preloadErrorInWorkers,
   serviceworker,
@@ -86,7 +83,7 @@ export type {
   PatchworkKeyhiveOptions,
   PatchworkSyncServersOptions,
 } from "../site-kit/options.js";
-export type { ArkVersion } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
+export type { ArkVersion } from "@inkandswitch/patchwork-bootloader";
 
 export interface PatchworkVitePluginOptions extends PatchworkSiteOptions {
   importmap?: ImportMap;

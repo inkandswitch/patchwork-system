@@ -4,7 +4,6 @@ import {
   Repo as AutomergeRepo,
   generateAutomergeUrl,
   type AutomergeUrl,
-  type PeerId,
 } from "@automerge/automerge-repo";
 import { ModuleWatcher } from "../src/module-watcher.js";
 import { importPackageFromHttpUrl } from "../src/packages.js";
@@ -210,15 +209,15 @@ describe("ModuleWatcher stale announce retries", () => {
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   it("a superseded retry never rolls the registry back to an older version", async () => {
-    const repo = new AutomergeRepo({ peerId: "watcher-test" as PeerId });
+    const repo = new AutomergeRepo();
     try {
-      const folder = repo.create<any>();
-      folder.change((d: any) => {
+      const folder = await repo.create<any>();
+      await folder.change((d: any) => {
         d["@patchwork"] = { type: "folder" };
         d.rev = 0;
       });
-      const settings = repo.create<any>();
-      settings.change((d: any) => {
+      const settings = await repo.create<any>();
+      await settings.change((d: any) => {
         d["@patchwork"] = { type: "patchwork:module-settings" };
         d.modules = [folder.url];
       });
@@ -246,7 +245,7 @@ describe("ModuleWatcher stale announce retries", () => {
       // v1: the import fails, leaving a retry chain backing off (first retry
       // fires 1s after the failed attempt).
       importBehavior = () => undefined;
-      folder.change((d: any) => {
+      await folder.change((d: any) => {
         d.rev = 1;
       });
       await pause(500); // > the 250ms reload debounce
@@ -255,7 +254,7 @@ describe("ModuleWatcher stale announce retries", () => {
 
       // v2: imports succeed again; this reload supersedes v1's retry chain.
       importBehavior = () => ({ plugins: [] });
-      folder.change((d: any) => {
+      await folder.change((d: any) => {
         d.rev = 2;
       });
       await pause(500);
@@ -279,14 +278,14 @@ describe("ModuleWatcher stale announce retries", () => {
 describe("ModuleWatcher module lifecycle", () => {
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-  function makeFixture(repo: InstanceType<typeof AutomergeRepo>) {
-    const folder = repo.create<any>();
-    folder.change((d: any) => {
+  async function makeFixture(repo: InstanceType<typeof AutomergeRepo>) {
+    const folder = await repo.create<any>();
+    await folder.change((d: any) => {
       d["@patchwork"] = { type: "folder" };
       d.rev = 0;
     });
-    const settings = repo.create<any>();
-    settings.change((d: any) => {
+    const settings = await repo.create<any>();
+    await settings.change((d: any) => {
       d["@patchwork"] = { type: "patchwork:module-settings" };
       d.modules = [folder.url];
     });
@@ -299,10 +298,10 @@ describe("ModuleWatcher module lifecycle", () => {
   }
 
   it("unloads a module removed from settings and ignores later folder-doc changes", async () => {
-    const repo = new AutomergeRepo({ peerId: "watcher-unload" as PeerId });
+    const repo = new AutomergeRepo();
     try {
       const { folder, settings, importCalls, importAutomergePackage } =
-        makeFixture(repo);
+        await makeFixture(repo);
 
       const unloaded: string[] = [];
       const watcher = new ModuleWatcher(
@@ -315,13 +314,13 @@ describe("ModuleWatcher module lifecycle", () => {
       await watcher.doneLoading;
       expect(importCalls).toHaveLength(1);
 
-      settings.change((d: any) => {
+      await settings.change((d: any) => {
         d.modules = [];
       });
       await pause(100);
       expect(unloaded).toEqual([folder.url]);
 
-      folder.change((d: any) => {
+      await folder.change((d: any) => {
         d.rev = 1;
       });
       await pause(500);
@@ -332,10 +331,10 @@ describe("ModuleWatcher module lifecycle", () => {
   });
 
   it("does not re-import a module when the settings doc changes but its heads have not", async () => {
-    const repo = new AutomergeRepo({ peerId: "watcher-memo" as PeerId });
+    const repo = new AutomergeRepo();
     try {
       const { settings, importCalls, importAutomergePackage } =
-        makeFixture(repo);
+        await makeFixture(repo);
 
       const watcher = new ModuleWatcher(
         repo,
@@ -347,7 +346,7 @@ describe("ModuleWatcher module lifecycle", () => {
       await watcher.doneLoading;
       expect(importCalls).toHaveLength(1);
 
-      settings.change((d: any) => {
+      await settings.change((d: any) => {
         d.touched = 1;
       });
       await pause(300);
@@ -358,12 +357,12 @@ describe("ModuleWatcher module lifecycle", () => {
   });
 
   it("dispose() detaches settings and folder-doc listeners", async () => {
-    const repo = new AutomergeRepo({ peerId: "watcher-dispose" as PeerId });
+    const repo = new AutomergeRepo();
     try {
       const { folder, settings, importCalls, importAutomergePackage } =
-        makeFixture(repo);
-      const other = repo.create<any>();
-      other.change((d: any) => {
+        await makeFixture(repo);
+      const other = await repo.create<any>();
+      await other.change((d: any) => {
         d["@patchwork"] = { type: "folder" };
       });
 
@@ -379,10 +378,10 @@ describe("ModuleWatcher module lifecycle", () => {
 
       watcher.dispose();
 
-      folder.change((d: any) => {
+      await folder.change((d: any) => {
         d.rev = 1;
       });
-      settings.change((d: any) => {
+      await settings.change((d: any) => {
         d.modules = [folder.url, other.url];
       });
       await pause(500);
@@ -419,11 +418,13 @@ describe("ModuleWatcher package trackers", () => {
   }
 
   it("reloads a module when its tracker says the package moved", async () => {
-    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
-    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const folders = new AutomergeRepo();
+    const tab = new AutomergeRepo();
     try {
-      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
-      const settings = tab.create<any>({
+      const folder = await folders.create<any>({
+        "@patchwork": { type: "folder" },
+      });
+      const settings = await tab.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [folder.url],
       });
@@ -445,15 +446,12 @@ describe("ModuleWatcher package trackers", () => {
       // Only the settings doc was ever loaded on the watcher's side.
       expect(Object.keys(tab.handles)).toEqual([settings.documentId]);
 
-      folder.change((d: any) => {
+      await folder.change((d: any) => {
         d.rev = 1;
       });
       watching.get(folder.url)!();
       await pause(400);
-      expect(imported).toEqual([
-        imported[0],
-        folder.view(folder.heads()).url,
-      ]);
+      expect(imported).toEqual([imported[0], folder.view(folder.heads()).url]);
 
       // A call with nothing new behind it costs a lookup, not an import.
       watching.get(folder.url)!();
@@ -468,11 +466,13 @@ describe("ModuleWatcher package trackers", () => {
   });
 
   it("looks the package up only when what the tracker holds changes", async () => {
-    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
-    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const folders = new AutomergeRepo();
+    const tab = new AutomergeRepo();
     try {
-      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
-      const settings = tab.create<any>({
+      const folder = await folders.create<any>({
+        "@patchwork": { type: "folder" },
+      });
+      const settings = await tab.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [folder.url],
       });
@@ -506,7 +506,7 @@ describe("ModuleWatcher package trackers", () => {
 
       // Something arrived. What it says isn't the version to import: the
       // lookup finds that.
-      folder.change((d: any) => {
+      await folder.change((d: any) => {
         d.rev = 1;
       });
       said("b");
@@ -520,11 +520,13 @@ describe("ModuleWatcher package trackers", () => {
   });
 
   it("reloads for a change that lands while the first lookup is in flight", async () => {
-    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
-    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const folders = new AutomergeRepo();
+    const tab = new AutomergeRepo();
     try {
-      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
-      const settings = tab.create<any>({
+      const folder = await folders.create<any>({
+        "@patchwork": { type: "folder" },
+      });
+      const settings = await tab.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [folder.url],
       });
@@ -536,7 +538,7 @@ describe("ModuleWatcher package trackers", () => {
         if (first) {
           // The lookup has its answer; the package moves before it's back.
           first = false;
-          folder.change((d: any) => {
+          await folder.change((d: any) => {
             d.rev = 1;
           });
           watching.get(folder.url)!();
@@ -565,11 +567,13 @@ describe("ModuleWatcher package trackers", () => {
   });
 
   it("looks up once more, not once per change, for changes during a slow lookup", async () => {
-    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
-    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const folders = new AutomergeRepo();
+    const tab = new AutomergeRepo();
     try {
-      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
-      const settings = tab.create<any>({
+      const folder = await folders.create<any>({
+        "@patchwork": { type: "folder" },
+      });
+      const settings = await tab.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [folder.url],
       });
@@ -598,7 +602,7 @@ describe("ModuleWatcher package trackers", () => {
 
       const { promise, resolve: release } = Promise.withResolvers<void>();
       hold = promise;
-      folder.change((d: any) => {
+      await folder.change((d: any) => {
         d.rev = 1;
       });
       watching.get(folder.url)!();
@@ -606,7 +610,7 @@ describe("ModuleWatcher package trackers", () => {
       await pause(400);
       // Each past the debounce too, so each would start a lookup of its own.
       for (let rev = 2; rev <= 6; rev++) {
-        folder.change((d: any) => {
+        await folder.change((d: any) => {
           d.rev = rev;
         });
         watching.get(folder.url)!();
@@ -627,16 +631,18 @@ describe("ModuleWatcher package trackers", () => {
   });
 
   it("watches a branches doc's default branch, and looks up through the branches doc", async () => {
-    const folders = new AutomergeRepo({ peerId: "folders" as PeerId });
-    const tab = new AutomergeRepo({ peerId: "tab" as PeerId });
+    const folders = new AutomergeRepo();
+    const tab = new AutomergeRepo();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const folder = folders.create<any>({ "@patchwork": { type: "folder" } });
-      const branches = folders.create<any>({
+      const folder = await folders.create<any>({
+        "@patchwork": { type: "folder" },
+      });
+      const branches = await folders.create<any>({
         "@patchwork": { type: "branches" },
         branches: { default: folder.url },
       });
-      const settings = tab.create<any>({
+      const settings = await tab.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [branches.url],
       });
@@ -658,7 +664,7 @@ describe("ModuleWatcher package trackers", () => {
       expect([...watching.keys()]).toEqual([folder.url]);
       expect(warn).toHaveBeenCalled();
 
-      folder.change((d: any) => {
+      await folder.change((d: any) => {
         d.rev = 1;
       });
       watching.get(folder.url)!();
@@ -675,8 +681,8 @@ describe("ModuleWatcher package trackers", () => {
   });
 
   it("finds the latest version through the service worker's redirect", async () => {
-    const repo = new AutomergeRepo({ peerId: "latest" as PeerId });
-    const doc = repo.create<any>({ rev: 0 });
+    const repo = new AutomergeRepo();
+    const doc = await repo.create<any>({ rev: 0 });
     const withoutHeads = doc.url;
     const atHeads = doc.view(doc.heads()).url;
     await repo.shutdown();
@@ -789,17 +795,17 @@ describe("ModuleWatcher with a stub tracker", () => {
     return { tracker, watching };
   }
 
-  function docUrls(repo: InstanceType<typeof AutomergeRepo>) {
-    const doc = repo.create<any>({ "@patchwork": { type: "folder" } });
+  async function docUrls(repo: InstanceType<typeof AutomergeRepo>) {
+    const doc = await repo.create<any>({ "@patchwork": { type: "folder" } });
     return { url: doc.url, atHeads: doc.view(doc.heads()).url };
   }
 
   it("tells onUnload the url that was loaded, which a branch package does not share with its settings entry", async () => {
-    const repo = new AutomergeRepo({ peerId: "unload-url" as PeerId });
+    const repo = new AutomergeRepo();
     try {
-      const entry = docUrls(repo);
-      const branch = docUrls(repo);
-      const settings = repo.create<any>({
+      const entry = await docUrls(repo);
+      const branch = await docUrls(repo);
+      const settings = await repo.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [entry.url],
       });
@@ -816,7 +822,7 @@ describe("ModuleWatcher with a stub tracker", () => {
       );
       await watcher.doneLoading;
 
-      settings.change((d: any) => {
+      await settings.change((d: any) => {
         d.modules = [];
       });
       await pause(100);
@@ -830,13 +836,13 @@ describe("ModuleWatcher with a stub tracker", () => {
   });
 
   it("unloads the previous branch's plugins when the default branch moves to another document", async () => {
-    const repo = new AutomergeRepo({ peerId: "branch-moves" as PeerId });
+    const repo = new AutomergeRepo();
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const entry = docUrls(repo);
-      const first = docUrls(repo);
-      const second = docUrls(repo);
-      const settings = repo.create<any>({
+      const entry = await docUrls(repo);
+      const first = await docUrls(repo);
+      const second = await docUrls(repo);
+      const settings = await repo.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [entry.url],
       });
@@ -871,9 +877,9 @@ describe("ModuleWatcher with a stub tracker", () => {
 
   describe("when the first lookup fails", () => {
     async function setup() {
-      const repo = new AutomergeRepo({ peerId: "lookup-fails" as PeerId });
-      const entry = docUrls(repo);
-      const settings = repo.create<any>({
+      const repo = new AutomergeRepo();
+      const entry = await docUrls(repo);
+      const settings = await repo.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [entry.url],
       });
@@ -916,9 +922,9 @@ describe("ModuleWatcher with a stub tracker", () => {
 
     it("doesn't look again for a module that went while its lookup was out", async () => {
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const repo = new AutomergeRepo({ peerId: "lookup-out" as PeerId });
-      const entry = docUrls(repo);
-      const settings = repo.create<any>({
+      const repo = new AutomergeRepo();
+      const entry = await docUrls(repo);
+      const settings = await repo.create<any>({
         "@patchwork": { type: "patchwork:module-settings" },
         modules: [entry.url],
       });

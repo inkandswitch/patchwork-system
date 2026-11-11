@@ -4,22 +4,23 @@ import { fileURLToPath } from "node:url";
 import type { Plugin } from "vite";
 
 /**
- * Source patches to @automerge/automerge-repo, applied as it passes through
- * the bundler.
+ * Source patches to @automerge/automerge-repo-subduction, applied as it
+ * passes through the bundler.
  *
- * The edits are this repo's `patches/` pnpm patch, which is what
- * makes our own typecheck see the widened `role` type. A pnpm patch only
- * exists in this repo's node_modules, though: a site that installs
- * @inkandswitch/patchwork resolves automerge-repo out of its own tree and
- * would bundle it unpatched. The plugin applies the patch there too.
+ * The edit is this repo's `patches/` pnpm patch: it starts a catch-up sync
+ * round when a single change is stored while a round for its document is in
+ * flight, so a change made right after `create()` still reaches the server.
+ * A pnpm patch only exists in this repo's node_modules, though: a site that
+ * installs @inkandswitch/patchwork resolves automerge-repo-subduction out of
+ * its own tree and would bundle it unpatched. The plugin applies the patch
+ * there too.
  *
- * The edits are upstream-shaped and meant to be deleted once subduction takes
- * them. Until then each patch is pinned to one automerge-repo version and
- * every hunk has to match, so a dependency bump fails the build instead of
- * quietly un-patching it. There's one patch per version a build can bundle:
- * the current one, and the one the ARK 0.6 stack brings (`keyhive.ark`).
+ * The edit is upstream-shaped and meant to be deleted once automerge-repo
+ * takes it. Until then each patch is pinned to one version and every hunk has
+ * to match, so a dependency bump fails the build instead of quietly
+ * un-patching it.
  */
-const AUTOMERGE_REPO = "@automerge/automerge-repo";
+const AUTOMERGE_REPO = "@automerge/automerge-repo-subduction";
 const PATCHES_DIR = fileURLToPath(new URL("../patches/", import.meta.url));
 const PATCH_PREFIX = `${AUTOMERGE_REPO.replace("/", "__")}@`;
 
@@ -209,7 +210,7 @@ export function patches({
                   ): void;
                 }) {
                   build.onLoad(
-                    { filter: /automerge-repo[\\/]dist[\\/]/ },
+                    { filter: /automerge-repo-subduction[\\/]dist[\\/]/ },
                     async ({ path }) => {
                       const contents = await patchFile(path, await load());
                       return contents ? { contents, loader: "js" } : undefined;

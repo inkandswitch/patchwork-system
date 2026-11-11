@@ -1,0 +1,99 @@
+diff --git a/dist/index.js b/dist/index.js
+index 90e949d..38e55b9 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -112,6 +112,8 @@ export class SubductionBackend {
+     #closing;
+     #sequence = 0;
+     #round = 0;
++    /** Sync rounds in flight, by tree. */
++    #rounds = new Map();
+     #deleting = new Map();
+     /**
+      * Open sessions per tree. Close and deletion end a tree's sessions in the
+@@ -351,7 +353,26 @@ export class SubductionBackend {
+      * checking for peers, so skip it when none qualifies. Native rounds opened
+      * by loadAndWatch do not consult `announce`.
+      */
++    /**
++     * A single record stored while a round for its tree is in flight is in
++     * neither that round (its heads were exchanged already) nor a push (the
++     * round's subscription isn't up yet), so rounds are counted per tree and
++     * such a store starts another.
++     */
+     async #syncAllPeers(id) {
++        this.#rounds.set(id, (this.#rounds.get(id) ?? 0) + 1);
++        try {
++            return await this.#syncAllPeersNow(id);
++        }
++        finally {
++            const left = this.#rounds.get(id) - 1;
++            if (left)
++                this.#rounds.set(id, left);
++            else
++                this.#rounds.delete(id);
++        }
++    }
++    async #syncAllPeersNow(id) {
+         const connected = await this.#engine.getConnectedPeerIds();
+         const announced = await Promise.all(connected.map(peer => this.#announces(id, peer)));
+         const peers = connected.filter((_, i) => announced[i]);
+@@ -631,7 +652,7 @@ export class SubductionBackend {
+                 }
+                 // Durability never waits for a peer; a round propagates batches even
+                 // without a document session. A failed batch stored nothing to send.
+-                if (!single)
++                if (!single || this.#rounds.has(id))
+                     this.#propagate(id);
+             })().catch(cause => {
+                 throw error(operation, cause);
+diff --git a/src/index.ts b/src/index.ts
+index f90f3fb..67deabb 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -211,6 +211,8 @@ export class SubductionBackend implements SedimentreeBackend {
+   #closing?: Promise<void>
+   #sequence = 0
+   #round = 0
++  /** Sync rounds in flight, by tree. */
++  readonly #rounds = new Map<SedimentreeId, number>()
+   readonly #deleting = new Map<SedimentreeId, Promise<void>>()
+   /**
+    * Open sessions per tree. Close and deletion end a tree's sessions in the
+@@ -480,8 +482,27 @@ export class SubductionBackend implements SedimentreeBackend {
+    * checking for peers, so skip it when none qualifies. Native rounds opened
+    * by loadAndWatch do not consult `announce`.
+    */
++  /**
++   * A single record stored while a round for its tree is in flight is in
++   * neither that round (its heads were exchanged already) nor a push (the
++   * round's subscription isn't up yet), so rounds are counted per tree and
++   * such a store starts another.
++   */
+   async #syncAllPeers(
+     id: SedimentreeId
++  ): Promise<[N.PeerId, N.PeerSyncResult][]> {
++    this.#rounds.set(id, (this.#rounds.get(id) ?? 0) + 1)
++    try {
++      return await this.#syncAllPeersNow(id)
++    } finally {
++      const left = this.#rounds.get(id)! - 1
++      if (left) this.#rounds.set(id, left)
++      else this.#rounds.delete(id)
++    }
++  }
++
++  async #syncAllPeersNow(
++    id: SedimentreeId
+   ): Promise<[N.PeerId, N.PeerSyncResult][]> {
+     const connected = await this.#engine.getConnectedPeerIds()
+     const announced = await Promise.all(
+@@ -773,7 +794,7 @@ export class SubductionBackend implements SedimentreeBackend {
+         }
+         // Durability never waits for a peer; a round propagates batches even
+         // without a document session. A failed batch stored nothing to send.
+-        if (!single) this.#propagate(id)
++        if (!single || this.#rounds.has(id)) this.#propagate(id)
+       })().catch(cause => {
+         throw error(operation, cause)
+       })

@@ -15,7 +15,7 @@ import {
   stringifyAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
-  type QueryState,
+  type PeerId,
   type UrlHeads,
 } from "@automerge/automerge-repo";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -100,7 +100,7 @@ const worlds: World[] = [
     pinnedFinds: true,
     async setup() {
       const repo = new Repo();
-      const note = repo.create<Note>(initial());
+      const note = await repo.create<Note>(initial());
       const view = mount(repo);
       const over = await view.overlay.find<Note>(note.url);
       return pairOver(repo, view, note, note, over);
@@ -111,9 +111,9 @@ const worlds: World[] = [
     pinnedFinds: true,
     async setup() {
       const repo = new Repo();
-      const note = repo.create<Note>(initial());
-      const clone = repo.clone(note);
-      clone.change((d) => {
+      const note = await repo.create<Note>(initial());
+      const clone = await repo.clone(note);
+      await clone.change((d) => {
         d.title = "clone";
       });
       const view = mount(repo);
@@ -127,10 +127,10 @@ const worlds: World[] = [
     pinnedFinds: true,
     async setup() {
       const repo = new Repo();
-      const note = repo.create<Note>(initial());
-      const first = repo.clone(note);
-      const second = repo.clone(note);
-      second.change((d) => {
+      const note = await repo.create<Note>(initial());
+      const first = await repo.clone(note);
+      const second = await repo.clone(note);
+      await second.change((d) => {
         d.title = "second";
         d.nested.x.y = 7;
       });
@@ -151,10 +151,9 @@ const worlds: World[] = [
     pinnedFinds: false,
     async setup() {
       const repo = new Repo();
-      const note = repo.create<Note>(initial());
-      const laid = scratch.create<Note>();
-      laid.update(() => A.clone(note.doc()));
-      laid.change((d) => {
+      const note = await repo.create<Note>(initial());
+      const laid = await scratch.clone(note);
+      await laid.change((d) => {
         d.title = "laid";
       });
       const view = mount(repo);
@@ -197,7 +196,6 @@ function reading(h: H, map: (url: AutomergeUrl) => AutomergeUrl) {
     readOnly: h.isReadOnly(),
     ready: h.isReady(),
     deleted: h.isDeleted(),
-    state: h.state,
     path: h.path.map((s: { prop: unknown }) => s.prop),
     hasRange: h.range !== undefined,
     positions: h.rangePositions(),
@@ -257,15 +255,15 @@ for (const world of worlds) {
 
     const same = (url: AutomergeUrl) => url;
 
-    it("reads the same, under the presented url", () => {
+    it("reads the same, under the presented url", async () => {
       const real = family(p.real, old).map((h) => reading(h, p.presented));
       const over = family(p.over, old).map((h) => reading(h, same));
       expect(over).toEqual(real);
       for (const r of over) expect(r.documentId).toBe(p.note.documentId);
     });
 
-    it("keeps reading the same after changes", () => {
-      p.real.change((d) => {
+    it("keeps reading the same after changes", async () => {
+      await p.real.change((d) => {
         d.title = "changed";
         d.nested.x.y = 99;
         A.splice(d, ["text"], 0, 0, ">> ");
@@ -303,7 +301,7 @@ for (const world of worlds) {
       expect(over).toEqual(real);
     });
 
-    it("compares handles the same way", () => {
+    it("compares handles the same way", async () => {
       const matrix = (fam: H[]) =>
         fam.flatMap((a) =>
           fam.map((b) => [
@@ -316,7 +314,7 @@ for (const world of worlds) {
       expect(matrix(family(p.over, old))).toEqual(matrix(family(p.real, old)));
     });
 
-    it("equals a real handle with the same url, both ways round", () => {
+    it("equals a real handle with the same url, both ways round", async () => {
       // `equals` is url equality, and the overlay's url is the presented one.
       expect(p.over.equals(p.note)).toBe(true);
       expect(p.note.equals(p.over)).toBe(true);
@@ -324,8 +322,8 @@ for (const world of worlds) {
       expect(p.over.equals(p.real)).toBe(p.real === p.note);
     });
 
-    it("diffs the same way, against heads and against handles", () => {
-      p.real.change((d) => {
+    it("diffs the same way, against heads and against handles", async () => {
+      await p.real.change((d) => {
         d.title = "diffed";
         d.nested.x.y = 5;
       });
@@ -342,10 +340,10 @@ for (const world of worlds) {
       expect(diffs(p.over)).toEqual(diffs(p.real));
     });
 
-    it("rejects writes to a view the same way", () => {
-      const attempt = (h: H) => {
+    it("rejects writes to a view the same way", async () => {
+      const attempt = async (h: H) => {
         try {
-          h.view(old).change((d: Note) => {
+          await h.view(old).change((d: Note) => {
             d.title = "nope";
           });
           return "wrote";
@@ -353,10 +351,10 @@ for (const world of worlds) {
           return "threw";
         }
       };
-      expect(attempt(p.over)).toBe(attempt(p.real));
+      expect(await attempt(p.over)).toBe(await attempt(p.real));
     });
 
-    it("keeps listener books the same way", () => {
+    it("keeps listener books the same way", async () => {
       // Only the script's own listeners count: a real handle also carries
       // the repo's (and, as a backing, the overlay's), and the real `off(ev)`
       // with no listener removes those too, where the overlay's can't reach
@@ -401,35 +399,35 @@ for (const world of worlds) {
       expect(fam(p.over).map(script)).toEqual(fam(p.real).map(script));
     });
 
-    it("emits the same events on changes, re-stamped to the listening handle", () => {
+    it("emits the same events on changes, re-stamped to the listening handle", async () => {
       const events = ["change", "heads-changed"];
       const realLogs = family(p.real, old).map((h) => record(h, events));
       const overFam = family(p.over, old);
       const overLogs = overFam.map((h) => record(h, events));
-      const steps: ((fam: H[]) => void)[] = [
-        (f) =>
-          f[0].change((d: Note) => {
+      const steps: ((fam: H[]) => Promise<void>)[] = [
+        async (f) =>
+          await f[0].change((d: Note) => {
             d.title = "renamed";
           }),
-        (f) =>
-          f[3].change((d: { y: number }) => {
+        async (f) =>
+          await f[3].change((d: { y: number }) => {
             d.y = 2;
           }),
-        (f) =>
-          f[0].change((d: Note) => {
+        async (f) =>
+          await f[0].change((d: Note) => {
             d.nested = { x: { y: 3 } };
           }),
-        (f) =>
-          f[0].change((d: Note) => {
+        async (f) =>
+          await f[0].change((d: Note) => {
             d.items.unshift({ id: "c", v: 0 });
           }),
-        (f) =>
-          f[0].change((d: Note) => {
+        async (f) =>
+          await f[0].change((d: Note) => {
             A.splice(d, ["text"], 0, 0, ">> ");
           }),
-        (f) => f[1].change("by sub"),
-        (f) =>
-          f[0].change((d: Note) => {
+        async (f) => await f[1].change("by sub"),
+        async (f) =>
+          await f[0].change((d: Note) => {
             d.items.splice(
               d.items.findIndex((i) => i.id === "b"),
               1
@@ -439,7 +437,9 @@ for (const world of worlds) {
       // Each step runs once, alternately through the overlay and the real
       // handles, and both sides' listeners hear it.
       const realFam = family(p.real, old);
-      steps.forEach((step, i) => step(i % 2 ? realFam : overFam));
+      for (const [i, step] of steps.entries()) {
+        await step(i % 2 ? realFam : overFam);
+      }
       expect(overLogs.map((log) => log.map((e) => e.self))).toEqual(
         realLogs.map((log) => log.map((e) => e.self))
       );
@@ -447,52 +447,45 @@ for (const world of worlds) {
       expect(overLogs.flat().length).toBeGreaterThan(0);
     });
 
-    it("emits outbound ephemeral messages the same way", () => {
-      const realLogs = family(p.peers, peersOld).map((h) =>
-        record(h, ["ephemeral-message-outbound"])
-      );
-      const overLogs = family(p.over, old).map((h) =>
-        record(h, ["ephemeral-message-outbound"])
-      );
-      p.over.broadcast({ hello: 1 });
-      p.over.sub("nested", "x").broadcast({ hello: 2 });
-      p.peers.sub("nested").broadcast({ hello: 3 });
-      expect(overLogs).toEqual(realLogs);
-      expect(realLogs[0]).toHaveLength(3);
-    });
-
-    it("hears inbound ephemeral messages and remote heads the same way", () => {
+    it("hears inbound ephemeral messages and remote heads the same way", async () => {
       const events = ["ephemeral-message", "remote-heads"];
-      const realLogs = family(p.peers, peersOld).map((h) => record(h, events));
+      const peersFam = family(p.peers, peersOld);
+      const realLogs = peersFam.map((h) => record(h, events));
       const overLogs = family(p.over, old).map((h) => record(h, events));
-      const peer = "peer-1" as Parameters<H["_receiveInboundEphemeral"]>[0];
-      p.peers._receiveInboundEphemeral(peer, { hello: 1 });
-      p.peers.sub("items", 0)._receiveInboundEphemeral(peer, { hello: 2 });
-      // As the repo's sync state tracker does: on the root handle alone.
-      p.peers.emit("remote-heads", {
-        storageId: "server" as never,
-        heads: p.peers.heads(),
-        timestamp: 1,
-      });
+      // As the repo's sync state does: to every handle on the document.
+      const peer = "peer-1" as PeerId;
+      const deliver = (message: unknown) => {
+        for (const h of new Set(peersFam)) {
+          h.emit("ephemeral-message", {
+            handle: h,
+            senderId: peer,
+            originId: "origin-1" as never,
+            message,
+          });
+        }
+      };
+      deliver({ hello: 1 });
+      deliver({ hello: 2 });
+      for (const h of new Set(peersFam)) {
+        h.emit("remote-heads", {
+          peerId: peer,
+          heads: p.peers.heads(),
+          timestamp: 1,
+        });
+      }
       expect(overLogs).toEqual(realLogs);
-      expect(realLogs[0]).toHaveLength(3);
-      expect(realLogs[1]).toHaveLength(2);
+      for (const log of realLogs) expect(log).toHaveLength(3);
     });
 
-    it("answers sync info from the same document", () => {
+    it("answers sync info from the same document", async () => {
       // Heads only the peers' document has: a scratch one isn't caught up.
-      p.peers.change((d) => {
+      await p.peers.change((d) => {
         d.title = "since";
       });
-      const storageId = "server" as Parameters<H["getSyncInfo"]>[0];
+      const peerId = "server" as PeerId;
       const info = { lastHeads: p.peers.heads(), lastSyncTimestamp: 1 };
-      const remote = p.peers.heads();
       vi.spyOn(p.peers, "getSyncInfo").mockReturnValue(info);
-      vi.spyOn(p.peers, "getRemoteHeads").mockReturnValue(remote);
-      expect(p.over.getSyncInfo(storageId)).toBe(info);
-      expect(p.over.getRemoteHeads(storageId)).toBe(remote);
-      expect(p.over.isCaughtUpWith(storageId)).toBe(true);
-      expect(p.peers.isCaughtUpWith(storageId)).toBe(true);
+      expect(p.over.getSyncInfo(peerId)).toBe(info);
     });
 
     it("tells every listening handle about a delete", async () => {
@@ -522,7 +515,7 @@ for (const world of worlds) {
     it.runIf(world.pinnedFinds)(
       "finds urls pinned to heads the same way",
       async () => {
-        p.real.change((d) => {
+        await p.real.change((d) => {
           d.title = "later";
         });
         const urls = [p.real.view(old).url, p.real.view(old).sub("nested").url];
@@ -561,46 +554,45 @@ describe("conformance: finding", () => {
     const view = mount(repo);
     const url = generateAutomergeUrl();
     const seen = { real: [] as string[], over: [] as string[] };
-    const real = repo.findWithProgress(url);
-    const over = view.overlay.findWithProgress(url);
-    real.subscribe((s) => seen.real.push(s.state));
-    over.subscribe((s) => seen.over.push(s.state));
+    const real = repo.query(url);
+    const over = view.overlay.query(url);
+    real.subscribe((s) => seen.real.push(s.status));
+    over.subscribe((s) => seen.over.push(s.status));
 
     await expect(repo.find(url)).rejects.toThrow(/unavailable/);
     await expect(view.overlay.find(url)).rejects.toThrow(/unavailable/);
-    expect(over.peek().state).toBe("unavailable");
+    expect(over.state().status).toBe("unavailable");
 
-    repo.import(A.save(A.from({ arrived: true })), {
+    await repo.import(A.save(A.from({ arrived: true })), {
       docId: parseAutomergeUrl(url).documentId,
     });
-    expect(real.peek().state).toBe("ready");
+    expect(real.state().status).toBe("ready");
     // The overlay retries by itself, a descriptor round trip later.
-    await vi.waitFor(() => expect(over.peek().state).toBe("ready"));
-    const state = over.peek() as QueryState<unknown> & { state: "ready" };
-    expect(state.state).toBe("ready");
+    await vi.waitFor(() => expect(over.state().status).toBe("ready"));
+    const state = over.state();
+    if (state.status !== "ready") throw new Error("not ready");
     expect(state.handle.url).toBe(url);
     expect(state.handle.doc()).toEqual({ arrived: true });
     expect(settled(seen.over)).toEqual(settled(seen.real));
     expect(settled(seen.over)).toEqual(["unavailable", "ready"]);
-    expect(await over.whenReady()).toBe(state.handle);
     expect(await view.overlay.find(url)).toBe(state.handle);
   });
 
-  it("doesn't call a subscriber until something changes", async () => {
+  it("calls a subscriber once with the current state, then only on change", async () => {
     const repo = new Repo();
-    const note = repo.create({ a: 1 });
+    const note = await repo.create({ a: 1 });
     const view = mount(repo);
     await view.overlay.find(note.url);
     const calls = { real: 0, over: 0 };
-    repo.findWithProgress(note.url).subscribe(() => calls.real++);
-    view.overlay.findWithProgress(note.url).subscribe(() => calls.over++);
+    repo.query(note.url).subscribe(() => calls.real++);
+    view.overlay.query(note.url).subscribe(() => calls.over++);
     await settle(10);
-    expect(calls).toEqual({ real: 0, over: 0 });
+    expect(calls).toEqual({ real: 1, over: 1 });
   });
 
   it("rejects an aborted find with the signal's reason", async () => {
     const repo = new Repo();
-    const note = repo.create({ a: 1 });
+    const note = await repo.create({ a: 1 });
     const view = mount(repo);
     const reason = new Error("gave up");
     await expect(
@@ -611,8 +603,10 @@ describe("conformance: finding", () => {
     ).rejects.toBe(reason);
 
     // Heads the document doesn't have yet keep both finds waiting.
-    const elsewhere = new Repo().import<{ a: number }>(A.save(note.doc()));
-    elsewhere.change((d) => {
+    const elsewhere = await new Repo().import<{ a: number }>(
+      A.save(note.fullDoc())
+    );
+    await elsewhere.change((d) => {
       d.a = 2;
     });
     const future = stringifyAutomergeUrl({

@@ -45,9 +45,8 @@ describe("EdgeHandle", () => {
     });
 
     it("persists source/target as named maps of urls", async () => {
-      const src = repo.create<SrcDoc>({ body: "hello" });
-      const sink = repo.create<SinkDoc>({ html: "" });
-      await Promise.all([src.whenReady(), sink.whenReady()]);
+      const src = await repo.create<SrcDoc>({ body: "hello" });
+      const sink = await repo.create<SinkDoc>({ html: "" });
       const edge = await createEdgeHandle(repo, {
         source: { s: src.sub("body") },
         target: { t: sink.sub("html") },
@@ -59,8 +58,7 @@ describe("EdgeHandle", () => {
     });
 
     it("accepts urls or live handles in init", async () => {
-      const src = repo.create<SrcDoc>({ body: "hello" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hello" });
       const edge = await createEdgeHandle(repo, {
         source: { ref: src.sub("body"), url: src.sub("body").url },
       });
@@ -107,8 +105,7 @@ describe("EdgeHandle", () => {
     });
 
     it("fans out value to target handles via their native change()", async () => {
-      const sink = repo.create<SinkDoc>({ html: "" });
-      await sink.whenReady();
+      const sink = await repo.create<SinkDoc>({ html: "" });
       const edge = await createEdgeHandle<string>(repo, {
         target: { sink: sink.sub("html") },
       });
@@ -117,8 +114,7 @@ describe("EdgeHandle", () => {
     });
 
     it("change(undefined) still fans out to targets (no special semantics)", async () => {
-      const sink = repo.create<SinkDoc>({ html: "seed" });
-      await sink.whenReady();
+      const sink = await repo.create<SinkDoc>({ html: "seed" });
       const edge = await createEdgeHandle<string>(repo, {
         target: { sink: sink.sub("html") },
       });
@@ -233,8 +229,7 @@ describe("EdgeHandle", () => {
 
   describe("wire side", () => {
     it("onSourceChange does NOT fire on subscribe", async () => {
-      const src = repo.create<SrcDoc>({ body: "hello" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hello" });
       const edge = await createEdgeHandle(repo, {
         source: { s: src.sub("body") },
       });
@@ -244,8 +239,7 @@ describe("EdgeHandle", () => {
     });
 
     it("onSourceChange fires (value, key) on per-source emissions", async () => {
-      const src = repo.create<SrcDoc>({ body: "hello" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hello" });
       const edge = await createEdgeHandle(repo, {
         source: { s: src.sub("body") },
       });
@@ -258,8 +252,7 @@ describe("EdgeHandle", () => {
     });
 
     it("onMembersChange fires on subscribe and on membership changes", async () => {
-      const src = repo.create<SrcDoc>({ body: "x" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "x" });
       const edge = await createEdgeHandle(repo);
       let fires = 0;
       edge.onMembersChange(() => fires++);
@@ -273,8 +266,7 @@ describe("EdgeHandle", () => {
     });
 
     it("onAnyChange fires once on subscribe then on either kind of change", async () => {
-      const src = repo.create<SrcDoc>({ body: "hello" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hello" });
       const edge = await createEdgeHandle(repo);
       const calls: [unknown, string | undefined][] = [];
       edge.onAnyChange((value, key) => calls.push([value, key]));
@@ -292,8 +284,7 @@ describe("EdgeHandle", () => {
     });
 
     it("re-resolves handles when source is mutated", async () => {
-      const src = repo.create<SrcDoc>({ body: "hello" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hello" });
       const edge = await createEdgeHandle(repo);
       expect(Object.keys(edge.source)).toEqual([]);
       edge.setSource("s", src.sub("body"));
@@ -302,8 +293,7 @@ describe("EdgeHandle", () => {
     });
 
     it("removeSource deletes the binding", async () => {
-      const src = repo.create<SrcDoc>({ body: "hi" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hi" });
       const edge = await createEdgeHandle(repo, {
         source: { s: src.sub("body") },
       });
@@ -313,8 +303,7 @@ describe("EdgeHandle", () => {
     });
 
     it("removeTarget deletes the binding", async () => {
-      const sink = repo.create<SinkDoc>({ html: "" });
-      await sink.whenReady();
+      const sink = await repo.create<SinkDoc>({ html: "" });
       const edge = await createEdgeHandle(repo, {
         target: { t: sink.sub("html") },
       });
@@ -324,8 +313,7 @@ describe("EdgeHandle", () => {
     });
 
     it("doc changes that only touch `value` don't re-fire members", async () => {
-      const src = repo.create<SrcDoc>({ body: "hello" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hello" });
       const edge = await createEdgeHandle<string>(repo, {
         source: { s: src.sub("body") },
         persist: true,
@@ -374,23 +362,18 @@ describe("EdgeHandle", () => {
       const edge = await createEdgeHandle(repo);
       // Past setSource's check, like a url that came by sync for a doc that
       // hasn't yet.
-      const ghost =
-        "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2K" as AutomergeUrl;
+      const ghost = "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2K" as AutomergeUrl;
       edge.doc.change((d) => {
         d.source["ghost"] = ghost;
       });
-      await waitFor(
-        () => Object.keys(edge.sourceErrors).length > 0,
-        500
-      );
+      await waitFor(() => Object.keys(edge.sourceErrors).length > 0, 500);
       expect(edge.sourceErrors.ghost).toBeInstanceOf(Error);
       expect(edge.source.ghost).toBeUndefined();
     });
 
     it("clears the error when the binding is removed", async () => {
       const edge = await createEdgeHandle(repo);
-      const ghost =
-        "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2K" as AutomergeUrl;
+      const ghost = "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2K" as AutomergeUrl;
       edge.doc.change((d) => {
         d.source["ghost"] = ghost;
       });
@@ -402,8 +385,7 @@ describe("EdgeHandle", () => {
 
     it("retries resolution on subsequent doc ticks while errors persist", async () => {
       const edge = await createEdgeHandle(repo);
-      const ghost =
-        "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2K" as AutomergeUrl;
+      const ghost = "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2K" as AutomergeUrl;
       edge.doc.change((d) => {
         d.source["ghost"] = ghost;
       });
@@ -412,7 +394,8 @@ describe("EdgeHandle", () => {
       // An unrelated change: with errors outstanding, the refresh mustn't skip.
       const before = edge.sourceErrors.ghost;
       edge.doc.change((d) => {
-        d.target["t"] = "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2L" as AutomergeUrl;
+        d.target["t"] =
+          "automerge:3PMqSyMiYrNts9Ezy8T8WBQNpF2L" as AutomergeUrl;
       });
       await wait(30);
       // A retry can't be seen from here without a failure that recovers; this
@@ -448,8 +431,7 @@ describe("EdgeHandle", () => {
 
   describe("plain doc urls resolve to root refs", () => {
     it("resolves a plain automerge:docId url to a whole-doc endpoint", async () => {
-      const src = repo.create<SrcDoc>({ body: "hello" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hello" });
       const edge = await createEdgeHandle(repo, {
         source: { s: src.url },
       });
@@ -481,8 +463,7 @@ describe("EdgeHandle", () => {
     });
 
     it("rejects when the url does not point at an edge-handle doc", async () => {
-      const other = repo.create<{ x: number }>({ x: 1 });
-      await other.whenReady();
+      const other = await repo.create<{ x: number }>({ x: 1 });
       await expect(findEdgeHandle(repo, other.url)).rejects.toThrow();
     });
   });
@@ -497,8 +478,7 @@ describe("EdgeHandle", () => {
     });
 
     it("destroy tears down source subscriptions (no further notifications)", async () => {
-      const src = repo.create<SrcDoc>({ body: "hi" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hi" });
       const edge = await createEdgeHandle(repo, {
         source: { s: src.sub("body") },
       });
@@ -540,16 +520,10 @@ describe("EdgeHandle", () => {
 
   describe("end-to-end with an inline transform", () => {
     it("multi-source sum routes through to a target on any input change", async () => {
-      const a = repo.create<NumDoc>({ value: 1 });
-      const b = repo.create<NumDoc>({ value: 2 });
-      const c = repo.create<NumDoc>({ value: 3 });
-      const total = repo.create<NumDoc>({ value: 0 });
-      await Promise.all([
-        a.whenReady(),
-        b.whenReady(),
-        c.whenReady(),
-        total.whenReady(),
-      ]);
+      const a = await repo.create<NumDoc>({ value: 1 });
+      const b = await repo.create<NumDoc>({ value: 2 });
+      const c = await repo.create<NumDoc>({ value: 3 });
+      const total = await repo.create<NumDoc>({ value: 0 });
       const edge = await createEdgeHandle<number>(repo, {
         source: {
           a: a.sub("value"),
@@ -577,8 +551,7 @@ describe("EdgeHandle", () => {
 
   describe("edge → edge chaining", () => {
     it("an EdgeHandle in `target` relays writes through to its own targets", async () => {
-      const sink = repo.create<SinkDoc>({ html: "" });
-      await sink.whenReady();
+      const sink = await repo.create<SinkDoc>({ html: "" });
       const inner = await createEdgeHandle<string>(repo, {
         target: { sink: sink.sub("html") },
       });
@@ -603,8 +576,7 @@ describe("EdgeHandle", () => {
     });
 
     it("a resolved sub-handle endpoint implements the Handle interface", async () => {
-      const src = repo.create<SrcDoc>({ body: "hi" });
-      await src.whenReady();
+      const src = await repo.create<SrcDoc>({ body: "hi" });
       const edge = await createEdgeHandle(repo, {
         source: { s: src.sub("body") },
       });

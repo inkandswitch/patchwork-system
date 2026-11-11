@@ -5,7 +5,7 @@
  * `window.patchwork`.
  *
  * It owns page-wide state (the `window.repo`, `window.Automerge`,
- * `window.AutomergeRepo` and `window.hive` globals, custom elements, document
+ * `window.AutomergeRepo` globals, custom elements, document
  * listeners), so it runs once per page; a second call throws.
  *
  * It's for a browser site's `main.ts`. Anything without a UI should import
@@ -16,12 +16,11 @@ import {
   type AutomergeUrl,
   type DocHandle,
   type DocumentId,
-  type StorageId,
   Repo,
-} from "@automerge/vanillajs/slim";
+} from "@automerge/automerge-repo/slim";
+import type { SedimentreeBackend } from "@automerge/automerge-repo/sedimentree";
 import * as Automerge from "@automerge/automerge/slim";
 import * as AutomergeRepo from "@automerge/automerge-repo/slim";
-import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 import {
   ModuleWatcher,
@@ -34,6 +33,7 @@ import {
   type AccountDoc,
   type DatatypeDescription,
   type LoadedDatatype,
+  type PatchworkHive,
   createDocOfDatatype2,
   getRegistry,
   registerPlugins,
@@ -42,8 +42,6 @@ import {
 } from "@inkandswitch/patchwork-plugins";
 import * as plugins from "@inkandswitch/patchwork-plugins";
 import setupServiceWorker, {
-  connectClassicSync,
-  onPublicReaderStatus,
   resolveHandoffsWith,
 } from "@inkandswitch/patchwork-bootloader";
 import debug from "debug";
@@ -57,8 +55,7 @@ import type {
   SyncStateDocMessage,
 } from "./types.js";
 import { createRepo, initWasm } from "./repo.js";
-import { gatePublicDocsOnReader } from "./public-access.js";
-import { watchDocument } from "./watch-document.js";
+import { watchDocument, watchServerHeads } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 import { showBootStatus } from "./boot-status.js";
@@ -80,7 +77,8 @@ declare global {
     repo: Repo;
     Automerge: typeof import("@automerge/automerge/slim");
     AutomergeRepo: typeof import("@automerge/automerge-repo/slim");
-    hive?: AutomergeRepoKeyhive;
+    /** @deprecated Patchwork no longer uses keyhive: never set. */
+    hive?: PatchworkHive;
   }
 }
 
@@ -150,25 +148,24 @@ async function doSetup(
   const sw = await setupServiceWorker();
   if (!sw) throw new Error("Failed to set up service worker");
   log("workers ready");
-  const stopHearingReader = onPublicReaderStatus((publicReader) =>
-    report({ publicReader })
-  );
   report({ stage: "identity" });
 
-  let hive: AutomergeRepoKeyhive | undefined;
   let repo: Repo;
+  let backend: (SedimentreeBackend & { serverConnected: boolean }) | undefined;
   let signerIdentity: SignerIdentity | undefined;
 
   if (options.repo) {
     log("using provided Repo");
     repo = options.repo;
-    hive = options.hive;
   } else {
-    ({ repo, hive, signerIdentity } = await createRepo());
+    const tab = await createRepo();
+    ({ repo, signerIdentity } = tab);
+    const portBackend = tab.backend;
+    backend = portBackend;
     // The service worker asks this tab to resolve its own `automerge:`
     // requests, and leaves them to the automerge worker until now. A site's
     // own Repo isn't asked: it may not be able to find them.
-    resolveHandoffsWith(repo);
+    resolveHandoffsWith(repo, () => portBackend.serverConnected);
   }
 
   // Loaded tools and e2e read these. `window.patchwork` is the caller's to set.
@@ -176,9 +173,6 @@ async function doSetup(
   window.Automerge = Automerge as typeof import("@automerge/automerge/slim");
   window.AutomergeRepo =
     AutomergeRepo as typeof import("@automerge/automerge-repo/slim");
-  if (hive) window.hive = hive;
-
-  (hive?.networkAdapter as any)?.syncKeyhive?.();
 
   registerRepoProviderElement(repo as any);
 
@@ -196,8 +190,7 @@ async function doSetup(
     repoProvider.appendChild(rootElement);
   }
 
-  if (hive) gatePublicDocsOnReader(repo);
-  registerPatchworkViewElement({ hive, repo });
+  registerPatchworkViewElement({ repo });
 
   const accountKey = options.accountKey ?? "patchworkAccountURL";
   const loadOrderKey = `patchwork:load-order:${accountKey}`;
@@ -244,7 +237,7 @@ async function doSetup(
     // this tab's Subduction subscriptions, so their docs never load into this
     // tab's Repo.
     trackPackagesViaServiceWorker((url, onChange) =>
-      watchDocument(repo, url, onChange)
+      watchDocument({ repo, backend }, url, onChange)
     )
   );
 
@@ -272,7 +265,6 @@ async function doSetup(
 
   const accountDocHandle = (await resolveAccountHandle(repo, {
     storageKey: accountKey,
-    hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
 
@@ -301,7 +293,6 @@ async function doSetup(
   );
 
   void firstToolsLoaded.then(() => {
-    stopHearingReader();
     report({ stage: "opening" });
   });
 
@@ -325,15 +316,13 @@ async function doSetup(
 
   return {
     repo,
-    hive,
     account: accountDocHandle,
     signer: signerIdentity,
     packages: moduleWatcher,
     plugins,
     sw: {
-      connectClassicSync: (server) => connectClassicSync(repo, server),
       subscribeSyncState: (documentId, listener) =>
-        subscribeSyncState(repo, documentId, listener),
+        subscribeSyncState({ repo, backend }, documentId, listener),
     },
 
     async create<D>(type: string, init?: (doc: D) => void) {
@@ -347,8 +336,7 @@ async function doSetup(
       return createDocOfDatatype2(
         datatype as unknown as LoadedDatatype<D>,
         repo,
-        init,
-        hive
+        init
       );
     },
     open(url: AutomergeUrl, openOptions: OpenOptions = {}) {
@@ -473,44 +461,37 @@ function wireModuleSettings(
 // over its `subduction-remote-heads` event. The current value is replayed
 // from the handle's sync info, when the server has reported any.
 function subscribeSyncState(
-  repo: Repo,
+  { repo, backend }: { repo: Repo; backend?: SedimentreeBackend },
   documentId: string,
   listener: (update: SyncStateDocMessage) => void
 ): () => void {
-  const onHeads = (payload: {
-    documentId: string;
-    storageId: string;
-    heads: readonly string[];
-    timestamp: number;
-  }) => {
-    if (payload.documentId !== documentId) return;
+  const report = (
+    storageId: string,
+    heads: readonly string[],
+    timestamp: number
+  ) =>
     listener({
       type: "sync-state",
       documentId,
-      storageId: payload.storageId,
-      heads: [...payload.heads],
-      timestamp: payload.timestamp,
+      storageId,
+      heads: [...heads],
+      timestamp,
     });
-  };
-  repo.on("subduction-remote-heads", onHeads);
-
-  void (async () => {
-    const handle = repo.handles[documentId as DocumentId];
-    if (!handle) return;
-    for (const storageId of await repo.connectedSubductionPeerIds()) {
-      const info = handle.getSyncInfo(storageId as StorageId);
-      if (info) {
-        onHeads({
-          documentId,
-          storageId,
-          heads: info.lastHeads,
-          timestamp: info.lastSyncTimestamp,
-        });
-      }
-    }
-  })();
-
-  return () => repo.off("subduction-remote-heads", onHeads);
+  if (backend) {
+    return watchServerHeads(backend, documentId as DocumentId, (r) =>
+      report(r.peerId, r.heads, r.timestamp)
+    );
+  }
+  // a site's own Repo: only documents it has open, as their handles hear it
+  const handle = repo.handles[documentId as DocumentId];
+  if (!handle) return () => {};
+  const onHeads = (p: {
+    peerId: string;
+    heads: readonly string[];
+    timestamp: number;
+  }) => report(p.peerId, p.heads, p.timestamp);
+  handle.on("remote-heads", onHeads);
+  return () => handle.off("remote-heads", onHeads);
 }
 
 export { createRepo, initWasm } from "./repo.js";

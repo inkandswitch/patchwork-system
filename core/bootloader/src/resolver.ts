@@ -10,17 +10,14 @@ import {
   stringifyAutomergeUrl,
   type DocHandle,
   type Repo,
-  type StorageId,
+  type UrlHeads,
 } from "@automerge/automerge-repo/slim";
 import {
   getDefaultBranch,
   resolvePath,
 } from "@inkandswitch/patchwork-filesystem";
 
-import type {
-  HandoffReplyMessage,
-  HandoffRequestMessage,
-} from "./types.js";
+import type { HandoffReplyMessage, HandoffRequestMessage } from "./types.js";
 
 const RESOLVE_TIMEOUT_MS = 30_000;
 
@@ -33,7 +30,7 @@ function waitForHeads(
   hexHeads: string[],
   signal: AbortSignal
 ): Promise<boolean> {
-  if (hasHeads(handle.doc(), hexHeads)) return Promise.resolve(true);
+  if (hasHeads(handle.fullDoc(), hexHeads)) return Promise.resolve(true);
   if (signal.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
     const cleanup = () => {
@@ -41,7 +38,7 @@ function waitForHeads(
       signal.removeEventListener("abort", onAbort);
     };
     const check = () => {
-      if (!hasHeads(handle.doc(), hexHeads)) return;
+      if (!hasHeads(handle.fullDoc(), hexHeads)) return;
       cleanup();
       resolve(true);
     };
@@ -56,37 +53,37 @@ function waitForHeads(
   });
 }
 
+/**
+ * Wait (up to CATCH_UP_MS) until the handle has the heads the sync server
+ * last reported for it, so a package doc that's newer on the server isn't
+ * resolved stale. Offline there's nobody to catch up with.
+ */
 async function caughtUpWithPeers(
-  repo: Repo,
+  connected: () => boolean,
   handle: DocHandle<unknown>,
   signal: AbortSignal
 ): Promise<void> {
-  if (!repo.isSubductionConnected()) return;
-  const peers = (await repo.connectedSubductionPeerIds()) as StorageId[];
-  const caughtUp = () => {
-    const states = peers.map((peer) => handle.isCaughtUpWith(peer));
-    return (
-      states.some((state) => state !== undefined) && !states.includes(false)
-    );
-  };
-  if (caughtUp() || signal.aborted) return;
+  if (!connected() || signal.aborted) return;
   await new Promise<void>((resolve) => {
+    let reported: UrlHeads | undefined;
     const done = () => {
       clearTimeout(timer);
-      handle.off("remote-heads", check);
+      handle.off("remote-heads", onRemoteHeads);
       handle.off("heads-changed", check);
       signal.removeEventListener("abort", done);
       resolve();
     };
     const check = () => {
-      if (caughtUp()) done();
+      if (reported && handle.hasHeads(reported)) done();
+    };
+    const onRemoteHeads = ({ heads }: { heads: UrlHeads }) => {
+      reported = heads;
+      check();
     };
     const timer = setTimeout(done, CATCH_UP_MS);
-    handle.on("remote-heads", check);
+    handle.on("remote-heads", onRemoteHeads);
     handle.on("heads-changed", check);
     signal.addEventListener("abort", done);
-    if (signal.aborted) done();
-    else check();
   });
 }
 
@@ -99,6 +96,7 @@ class AbortHandoff extends Error {}
 
 async function resolveAutomergeUrl(
   repo: Repo,
+  connected: () => boolean,
   automergeURL: URL,
   signal: AbortSignal
 ): Promise<Response> {
@@ -118,14 +116,14 @@ async function resolveAutomergeUrl(
   // the headless req
   if (!heads) {
     let folder = await find(maybeAutomergeUrl);
-    await caughtUpWithPeers(repo, folder, signal);
+    await caughtUpWithPeers(connected, folder, signal);
     // Packages used to be published as a branches doc, which stands for its
     // default branch. The tab's ModuleWatcher looks packages up through here,
     // so this is where that's followed.
     const branch = getDefaultBranch(folder.doc());
     if (branch) {
       folder = await find(branch);
-      await caughtUpWithPeers(repo, folder, signal);
+      await caughtUpWithPeers(connected, folder, signal);
     }
     const url = stringifyAutomergeUrl({
       documentId: folder.documentId,
@@ -184,18 +182,25 @@ export type Resolver = {
    * it, having written the response into its cache if it's one to keep.
    * Undefined if the special URL isn't an `automerge:` one.
    */
-  answer(message: HandoffRequestMessage): Promise<HandoffReplyMessage | undefined>;
+  answer(
+    message: HandoffRequestMessage
+  ): Promise<HandoffReplyMessage | undefined>;
 };
 
+/**
+ * `connected` says whether the Repo's backend is connected to the sync
+ * server right now: only then does resolving wait to catch up with it.
+ */
 export function createResolver(
   getRepo: () => Promise<Repo>,
-  log: (...args: unknown[]) => void = () => {}
+  log: (...args: unknown[]) => void = () => {},
+  connected: () => boolean = () => true
 ): Resolver {
   const resolveWithin = async (handoff: URL): Promise<Response> => {
     const repo = await getRepo();
     const signal = AbortSignal.timeout(RESOLVE_TIMEOUT_MS);
     return Promise.race([
-      resolveAutomergeUrl(repo, handoff, signal),
+      resolveAutomergeUrl(repo, connected, handoff, signal),
       impatience(RESOLVE_TIMEOUT_MS),
     ]);
   };
@@ -244,7 +249,11 @@ export function createResolver(
         handoff = new URL(request.handoffURL);
       } catch {
         console.error("couldn't parse handoff url", request);
-        return inline(id, 400, `couldn't parse a special url out of ${request.url}`);
+        return inline(
+          id,
+          400,
+          `couldn't parse a special url out of ${request.url}`
+        );
       }
       if (handoff.protocol !== "automerge:") return undefined;
 

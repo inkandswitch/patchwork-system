@@ -1,5 +1,3 @@
-// Initialize both Wasm modules before any test runs: constructing a `Repo`
-// creates a SubductionSource, which imports @automerge/automerge-subduction/slim
-// and needs the Wasm already up. Importing the fat entry points does that.
+// Initialize the Wasm module before any test runs. Importing the fat entry
+// point does that.
 import "@automerge/automerge";
-import "@automerge/automerge-subduction";

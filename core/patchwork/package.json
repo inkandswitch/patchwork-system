@@ -76,21 +76,12 @@
     "./global.css": "./dist/global.css"
   },
   "dependencies": {
-    "@ark-0.6/automerge-repo": "npm:@automerge/automerge-repo@2.6.0-subduction.48",
-    "@ark-0.6/automerge-repo-keyhive": "npm:@automerge/automerge-repo-keyhive@0.6.0-alpha.1",
-    "@ark-0.6/automerge-repo-network-broadcastchannel": "npm:@automerge/automerge-repo-network-broadcastchannel@2.6.0-subduction.48",
-    "@ark-0.6/automerge-repo-network-messagechannel": "npm:@automerge/automerge-repo-network-messagechannel@2.6.0-subduction.48",
-    "@ark-0.6/automerge-repo-network-websocket": "npm:@automerge/automerge-repo-network-websocket@2.6.0-subduction.48",
-    "@ark-0.6/automerge-repo-storage-indexeddb": "npm:@automerge/automerge-repo-storage-indexeddb@2.6.0-subduction.48",
-    "@ark-0.6/automerge-subduction": "npm:@automerge/automerge-subduction@0.16.1",
-    "@ark-0.6/keyhive": "npm:@keyhive/keyhive@0.3.0-alpha.1",
-    "@ark-0.6/vanillajs": "npm:@automerge/vanillajs@2.6.0-subduction.48",
     "@automerge/automerge": "catalog:",
     "@automerge/automerge-repo": "catalog:",
-    "@automerge/automerge-repo-keyhive": "catalog:",
-    "@automerge/automerge-repo-storage-indexeddb": "catalog:",
-    "@automerge/automerge-subduction": "catalog:",
-    "@automerge/vanillajs": "catalog:",
+    "@automerge/automerge-repo-subduction": "catalog:",
+    "@automerge/automerge-repo-subduction-network-websocket": "catalog:",
+    "@automerge/automerge-repo-subduction-storage-indexeddb": "catalog:",
+    "@automerge/subduction": "catalog:",
     "@inkandswitch/patchwork-bootloader": "workspace:^",
     "@inkandswitch/patchwork-elements": "workspace:^",
     "@inkandswitch/patchwork-filesystem": "workspace:^",
@@ -108,7 +99,7 @@
     "vite": "^7.3.5"
   },
   "scripts": {
-    "build": "tsc && node build-head.js && cp src/global.css dist/global.css && cp src/client.d.ts dist/client.d.ts && rm -rf dist/patches && mkdir -p dist/patches && cp ../../patches/@automerge__automerge-repo@*.patch dist/patches/",
+    "build": "tsc && node build-head.js && cp src/global.css dist/global.css && cp src/client.d.ts dist/client.d.ts && rm -rf dist/patches && mkdir -p dist/patches && cp ../../patches/@automerge__automerge-repo-subduction@*.patch dist/patches/",
     "dev": "tsc -w --preserveWatchOutput",
     "test": "vitest run"
   }

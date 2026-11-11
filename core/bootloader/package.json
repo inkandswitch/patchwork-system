@@ -10,9 +10,10 @@
   "type": "module",
   "license": "MIT",
   "devDependencies": {
-    "vitest": "^3.2.6",
+    "@types/node": "catalog:",
     "esbuild": "^0.23.1",
-    "rollup": "^4.61.1"
+    "rollup": "^4.61.1",
+    "vitest": "^3.2.6"
   },
   "exports": {
     ".": {
@@ -31,33 +32,13 @@
       "import": "./dist/externals-list.js",
       "types": "./dist/externals-list.d.ts"
     },
-    "./signer": {
-      "import": "./dist/signer.js",
-      "types": "./dist/signer.d.ts"
-    },
     "./storage": {
       "import": "./dist/storage.js",
       "types": "./dist/storage.d.ts"
     },
-    "./keyhive-sync-server": {
-      "import": "./dist/keyhive-sync-server.js",
-      "types": "./dist/keyhive-sync-server.d.ts"
-    },
-    "./public-pair": {
-      "import": "./dist/public-pair.js",
-      "types": "./dist/public-pair.d.ts"
-    },
     "./service-worker": {
       "import": "./dist/service-worker.js",
       "types": "./dist/service-worker.d.ts"
-    },
-    "./public-reader-worker": {
-      "import": "./dist/public-reader-worker.js",
-      "types": "./dist/public-reader-worker.d.ts"
-    },
-    "./public-reader": {
-      "import": "./dist/public-reader.js",
-      "types": "./dist/public-reader.d.ts"
     },
     "./automerge-protocol-handler-worker": {
       "import": "./dist/automerge-protocol-handler-worker.js",
@@ -84,13 +65,10 @@
   "dependencies": {
     "@automerge/automerge": "catalog:",
     "@automerge/automerge-repo": "catalog:",
-    "@automerge/automerge-repo-keyhive": "catalog:",
-    "@automerge/automerge-repo-network-broadcastchannel": "catalog:",
-    "@automerge/automerge-repo-network-messagechannel": "catalog:",
-    "@automerge/automerge-repo-network-websocket": "catalog:",
-    "@automerge/automerge-repo-storage-indexeddb": "catalog:",
-    "@automerge/automerge-subduction": "catalog:",
-    "@automerge/vanillajs": "catalog:",
+    "@automerge/automerge-repo-subduction": "catalog:",
+    "@automerge/automerge-repo-subduction-network-websocket": "catalog:",
+    "@automerge/automerge-repo-subduction-storage-indexeddb": "catalog:",
+    "@automerge/subduction": "catalog:",
     "@codemirror/commands": "catalog:",
     "@codemirror/language": "catalog:",
     "@codemirror/state": "catalog:",
@@ -99,7 +77,6 @@
     "@inkandswitch/patchwork-filesystem": "workspace:^",
     "@inkandswitch/patchwork-plugins": "workspace:^",
     "@inkandswitch/patchwork-providers": "workspace:^",
-    "@keyhive/keyhive": "catalog:",
     "@types/debug": "^4.1.13",
     "debug": "^4.4.3",
     "resolve.exports": "^2.0.3",
@@ -109,18 +86,13 @@
   },
   "peerDependencies": {
     "@automerge/automerge": "catalog:",
-    "@automerge/automerge-repo": "catalog:",
-    "@automerge/automerge-repo-keyhive": "catalog:",
-    "@automerge/vanillajs": "catalog:"
+    "@automerge/automerge-repo": "catalog:"
   },
   "peerDependenciesMeta": {
     "@automerge/automerge": {
       "optional": true
     },
     "@automerge/automerge-repo": {
-      "optional": true
-    },
-    "@automerge/automerge-repo-keyhive": {
       "optional": true
     },
     "@automerge/vanillajs": {

@@ -12,8 +12,8 @@
   },
   "dependencies": {
     "@automerge/automerge-repo": "catalog:",
-    "@automerge/automerge-repo-storage-nodefs": "catalog:",
-    "@automerge/automerge-subduction": "catalog:",
+    "@automerge/automerge-repo-subduction": "catalog:",
+    "@automerge/subduction": "catalog:",
     "tsx": "^4.19.3"
   },
   "devDependencies": {

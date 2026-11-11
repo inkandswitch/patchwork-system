@@ -11,8 +11,6 @@ import type {
   PluginDescription,
 } from "./registry/types.js";
 import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { isKeyhiveDoc } from "./keyhive.js";
 
 export type DatatypeImplementation<D = unknown> = {
   init(doc: D, repo: Repo): void;
@@ -49,14 +47,10 @@ const splitImportUrl = (
 export const createDocOfDatatype2 = async <D>(
   datatype: LoadedDatatype<D>,
   repo: Repo,
-  change?: (doc: D) => void,
-  hive?: AutomergeRepoKeyhive
+  change?: (doc: D) => void
 ): Promise<DocHandle<D & HasPatchworkMetadata>> => {
-  const handle = await repo.create2<D & HasPatchworkMetadata>();
-  if (hive && isKeyhiveDoc(handle.url)) {
-    await hive.addSyncServerRelayToDoc(handle.url);
-  }
-  handle.change((doc: D & HasPatchworkMetadata) => {
+  const handle = await repo.create<D & HasPatchworkMetadata>();
+  await handle.change((doc: D & HasPatchworkMetadata) => {
     datatype.module.init(doc, repo);
     // Record the datatype's import URL so a viewer with no built-in tool can
     // load one. It may be an `http:`/`https:` module bundle or an `automerge:`

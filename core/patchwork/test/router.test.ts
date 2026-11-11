@@ -40,11 +40,13 @@ let account: AutomergeUrl;
 let held: Map<AutomergeUrl, Promise<void>>;
 const listeners: [string, EventListenerOrEventListenerObject][] = [];
 
-function note(title: string): AutomergeUrl {
-  return repo.create<Note>({
-    "@patchwork": { type: "router-test-note" },
-    title,
-  }).url;
+async function note(title: string): Promise<AutomergeUrl> {
+  return (
+    await repo.create<Note>({
+      "@patchwork": { type: "router-test-note" },
+      title,
+    })
+  ).url;
 }
 
 function hold(url: AutomergeUrl): () => void {
@@ -82,7 +84,7 @@ beforeEach(async () => {
   await go("");
   document.title = SITE;
   repo = new Repo();
-  account = repo.create({}).url;
+  account = (await repo.create({})).url;
   held = new Map();
   root = document.createElement("div");
   document.body.append(root);
@@ -107,14 +109,14 @@ afterEach(async () => {
 describe("the tab's title", () => {
   it("names the document that was opened", async () => {
     start();
-    open(note("Apples"));
+    open(await note("Apples"));
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
   });
 
   it("isn't taken by a slower lookup for a document opened earlier", async () => {
     start();
-    const apples = note("Apples");
-    const pears = note("Pears");
+    const apples = await note("Apples");
+    const pears = await note("Pears");
     const releaseApples = hold(apples);
     open(apples);
     await ticks();
@@ -127,9 +129,9 @@ describe("the tab's title", () => {
 
   it("doesn't keep naming the previous document while the next one loads", async () => {
     start();
-    open(note("Apples"));
+    open(await note("Apples"));
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
-    const pears = note("Pears");
+    const pears = await note("Pears");
     hold(pears);
     open(pears);
     await ticks();
@@ -138,10 +140,12 @@ describe("the tab's title", () => {
 
   it("follows a rename", async () => {
     start();
-    const apples = note("Apples");
+    const apples = await note("Apples");
     open(apples);
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
-    (await repo.find<Note>(apples)).change((doc) => {
+    await (
+      await repo.find<Note>(apples)
+    ).change((doc) => {
       doc.title = "Crab apples";
     });
     await vi.waitFor(() =>
@@ -151,12 +155,14 @@ describe("the tab's title", () => {
 
   it("stops following a document once another is open", async () => {
     start();
-    const apples = note("Apples");
+    const apples = await note("Apples");
     open(apples);
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
-    open(note("Pears"));
+    open(await note("Pears"));
     await vi.waitFor(() => expect(document.title).toBe(`Pears | ${SITE}`));
-    (await repo.find<Note>(apples)).change((doc) => {
+    await (
+      await repo.find<Note>(apples)
+    ).change((doc) => {
       doc.title = "Crab apples";
     });
     await ticks(20);
@@ -165,10 +171,12 @@ describe("the tab's title", () => {
 
   it("names a document whose datatype registers after it opened", async () => {
     start();
-    const plum = repo.create({
-      "@patchwork": { type: "router-test-late" },
-      title: "Plum",
-    }).url;
+    const plum = (
+      await repo.create({
+        "@patchwork": { type: "router-test-late" },
+        title: "Plum",
+      })
+    ).url;
     open(plum);
     await ticks(20);
     expect(document.title).toBe(SITE);
@@ -189,7 +197,7 @@ describe("the tab's title", () => {
 
   it("goes back to the site's name when no document is open", async () => {
     start();
-    open(note("Apples"));
+    open(await note("Apples"));
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
     await go("");
     await vi.waitFor(() => expect(document.title).toBe(SITE));
@@ -198,7 +206,7 @@ describe("the tab's title", () => {
 
 describe("the root view", () => {
   it("goes back to the home frame when the hash names no frame", async () => {
-    const pears = note("Pears");
+    const pears = await note("Pears");
     await go(`frame=other-frame&doc=${pears}`);
     start();
     expect(root.getAttribute("tool-id")).toBe("other-frame");
@@ -210,7 +218,7 @@ describe("the root view", () => {
 
   it("rewrites a bare automerge url to a doc= link", async () => {
     start();
-    const apples = note("Apples");
+    const apples = await note("Apples");
     await go(apples);
     await vi.waitFor(() => expect(location.hash).toBe(`#doc=${apples}`));
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
