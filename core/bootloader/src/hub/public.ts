@@ -20,7 +20,7 @@ import {
   SubductionBackend,
   type SubductionStorageAdapterInterface,
 } from "@automerge/automerge-repo-subduction";
-import { WebSocketSubductionNetworkAdapter } from "@automerge/automerge-repo-subduction-network-websocket";
+import { SwitchableNetwork } from "./switchable-network.js";
 import { createMemorySigner } from "@automerge/subduction/slim";
 import {
   Archive,
@@ -45,7 +45,7 @@ import {
 export type PublicReader = {
   /** The fetcher's connection, decrypted with the reader. */
   backend: SedimentreeBackend;
-  network: WebSocketSubductionNetworkAdapter;
+  network: SwitchableNetwork;
   codec: Codec;
   /** Whether the public may read `id`. */
   canRead(id: Uint8Array): Promise<boolean>;
@@ -103,7 +103,7 @@ export async function openPublicReader({
     }
   });
 
-  const network = new WebSocketSubductionNetworkAdapter(url);
+  const network = new SwitchableNetwork(url);
   const subduction = new SubductionBackend({
     signer: createMemorySigner(seed),
     storage: documents,

@@ -18,7 +18,11 @@ export type BackendCall =
   | { op: "deleteLocal"; documentId: SedimentreeId }
   | { op: "publishEphemeral"; session: number; message: EphemeralEnvelope }
   | { op: "hive"; method: "canRead" | "canWrite"; url: string }
-  | { op: "info" };
+  | { op: "info" }
+  /** The peers the worker is connected to: the sync server's id, hex. */
+  | { op: "serverPeers" }
+  /** Cut or restore the worker's link to the sync server (bench, dev). */
+  | { op: "setOffline"; offline: boolean };
 
 /** Tab → worker. */
 export type ClientMessage =

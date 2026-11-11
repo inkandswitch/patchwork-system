@@ -12,7 +12,7 @@ import {
   type SubductionStorageAdapterInterface,
 } from "@automerge/automerge-repo-subduction";
 import { IndexedDBSubductionStorageAdapter } from "@automerge/automerge-repo-subduction-storage-indexeddb";
-import { WebSocketSubductionNetworkAdapter } from "@automerge/automerge-repo-subduction-network-websocket";
+import { SwitchableNetwork } from "./switchable-network.js";
 import { createMemorySigner } from "@automerge/subduction/slim";
 import { KeyhiveBackend } from "../keyline/backend.js";
 import { serial } from "../keyline/sync.js";
@@ -61,7 +61,7 @@ export type Hub = {
   backend: SedimentreeBackend;
   /** The worker's own Repo. */
   repo: Repo;
-  network: WebSocketSubductionNetworkAdapter;
+  network: SwitchableNetwork;
   /** The hex verifying key the worker signs as, towards the sync server. */
   peerId: string;
   hive?: HubKeyhive;
@@ -100,7 +100,7 @@ export async function createHub({
       database: hubDatabase(storagePrefix),
     });
   const seed = await loadOrCreateSeed(kv);
-  const network = new WebSocketSubductionNetworkAdapter(syncServer.url);
+  const network = new SwitchableNetwork(syncServer.url);
   const subduction = new SubductionBackend({
     signer: createMemorySigner(seed),
     storage:
@@ -214,6 +214,13 @@ export async function createHub({
         log,
         onGone,
         status: {
+          peers: () => subduction.engine.getConnectedPeerIds(),
+          setOffline: async (offline) => {
+            await Promise.all([
+              network.setOffline(offline),
+              publicReader?.network.setOffline(offline),
+            ]);
+          },
           connected: () => network.status === "connected",
           subscribe: (listener) => {
             let last = network.status === "connected";

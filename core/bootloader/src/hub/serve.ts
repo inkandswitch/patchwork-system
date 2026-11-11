@@ -35,6 +35,10 @@ export type ServeOptions = {
   status?: {
     connected(): boolean;
     subscribe(listener: (connected: boolean) => void): () => void;
+    /** The peers the worker is connected to (the sync server), hex. */
+    peers(): Promise<string[]>;
+    /** Cut or restore the worker's link to the sync server. */
+    setOffline(offline: boolean): Promise<void>;
   };
   log?: (...args: unknown[]) => void;
   /** Called once the tab has gone and its sessions are closed. */
@@ -102,6 +106,11 @@ export function serveClient(port: MessagePort, options: ServeOptions): void {
         if (!session) throw new Error(`no session ${body.session}`);
         return session.publishEphemeral(body.message);
       }
+      case "serverPeers":
+        return status?.peers() ?? [];
+      case "setOffline":
+        if (!status) throw new Error("this worker has no sync server link");
+        return status.setOffline(body.offline);
       case "info":
         return {
           peerId,

@@ -112,6 +112,16 @@ export class PortBackend implements SedimentreeBackend {
     });
   }
 
+  /** The peers the worker is connected to (the sync server), hex. */
+  serverPeers(): Promise<string[]> {
+    return this.call<string[]>({ op: "serverPeers" });
+  }
+
+  /** Cut or restore the worker's link to the sync server (bench, dev). */
+  setOffline(offline: boolean): Promise<void> {
+    return this.call({ op: "setOffline", offline });
+  }
+
   /** Who the worker is. */
   info(): Promise<HubInfo> {
     return this.call<HubInfo>({ op: "info" });
