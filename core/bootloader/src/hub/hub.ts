@@ -178,7 +178,7 @@ export async function createHub({
     ]);
     backend = new RoutingBackend(user, pub.backend, async (id) => {
       await bothSynced;
-      return !(await h.codec.knows(id)) && (await pub.canRead(id));
+      return !(await h.canRead(id)) && (await pub.canRead(id));
     });
     // what tabs hear: the user's access, or the public's
     tabHive = {
