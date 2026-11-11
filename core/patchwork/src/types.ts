@@ -10,7 +10,6 @@ import type {
 import type {
   AccountCreator,
   AccountDoc,
-  PatchworkHive,
 } from "@inkandswitch/patchwork-plugins";
 import type * as pluginsNS from "@inkandswitch/patchwork-plugins";
 
@@ -99,9 +98,6 @@ export interface PatchworkOptions {
    */
   repo?: Repo;
 
-  /** The keyhive instance accompanying a provided {@link PatchworkOptions.repo}. */
-  hive?: PatchworkHive;
-
   /**
    * How document navigation maps onto the URL. `"hash"` (the default) drives
    * the root view from `location.hash`. `false` installs no router — call
@@ -163,7 +159,6 @@ export interface BootProgress {
  */
 export interface Patchwork {
   readonly repo: Repo;
-  readonly hive?: PatchworkHive;
   readonly account: DocHandle<AccountDoc>;
   readonly signer?: SignerIdentity;
 

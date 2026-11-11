@@ -6,7 +6,7 @@ index d9d6467faec4db3797160be8e4ece51b9c84b63f..7f47bf5387bf70e0eb231df4f086af84
  export declare class SubductionBackend implements SedimentreeBackend {
      #private;
      constructor(options: SubductionBackendOptions);
-+    /** The native Subduction engine, for protocols Repo doesn't speak (keyhive). */
++    /** The native Subduction engine, for what Repo doesn't expose (connected peers). */
 +    get engine(): N.Subduction;
      /** Hex-encoded verifying key of this backend's signer. */
      get peerId(): string;
@@ -28,7 +28,7 @@ index 338be928f0ffcffbc6f67cb8ddf68123153a9146..3dfe5080645e578b68be8dd85a37c40c
          this.#networkSettled = Promise.race([started.then(() => { }), closed]);
      }
      /** Hex-encoded verifying key of this backend's signer. */
-+    /** The native Subduction engine, for protocols Repo doesn't speak (keyhive). */
++    /** The native Subduction engine, for what Repo doesn't expose (connected peers). */
 +    get engine() {
 +        return this.#engine;
 +    }
@@ -88,7 +88,7 @@ index 8595f5dcaf996c39c54503912bf29be7ecf286e4..ecbffbc3cae76b41ee1b78ea405a1e63
      )
      this.#networkSettled = Promise.race([started.then(() => {}), closed])
    }
-+  /** The native Subduction engine, for protocols Repo doesn't speak (keyhive). */
++  /** The native Subduction engine, for what Repo doesn't expose (connected peers). */
 +  get engine(): N.Subduction {
 +    return this.#engine
 +  }

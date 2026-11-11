@@ -12,8 +12,6 @@ const externals = [
   "@automerge/automerge-repo-subduction-storage-indexeddb",
   "@automerge/subduction",
   "@automerge/subduction/slim",
-  "@keyhive/keyhive",
-  "@keyhive/keyhive/slim",
   "@inkandswitch/patchwork-bootloader",
   "@inkandswitch/patchwork-elements",
   "@inkandswitch/patchwork-filesystem",
@@ -41,5 +39,4 @@ export const slim: Record<string, string> = {
   "@automerge/automerge": "@automerge/automerge/slim",
   "@automerge/automerge-repo": "@automerge/automerge-repo/slim",
   "@automerge/subduction": "@automerge/subduction/slim",
-  "@keyhive/keyhive": "@keyhive/keyhive/slim",
 };

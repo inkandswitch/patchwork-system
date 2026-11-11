@@ -80,10 +80,8 @@ export type {
   PatchworkIconsOptions,
   PatchworkHtmlOptions,
   PatchworkNetlifyOptions,
-  PatchworkKeyhiveOptions,
   PatchworkSyncServersOptions,
 } from "../site-kit/options.js";
-export type { ArkVersion } from "@inkandswitch/patchwork-bootloader";
 
 export interface PatchworkVitePluginOptions extends PatchworkSiteOptions {
   importmap?: ImportMap;

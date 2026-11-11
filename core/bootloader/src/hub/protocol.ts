@@ -1,7 +1,7 @@
 // What a tab and the automerge worker say to each other over a MessagePort.
 // The worker holds the one sedimentree backend for the origin (its IndexedDB,
-// its socket to the sync server, its keyhive); each tab's Repo runs on a
-// PortBackend that forwards to it. See docs/bootloader.html#hub.
+// its socket to the sync server); each tab's Repo runs on a PortBackend that
+// forwards to it. See docs/bootloader.html#hub.
 
 import type {
   BackendOperation,
@@ -17,7 +17,6 @@ export type BackendCall =
   | { op: "flush"; ids?: SedimentreeId[] }
   | { op: "deleteLocal"; documentId: SedimentreeId }
   | { op: "publishEphemeral"; session: number; message: EphemeralEnvelope }
-  | { op: "hive"; method: "canRead" | "canWrite"; url: string }
   | { op: "info" }
   /** The peers the worker is connected to: the sync server's id, hex. */
   | { op: "serverPeers" }
@@ -53,8 +52,6 @@ export type HubMessage =
   | { type: "reply"; call: number; value?: unknown; error?: SerializedError }
   | { type: "event"; session: number; event: SedimentreeEvent }
   | { type: "end"; session: number; error?: SerializedError }
-  /** Keyhive learned something that may change what this device can open. */
-  | { type: "hive-change" }
   /** Whether the worker is connected to the sync server; sent on every change. */
   | { type: "status"; connected: boolean };
 
@@ -62,6 +59,4 @@ export type HubMessage =
 export type HubInfo = {
   /** The hex verifying key it signs as, towards the sync server. */
   peerId: string;
-  /** Its keyhive identity (base64), on a keyhive site. */
-  hive: { id: string } | null;
 };

@@ -37,9 +37,6 @@
     "solid-js": "*"
   },
   "peerDependenciesMeta": {
-    "@automerge/automerge-repo-keyhive": {
-      "optional": true
-    },
     "@types/react": {
       "optional": true
     },
@@ -66,7 +63,6 @@
     "@inkandswitch/patchwork-filesystem": "workspace:^",
     "@inkandswitch/patchwork-plugins": "workspace:^",
     "@inkandswitch/patchwork-providers": "workspace:^",
-    "@keyhive/keyhive": "catalog:",
     "@types/debug": "^4.1.13",
     "@types/node": "catalog:",
     "@types/react": "catalog:",

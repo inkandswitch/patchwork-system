@@ -5,7 +5,7 @@
  * `window.patchwork`.
  *
  * It owns page-wide state (the `window.repo`, `window.Automerge`,
- * `window.AutomergeRepo` and `window.hive` globals, custom elements, document
+ * `window.AutomergeRepo` globals, custom elements, document
  * listeners), so it runs once per page; a second call throws.
  *
  * It's for a browser site's `main.ts`. Anything without a UI should import
@@ -33,7 +33,6 @@ import {
   type AccountDoc,
   type DatatypeDescription,
   type LoadedDatatype,
-  type PatchworkHive,
   createDocOfDatatype2,
   getRegistry,
   registerPlugins,
@@ -77,7 +76,6 @@ declare global {
     repo: Repo;
     Automerge: typeof import("@automerge/automerge/slim");
     AutomergeRepo: typeof import("@automerge/automerge-repo/slim");
-    hive?: PatchworkHive;
   }
 }
 
@@ -148,7 +146,6 @@ async function doSetup(
   log("workers ready");
   report({ stage: "identity" });
 
-  let hive: PatchworkHive | undefined;
   let repo: Repo;
   let backend: (SedimentreeBackend & { serverConnected: boolean }) | undefined;
   let signerIdentity: SignerIdentity | undefined;
@@ -156,10 +153,9 @@ async function doSetup(
   if (options.repo) {
     log("using provided Repo");
     repo = options.repo;
-    hive = options.hive;
   } else {
     const tab = await createRepo();
-    ({ repo, hive, signerIdentity } = tab);
+    ({ repo, signerIdentity } = tab);
     const portBackend = tab.backend;
     backend = portBackend;
     // The service worker asks this tab to resolve its own `automerge:`
@@ -168,22 +164,11 @@ async function doSetup(
     resolveHandoffsWith(repo, () => portBackend.serverConnected);
   }
 
-  // Published tools still call automerge-repo 2's `repo.create2()`, which
-  // automerge-repo 3 dropped now that `create()` is the async one. Alias it on
-  // the Repo class, so overlay repos (which forward to theirs) and the scratch
-  // repo have it too, until those tools `await repo.create()` instead.
-  const repoPrototype = Object.getPrototypeOf(repo) as {
-    create: Repo["create"];
-    create2?: Repo["create"];
-  };
-  repoPrototype.create2 ??= repoPrototype.create;
-
   // Loaded tools and e2e read these. `window.patchwork` is the caller's to set.
   window.repo = repo;
   window.Automerge = Automerge as typeof import("@automerge/automerge/slim");
   window.AutomergeRepo =
     AutomergeRepo as typeof import("@automerge/automerge-repo/slim");
-  if (hive) window.hive = hive;
 
   registerRepoProviderElement(repo as any);
 
@@ -201,7 +186,7 @@ async function doSetup(
     repoProvider.appendChild(rootElement);
   }
 
-  registerPatchworkViewElement({ hive, repo });
+  registerPatchworkViewElement({ repo });
 
   const accountKey = options.accountKey ?? "patchworkAccountURL";
   const loadOrderKey = `patchwork:load-order:${accountKey}`;
@@ -327,7 +312,6 @@ async function doSetup(
 
   return {
     repo,
-    hive,
     account: accountDocHandle,
     signer: signerIdentity,
     packages: moduleWatcher,

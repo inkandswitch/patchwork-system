@@ -13,7 +13,7 @@ import {
   type SedimentreeId,
   type SedimentreeSession,
 } from "@automerge/automerge-repo/sedimentree";
-import { EventQueue } from "../keyline/backend.js";
+import { EventQueue } from "./event-queue.js";
 import type {
   BackendCall,
   ClientMessage,
@@ -45,7 +45,6 @@ export class PortBackend implements SedimentreeBackend {
   #nextSession = 0;
   readonly #calls = new Map<number, Pending>();
   readonly #sessions = new Map<number, Session>();
-  readonly #hiveListeners = new Set<() => void>();
   /** Sessions opened again on a new worker, until its initial load is done. */
   readonly #reopened = new WeakSet<Session>();
   readonly #lock: string;
@@ -86,12 +85,6 @@ export class PortBackend implements SedimentreeBackend {
     for (const [call, { body }] of this.#calls) {
       this.#send({ type: "call", call, body });
     }
-  }
-
-  /** Hear when keyhive in the worker learns something. */
-  onHiveChange(listener: () => void): () => void {
-    this.#hiveListeners.add(listener);
-    return () => this.#hiveListeners.delete(listener);
   }
 
   /** Ask the worker something that isn't a backend operation. */
@@ -225,9 +218,6 @@ export class PortBackend implements SedimentreeBackend {
         else s.queue.end();
         return;
       }
-      case "hive-change":
-        for (const listener of this.#hiveListeners) listener();
-        return;
       case "status":
         if (this.#serverConnected === message.connected) return;
         this.#serverConnected = message.connected;

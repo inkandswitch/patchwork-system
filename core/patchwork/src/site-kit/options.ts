@@ -1,4 +1,3 @@
-import type { ArkVersion } from "@inkandswitch/patchwork-bootloader";
 // Options for a site's generated files (icons, index.html, the manifest,
 // Netlify config), with nothing vite-specific in them, so another bundler can
 // use them too. `../vite/patchwork-plugin.ts` adds the vite parts.
@@ -30,24 +29,10 @@ export interface PatchworkNetlifyOptions {
   immutableAssets?: boolean;
 }
 
-export interface PatchworkKeyhiveOptions {
-  /**
-   * The keyhive the sync server speaks; each device keeps a keyhive of each
-   * kind it has used, apart. `"0.8"` is keyhive 0.6 used directly (keyline),
-   * for servers that serve `/keyhive/contact-card` (staging). `"0.6"` is ARK
-   * 0.6 and keyhive 0.3, which subduction.sync.inkandswitch.com still runs;
-   * it only knows that server's identity.
-   *
-   * Defaults to `"0.6"` when `syncServers.subduction` is on
-   * subduction.sync.inkandswitch.com and `"0.8"` anywhere else.
-   */
-  ark?: ArkVersion;
-}
-
 export type PatchworkSyncServersOptions = {
   /** wss:// URL for the legacy automerge-repo sync-server channel (only for its preconnect hint: automerge-repo 3 has no classic sync). Default: wss://sync3.automerge.org. Pass false to skip its preconnect hint. */
   classic?: string | false;
-  /** wss:// URL for the subduction channel. Default: wss://subduction.sync.inkandswitch.com. A keyhive build uses it too, and fetches the server's contact card from `/keyhive/contact-card` on the same host. */
+  /** wss:// URL for the subduction channel. Default: wss://subduction.sync.inkandswitch.com. */
   subduction?: string;
 };
 
@@ -80,13 +65,6 @@ export interface PatchworkSiteOptions {
   themeColor?: string | { light: string; dark: string };
   /** manifest background_color */
   backgroundColor?: string;
-
-  /**
-   * Enables keyhive for this build, against the `syncServers.subduction`
-   * server. `true` takes every default; an object turns individual behaviour
-   * off. Omitted or `false` builds a plain subduction repo.
-   */
-  keyhive?: boolean | PatchworkKeyhiveOptions;
 
   /**
    * The sync-server URLs for this build. Also emitted as connection hints;

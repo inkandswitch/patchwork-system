@@ -13,14 +13,12 @@ import {
   type HasPatchworkMetadata,
 } from "@inkandswitch/patchwork-filesystem";
 import { getRegistry } from "./registry/index.js";
-import type { PatchworkHive } from "./keyhive.js";
 
 export type ToolImplementation<T = unknown> = ToolRender<T>;
 
-// todo(chee): repo and hive on here might be temporary, think about it
+// todo(chee): repo on here might be temporary, think about it
 export type ToolElement = HTMLElement & {
   repo: Repo;
-  hive?: PatchworkHive;
 };
 
 export type ToolRender<T = unknown> = (

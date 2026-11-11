@@ -104,8 +104,6 @@
     <nav>
       <ul>
         <li><a href="#hub">The hub</a></li>
-        <li><a href="#keyhive">Keyhive</a></li>
-        <li><a href="#public-pair">Reading public documents</a></li>
         <li><a href="#resolver">The resolver</a></li>
         <li><a href="#recycling">Recycling the resolver</a></li>
         <li><a href="#worker-early">Starting a worker early</a></li>
@@ -124,10 +122,9 @@
       backend per database. So tabs can't each be a node on a shared database,
       as they were on automerge-repo 2. The automerge SharedWorker is the
       origin's one node. It holds the <code>SubductionBackend</code>, with its
-      IndexedDB (<code>&lt;prefix&gt;-documents</code>), its socket to the sync
-      server and, on keyhive sites, keyhive. Its own small key-value database
-      (<code>&lt;prefix&gt;-hub</code>) keeps the signer seed and keyhive's
-      archive.
+      IndexedDB (<code>&lt;prefix&gt;-documents</code>) and its socket to the
+      sync server. Its own small key-value database
+      (<code>&lt;prefix&gt;-hub</code>) keeps the signer seed.
     </p>
 
     <p>
@@ -150,94 +147,7 @@
       straight after <code>create()</code> never reached the server. The pnpm
       patch to <code>@automerge/automerge-repo-subduction</code> starts a
       catch-up round for such a store. The same patch exposes the backend's
-      native engine for keyhive sync.
-    </p>
-
-    <h2 id="keyhive"><a href="#keyhive">Keyhive</a></h2>
-    <p class="files"><code>hub/keyhive.ts</code>, <code>keyline/*.ts</code></p>
-
-    <p>
-      Keyhive (<code>@keyhive/keyhive</code>) is used directly, as pushwork's
-      keyline does it, without automerge-repo-keyhive. It lives only in the
-      worker. It syncs with the server over subduction's keyhive frames
-      (<code>keyline/sync.ts</code>, <code>keyline/wire.ts</code>, the
-      subduction_keyhive server's messages), and the server's contact card comes
-      from <code>/keyhive/contact-card</code>. <code>KeyhiveBackend</code> wraps
-      the worker's backend: blobs are encrypted on the way in and decrypted on
-      the way out, so storage and the server only ever see ciphertext. A blob
-      that won't open yet is held and tried again whenever keyhive learns
-      something. New documents get keyhive-minted ids in one group per device,
-      which the server relays. Creating one waits for a keyhive sync so the
-      server knows the document before its blobs arrive. Tabs ask the worker
-      about access through <code>PatchworkHive</code>.
-    </p>
-
-    <p>
-      That's keyhive for servers that serve their card (<code>keyhive.ark</code>
-      <code>"0.8"</code>, staging). A server still on ARK 0.6 and keyhive 0.3
-      (<code>"0.6"</code>, subduction.sync.inkandswitch.com) speaks ARK's own
-      keyhive messages, so <code>hub/keyhive-ark06.ts</code> uses ARK 0.6's
-      <code>KeyhiveSubductionAdapter</code> and
-      <code>KeyhiveBlobInterceptor</code>
-      (<code>@ark-0.6/automerge-repo-keyhive</code>) over the same engine,
-      through a shim for subduction 0.27's hex peer ids. Keyhive 0.3 has a world
-      principal, so public documents there are read with the device's own
-      keyhive, and there is no public pair. The two keep their state apart in
-      the worker's database.
-    </p>
-
-    <p>
-      A device's decryption keys come from prekey secrets in its own archive,
-      which never syncs: the same seed on a fresh device can't open what the
-      first one wrote. A second device is a second identity, and has to be
-      granted access.
-    </p>
-
-    <h2 id="public-pair">
-      <a href="#public-pair">Reading public documents</a>
-    </h2>
-    <p class="files">
-      <code>hub/public.ts</code>, <code>public-pair-principals.ts</code>
-    </p>
-
-    <p>
-      Keyhive 0.6 has no public "world" user. A repo is made public to an app by
-      granting two principals whose secrets the app ships in the clear:
-    </p>
-    <dl>
-      <dt>reader</dt>
-      <dd>
-        Read. Its archive holds its prekey secrets but no signing key, so anyone
-        can decrypt as it and nobody can sign as it.
-      </dd>
-      <dt>fetcher</dt>
-      <dd>
-        Relay. Its signing seed is shipped, so anyone can connect to the sync
-        server as it and pull the ciphertext.
-      </dd>
-    </dl>
-
-    <p>
-      The user connects as the user, who isn't a member of these docs, so the
-      server never sends their blobs on that connection. The worker therefore
-      connects a second time, as the fetcher, with a backend of its own
-      (<code>&lt;prefix&gt;-public-documents</code>). It syncs keyhive as the
-      fetcher, hands each keyhive event it hasn't handed over yet to a keyhive
-      opened as the reader, and decrypts blobs with that. A first visit hands
-      over every public event the server holds, thousands of them, once. The
-      reader's archive and what was handed over are kept. A
-      <code>RoutingBackend</code> opens a document on the public connection when
-      the user's keyhive doesn't know it and the reader can read it, and on the
-      user's otherwise. Every keyhive in the worker shares one queue, since
-      keyhive's wasm isn't reentrant.
-    </p>
-
-    <p>
-      Nothing is written through the public connection: writes always go to the
-      user's. Pushwork makes repos public this way (<code
-        >--public-access read</code
-      >), and the pair in <code>public-pair-principals.ts</code> has to be
-      exactly the one pushwork grants, or it reads nothing already published.
+      native engine, which the worker asks for its connected peers.
     </p>
 
     <h2 id="resolver"><a href="#resolver">The resolver</a></h2>

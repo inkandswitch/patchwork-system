@@ -1,9 +1,6 @@
 import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
-import type { PatchworkHive } from "@inkandswitch/patchwork-plugins";
-import { gateOnAccess } from "./keyhive-access.js";
 import {
   getRegistry,
-  isKeyhiveDoc,
   isLoadablePlugin,
   type LoadablePlugin,
   type LoadedPlugin,
@@ -15,7 +12,6 @@ import {
 } from "@inkandswitch/patchwork-providers";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 import { LegacyImpl } from "./legacy-impl.js";
-import { loadRetryDelay, resyncBeforeRetry } from "./load-retry.js";
 import {
   dispatchFromNearestConnected,
   Serialized,
@@ -77,8 +73,6 @@ export type RegisterPatchworkViewElementParams = {
    * {@link ComponentRender}).
    */
   repo: Repo;
-  /** Handed to legacy-mode tools as `element.hive`. */
-  hive?: PatchworkHive;
 };
 
 // Every `<patchwork-view>`, component or legacy tool. `repo` (the element's
@@ -100,9 +94,7 @@ declare global {
   }
 }
 
-export type LegacyPatchworkViewElement = PatchworkViewElementBase & {
-  hive?: PatchworkHive;
-};
+export type LegacyPatchworkViewElement = PatchworkViewElementBase;
 
 export function registerPatchworkViewElement(
   params: RegisterPatchworkViewElementParams
@@ -125,12 +117,6 @@ export function registerPatchworkViewElement(
       #initEpoch = 0;
       #teardowns = new Teardowns();
       #teardown = new Serialized(() => this.#runTeardown());
-      // True when `unable` because access hasn't synced yet.
-      // Receiving a keyhive op can recover this.
-      #unableNoAccess = false;
-      // Failed loads of this view's doc since it last loaded, for the back-off.
-      #retryAttempt = 0;
-      #retryTimer: ReturnType<typeof setTimeout> | null = null;
 
       // Made on first render; `element.repo` is this.
       #overlayRepo: OverlayRepo | null = null;
@@ -192,7 +178,6 @@ export function registerPatchworkViewElement(
 
       connectedCallback() {
         this.#capturedParent = this.parentElement;
-        (this as { hive?: PatchworkHive }).hive = params.hive;
         this.#component = this.getAttribute(ATTRS.component);
         this.#url = this.getAttribute(ATTRS.url) as AutomergeUrl | null;
         // A same-task remove-and-reinsert (keyed reorder, `insertBefore`)
@@ -214,7 +199,6 @@ export function registerPatchworkViewElement(
         // the teardown has run.
         const overlayRepo = this.#overlayRepo;
         this.#overlayRepo = null;
-        this.#retryAttempt = 0;
         void this.#disposeAfterTeardown(overlayRepo);
       }
 
@@ -251,8 +235,6 @@ export function registerPatchworkViewElement(
           if (attrName !== ATTRS.component && attrName !== ATTRS.url) return;
         }
 
-        // A different component or doc starts the back-off over.
-        this.#retryAttempt = 0;
         void this.#restart();
       }
 
@@ -297,7 +279,6 @@ export function registerPatchworkViewElement(
         if (this.#legacyImpl) return;
         this.#legacyImpl = new LegacyImpl(this, {
           repo: this.#ensureOverlayRepo(),
-          hive: params.hive,
         });
         this.#legacyImpl.connectedCallback();
       }
@@ -321,54 +302,6 @@ export function registerPatchworkViewElement(
 
         const epoch = ++this.#initEpoch;
         this.#state = State.initializing;
-
-        const url = this.url;
-        if (url) {
-          const hasAccess = await gateOnAccess(
-            params.hive,
-            url,
-            this.#teardowns,
-            (granted) => this.#onAccessChange(granted)
-          );
-          if (epoch !== this.#initEpoch) return;
-          if (!hasAccess) {
-            this.#state = State.unable;
-            this.#unableNoAccess = true;
-            return;
-          }
-
-          // Access is confirmed, but the doc's content may not have synced
-          // yet.
-          if (params.hive && isKeyhiveDoc(url)) {
-            const progress = params.repo.findWithProgress(url);
-            const initial = progress.peek();
-            if (initial.state === "failed") {
-              this.#onLoadFailed(url, initial.error, epoch);
-              return;
-            }
-            if (initial.state !== "ready") {
-              this.#state = State.unable;
-              if (initial.state === "unavailable") {
-                this.#onUnavailable(url, epoch);
-              }
-              const unsubscribe = progress.subscribe((queryState) => {
-                if (epoch !== this.#initEpoch) return;
-                if (queryState.state === "ready") {
-                  void this.#restart();
-                } else if (queryState.state === "unavailable") {
-                  this.#onUnavailable(url, epoch);
-                } else if (queryState.state === "failed") {
-                  this.#onLoadFailed(url, queryState.error, epoch);
-                }
-              });
-              this.#teardowns.add(unsubscribe);
-              return;
-            }
-          }
-          this.#retryAttempt = 0;
-        }
-
-        if (epoch !== this.#initEpoch) return;
 
         const removeAddedListener = registry.on("registered", async (added) => {
           if (added.id !== this.component) return;
@@ -403,42 +336,6 @@ export function registerPatchworkViewElement(
         this.#queueRender();
       };
 
-      // A failed load isn't final: the doc may just not have synced yet. The
-      // restart runs through the normal teardown, so the epoch, the teardowns
-      // and the serialized `#restart` keep a stale timer from landing; the
-      // timer is itself a teardown, so a disconnect or a newer restart clears
-      // it.
-      #onLoadFailed(url: AutomergeUrl, error: Error, epoch: number) {
-        console.error(`patchwork-view: failed to load ${url}`, error);
-        if (this.#state === State.error) return;
-        this.#state = State.error;
-        this.#scheduleRetry(url, epoch);
-      }
-
-      // The state a view really gets stuck in: the doc isn't there yet, and
-      // nothing re-asks. The subscription stays, so a `ready` that comes
-      // before the timer restarts at once (the restart clears the timer).
-      #onUnavailable(url: AutomergeUrl, epoch: number) {
-        this.#scheduleRetry(url, epoch);
-      }
-
-      // One timer at a time; a repeat report while it's pending keeps it.
-      #scheduleRetry(url: AutomergeUrl, epoch: number) {
-        if (this.#retryTimer) return;
-        const delay = loadRetryDelay(this.#retryAttempt++);
-        resyncBeforeRetry(params.repo, url, (err) =>
-          log("resync of %s failed: %o", url, err)
-        );
-        this.#retryTimer = setTimeout(() => {
-          this.#retryTimer = null;
-          if (epoch === this.#initEpoch) void this.#restart();
-        }, delay);
-        this.#teardowns.add(() => {
-          if (this.#retryTimer) clearTimeout(this.#retryTimer);
-          this.#retryTimer = null;
-        });
-      }
-
       async #runTeardown() {
         if (this.#legacyImpl) {
           const impl = this.#legacyImpl;
@@ -455,7 +352,6 @@ export function registerPatchworkViewElement(
           await this.#teardowns.run();
 
           this.#loaded = null;
-          this.#unableNoAccess = false;
           this.#state = State.none;
 
           if (wasMounted && mountedComponentId) {
@@ -469,13 +365,6 @@ export function registerPatchworkViewElement(
 
         this.#overlayRepo?.dispose();
         this.#overlayRepo = null;
-      }
-
-      #onAccessChange(hasAccess: boolean) {
-        const granted =
-          hasAccess && this.#state === State.unable && this.#unableNoAccess;
-        const revoked = !hasAccess && this.#state === State.rendered;
-        if (granted || revoked) void this.#restart();
       }
 
       #queueRender() {

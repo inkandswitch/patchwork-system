@@ -72,7 +72,7 @@ Object.defineProperty(self, "hub", {
 async function buildHub(): Promise<Hub> {
   watchWasmMemories();
   log("fetching wasm");
-  await initHubWasm({ keyhive: !!syncServer.keyhive });
+  await initHubWasm();
   log("wasm initialized");
   const hub = await createHub({ syncServer, storagePrefix, log });
   builtHub = hub;

@@ -489,10 +489,9 @@ export class OverlayRepo implements RepoLike {
     });
 
     // Only successful resolutions stay memoized. A rejection — typically
-    // baseRepo.find reporting unavailable because the doc (or its keyhive
-    // access) hasn't synced yet — is retryable, so caching it would pin every
-    // future find() of this url to the same stale rejection and defeat the
-    // views' "retry once access syncs" recovery. Evict so the next find()
+    // baseRepo.find reporting unavailable because the doc hasn't synced yet
+    // — is retryable, so caching it would pin every future find() of this url
+    // to the same stale rejection and defeat the views' retry. Evict so the next find()
     // re-runs the whole resolution. The identity check keeps a late-arriving
     // cleanup from clobbering a newer in-flight attempt.
     // The failed attempt's descriptor subscription goes too: the retry opens

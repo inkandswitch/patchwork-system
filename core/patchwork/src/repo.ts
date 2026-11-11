@@ -1,9 +1,8 @@
 import { initializeWasm } from "@automerge/automerge/slim";
-import { Repo, type AutomergeUrl } from "@automerge/automerge-repo/slim";
+import { Repo } from "@automerge/automerge-repo/slim";
 import type { PortBackend } from "@inkandswitch/patchwork-bootloader";
 import { AUTOMERGE_WASM } from "@inkandswitch/patchwork-bootloader/emitted";
 import { storagePrefix } from "@inkandswitch/patchwork-bootloader/storage";
-import type { PatchworkHive } from "@inkandswitch/patchwork-plugins";
 import type { SignerIdentity } from "./types.js";
 import debug from "debug";
 
@@ -12,7 +11,7 @@ const log = debug("patchwork:setup:repo");
 // Fetch and initialize automerge's wasm. Memoized: the fetch starts on the
 // first call and every later caller awaits the same init. Skipped entirely
 // when the site brings its own Repo (it did this itself). A tab needs no
-// subduction or keyhive: those run in the automerge worker.
+// subduction: it runs in the automerge worker.
 let wasmReady: Promise<void> | undefined;
 export function initWasm(): Promise<void> {
   wasmReady ??= initializeWasm(new Request(AUTOMERGE_WASM)).then(() => {});
@@ -21,7 +20,6 @@ export function initWasm(): Promise<void> {
 
 export type TabRepo = {
   repo: Repo;
-  hive?: PatchworkHive;
   signerIdentity?: SignerIdentity;
   /** The tab's end of the automerge worker: its Repo's backend. */
   backend: PortBackend;
@@ -30,7 +28,7 @@ export type TabRepo = {
 /**
  * The tab's Repo. Everything it stores and syncs goes through the automerge
  * worker, the origin's one node (its IndexedDB, its socket to the sync
- * server, its keyhive): the tab's backend is a port to it, handed to every
+ * server): the tab's backend is a port to it, handed to every
  * worker that replaces the last.
  */
 export async function createRepo(): Promise<TabRepo> {
@@ -48,20 +46,7 @@ export async function createRepo(): Promise<TabRepo> {
   const info = await backend.info();
   const signerIdentity = { peerId: info.peerId, verifyingKey: info.peerId };
   log("repo created, the worker signs as", info.peerId);
-  const hive = info.hive ? workerHive(backend, info.hive.id) : undefined;
-  return { repo, hive, signerIdentity, backend };
-}
-
-/** Keyhive, as the automerge worker answers for it. */
-function workerHive(backend: PortBackend, id: string): PatchworkHive {
-  return {
-    id,
-    canRead: (url: AutomergeUrl) =>
-      backend.call<boolean>({ op: "hive", method: "canRead", url }),
-    canWrite: (url: AutomergeUrl) =>
-      backend.call<boolean>({ op: "hive", method: "canWrite", url }),
-    onChange: (listener) => backend.onHiveChange(listener),
-  };
+  return { repo, signerIdentity, backend };
 }
 
 /**

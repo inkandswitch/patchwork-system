@@ -1,16 +1,11 @@
 // The automerge worker's end of a tab's port: backend calls go to the hub's
-// backend, sessions stream their events back, and keyhive questions go to the
-// hub's keyhive. When the tab dies (its Web Lock is released) everything it
-// had open is closed.
+// backend and sessions stream their events back. When the tab dies (its Web
+// Lock is released) everything it had open is closed.
 
 import type {
   SedimentreeBackend,
   SedimentreeSession,
 } from "@automerge/automerge-repo/sedimentree";
-import {
-  parseAutomergeUrl,
-  type AutomergeUrl,
-} from "@automerge/automerge-repo/slim";
 import { serializeError } from "./port-backend.js";
 import type {
   BackendCall,
@@ -19,18 +14,9 @@ import type {
   HubMessage,
 } from "./protocol.js";
 
-/** What the hub's keyhive answers for tabs. */
-export interface HubHive {
-  readonly id: string;
-  canRead(documentId: Uint8Array): Promise<boolean>;
-  canWrite(documentId: Uint8Array): Promise<boolean>;
-  onChange(listener: () => void): () => void;
-}
-
 export type ServeOptions = {
   backend: SedimentreeBackend;
   peerId: string;
-  hive?: HubHive;
   /** The worker's connection to the sync server. */
   status?: {
     connected(): boolean;
@@ -47,9 +33,8 @@ export type ServeOptions = {
 
 /** Serve the tab on the other end of `port` until it goes away. */
 export function serveClient(port: MessagePort, options: ServeOptions): void {
-  const { backend, peerId, hive, status, log = () => {}, onGone } = options;
+  const { backend, peerId, status, log = () => {}, onGone } = options;
   const sessions = new Map<number, SedimentreeSession>();
-  let unsubscribeHive: (() => void) | undefined;
   let unsubscribeStatus: (() => void) | undefined;
   let gone = false;
 
@@ -63,7 +48,6 @@ export function serveClient(port: MessagePort, options: ServeOptions): void {
     log(`tab gone, closing ${sessions.size} session(s)`);
     for (const session of sessions.values()) void session.close();
     sessions.clear();
-    unsubscribeHive?.();
     unsubscribeStatus?.();
     port.close();
     onGone?.();
@@ -112,15 +96,7 @@ export function serveClient(port: MessagePort, options: ServeOptions): void {
         if (!status) throw new Error("this worker has no sync server link");
         return status.setOffline(body.offline);
       case "info":
-        return {
-          peerId,
-          hive: hive ? { id: hive.id } : null,
-        } satisfies HubInfo;
-      case "hive": {
-        if (!hive) throw new Error("this site has no keyhive");
-        const id = parseAutomergeUrl(body.url as AutomergeUrl).binaryDocumentId;
-        return body.method === "canRead" ? hive.canRead(id) : hive.canWrite(id);
-      }
+        return { peerId } satisfies HubInfo;
     }
   };
 
@@ -130,7 +106,6 @@ export function serveClient(port: MessagePort, options: ServeOptions): void {
       case "hello":
         // the tab holds this lock while it lives, so it's ours once it's gone
         void navigator.locks.request(message.lock, goodbye);
-        unsubscribeHive ??= hive?.onChange(() => send({ type: "hive-change" }));
         if (status && !unsubscribeStatus) {
           send({ type: "status", connected: status.connected() });
           unsubscribeStatus = status.subscribe((connected) =>

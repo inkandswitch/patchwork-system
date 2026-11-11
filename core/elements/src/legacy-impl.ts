@@ -13,7 +13,6 @@ import {
 import {
   getFallbackTool,
   getRegistry,
-  isKeyhiveDoc,
   isLoadablePlugin,
   registerPlugins,
   type LoadedTool,
@@ -21,8 +20,6 @@ import {
   type ToolElement,
 } from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
-import type { PatchworkHive } from "@inkandswitch/patchwork-plugins";
-import { gateOnAccess } from "./keyhive-access.js";
 import { MountedEvent, UnmountedEvent } from "./events.js";
 import { loadRetryDelay, resyncBeforeRetry } from "./load-retry.js";
 import { importSource, presentableImportUrl } from "./import-url.js";
@@ -70,12 +67,10 @@ export type LegacyImplParams = {
    * draft, say) decides which document the tool gets.
    */
   repo: Repo;
-  hive?: PatchworkHive;
 };
 
 type HostElement = HTMLElement & {
   repo?: Repo;
-  hive?: PatchworkHive;
 };
 
 const ERROR_STYLE_ID = "patchwork-view-error-style";
@@ -237,7 +232,6 @@ export class LegacyImpl {
   #element: HostElement;
   #content: HostElement;
   #repo: Repo;
-  #hive: PatchworkHive | undefined;
   // Set on disconnect. The host makes a fresh impl for each connection, so a
   // disposed impl never mounts again, whatever async work is still in flight.
   #disposed = false;
@@ -252,9 +246,7 @@ export class LegacyImpl {
   #fallbackId: string | undefined;
   #teardowns = new Teardowns();
   #teardown = new Serialized(() => this.#runTeardown());
-  // `unable` because the identity has no access yet; a grant mounts the view.
-  #unableNoAccess = false;
-  // `unable` because the doc failed to load; a keyhive op or the timer retries.
+  // `unable` because the doc failed to load; the timer retries.
   #loadFailed = false;
   #retryingLoad = false;
   #pendingRetryEpoch: number | null = null;
@@ -269,8 +261,6 @@ export class LegacyImpl {
   constructor(element: HTMLElement, params: LegacyImplParams) {
     this.#element = element as HostElement;
     this.#repo = params.repo;
-    this.#hive = params.hive;
-    this.#element.hive = params.hive;
 
     // Fills the host, so tools that measure their root element see the host's
     // box.
@@ -278,7 +268,6 @@ export class LegacyImpl {
     this.#content.className = "patchwork-view-content";
     this.#content.style.width = "100%";
     this.#content.style.height = "100%";
-    this.#content.hive = params.hive;
   }
 
   connectedCallback(): void {
@@ -338,19 +327,6 @@ export class LegacyImpl {
     const epoch = ++this.#initEpoch;
     this.#state = State.initializing;
 
-    const hasAccess = await gateOnAccess(
-      this.#hive,
-      this.#docUrl,
-      this.#teardowns,
-      (granted) => this.#onAccessChange(granted)
-    );
-    if (epoch !== this.#initEpoch) return;
-    if (!hasAccess) {
-      this.#state = State.unable;
-      this.#unableNoAccess = true;
-      return;
-    }
-
     const removeAddedListener = toolRegistry.on(
       "registered",
       async (addedTool) => {
@@ -409,8 +385,8 @@ export class LegacyImpl {
     } catch (err) {
       if (epoch !== this.#initEpoch) return;
       // Callers void `#init`'s promise, so a rethrow would only wedge `#state`
-      // in `initializing`. Usually the doc just hasn't synced yet, and a
-      // keyhive op or the timer retries.
+      // in `initializing`. Usually the doc just hasn't synced yet, and the
+      // timer retries.
       console.error(`failed to load ${this.#docUrl}`, err);
       this.#state = State.unable;
       this.#loadFailed = true;
@@ -432,8 +408,7 @@ export class LegacyImpl {
   }
 
   // Leaves the error up while it runs: a teardown would blank the view and fade
-  // the error back in on every keyhive op, and they come far faster than the
-  // fade. Retries asked for during one collapse into a single follow-up.
+  // the error back in on every retry. Retries asked for during one collapse into a single follow-up.
   async #retryLoad(): Promise<void> {
     if (!this.#docUrl) return;
     if (this.#retryingLoad) {
@@ -486,28 +461,6 @@ export class LegacyImpl {
     this.#retryTimer = null;
   }
 
-  // Access to the doc changed. A grant mounts a view that had none, a
-  // revocation unmounts a mounted one, and either retries a failed load
-  // (access is checked on every keyhive op, the same ops that sync the doc).
-  #onAccessChange(hasAccess: boolean): void {
-    if (this.#loadFailed) {
-      if (!hasAccess) {
-        void this.#restart();
-        return;
-      }
-      // a fresh op starts the back-off again
-      this.#retryAttempt = 0;
-      void this.#retryLoad();
-      return;
-    }
-    const granted =
-      hasAccess && this.#state === State.unable && this.#unableNoAccess;
-    const revoked =
-      !hasAccess &&
-      (this.#state === State.rendered || this.#state === State.fallback);
-    if (granted || revoked) void this.#restart();
-  }
-
   // Only when there's no fallback yet, or the new tool supports the doc's type
   // (a specific match sorts ahead of a wildcard).
   #couldChangeFallback(added: ToolDescription): boolean {
@@ -535,7 +488,6 @@ export class LegacyImpl {
 
     this.#dismissToast(true);
     this.#removeErrorListeners();
-    this.#unableNoAccess = false;
     this.#loadFailed = false;
     this.#cancelRetry();
     this.#retryAttempt = 0;

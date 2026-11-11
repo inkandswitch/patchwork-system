@@ -40,7 +40,7 @@ export async function resolveExternal(
 }
 
 /**
- * automerge/keyhive/subduction's wasm binaries, by the file name the dev
+ * automerge/subduction's wasm binaries, by the file name the dev
  * server serves them under (see emitted.ts). Resolved from this package's
  * node_modules for the same reason as {@link resolveExternal}.
  */
@@ -51,10 +51,6 @@ export function wasmAssets(): { fileName: string; path: string }[] {
       path: require.resolve("@automerge/automerge/automerge.wasm"),
     },
     {
-      fileName: "keyhive_wasm.wasm",
-      path: require.resolve("@keyhive/keyhive/wasm"),
-    },
-    {
       fileName: "subduction.wasm",
       path: require.resolve("@automerge/subduction/wasm"),
     },
@@ -62,7 +58,7 @@ export function wasmAssets(): { fileName: string; path: string }[] {
 }
 
 /**
- * Emits automerge/keyhive/subduction's wasm binaries as build assets, under
+ * Emits automerge/subduction's wasm binaries as build assets, under
  * content-hashed names (the build's `assetFileNames`). Returns each one's
  * reference id by its file name, for `this.getFileName`.
  */

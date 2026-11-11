@@ -6,11 +6,9 @@ export type {
   PatchworkIconsOptions,
   PatchworkHtmlOptions,
   PatchworkNetlifyOptions,
-  PatchworkKeyhiveOptions,
   PatchworkSyncServersOptions,
 } from "./options.js";
 
-export type { ArkVersion } from "@inkandswitch/patchwork-bootloader";
 export { resolveSyncServers, PRELOAD_WASM_ASSETS } from "./sync-servers.js";
 export { getIcons, ICON_SPECS, type IconSpec } from "./icons.js";
 export { buildHtml, escapeHtml } from "./html.js";

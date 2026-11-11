@@ -1,17 +1,16 @@
-// Starting the automerge worker's wasm: automerge and subduction always,
-// keyhive on keyhive sites, each from the file this build emitted (see
+// Starting the automerge worker's wasm: automerge and subduction, each from
+// the file this build emitted (see
 // emitted.ts). Tabs need only automerge: their Repo's backend is a port to
 // the worker.
 import { initializeWasm } from "@automerge/automerge/slim";
-import { AUTOMERGE_WASM, KEYHIVE_WASM, SUBDUCTION_WASM } from "./emitted.js";
+import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
 
 let ready: Promise<void> | undefined;
 
-export function initHubWasm({ keyhive }: { keyhive: boolean }): Promise<void> {
+export function initHubWasm(): Promise<void> {
   ready ??= Promise.all([
     initializeWasm(new Request(AUTOMERGE_WASM)),
     initSubduction(),
-    keyhive ? initKeyhive() : undefined,
   ]).then(() => undefined);
   ready.catch(() => (ready = undefined));
   return ready;
@@ -32,16 +31,6 @@ async function initSubduction() {
   initSync({ module });
 }
 
-async function initKeyhive() {
-  const slim = await import("@keyhive/keyhive/slim");
-  // the wasm-bindgen init, which the slim entry's types (the full entry's)
-  // leave out
-  const { default: init } = slim as unknown as {
-    default(input: { module_or_path: Request }): Promise<unknown>;
-  };
-  await init({ module_or_path: new Request(KEYHIVE_WASM) });
-}
-
 async function compile(url: string): Promise<WebAssembly.Module> {
   const module = await WebAssembly.compileStreaming(fetch(url));
   compiled.set(module, url);
@@ -55,8 +44,8 @@ const memories: Array<{ url: string; memory: WebAssembly.Memory }> = [];
 let watching = false;
 
 /**
- * Note the memory of every wasm instance from here on. automerge and keyhive
- * instantiate from their `Request`s (instantiateStreaming), subduction from
+ * Note the memory of every wasm instance from here on. automerge
+ * instantiates from its `Request` (instantiateStreaming), subduction from
  * the module compiled above (new WebAssembly.Instance); none hands back its
  * instance.
  */
@@ -101,9 +90,6 @@ const bytesFrom = (file: string) =>
 
 /** How much memory this instance's wasm holds, in MB. */
 export function wasmGrowthMb(): number {
-  const bytes =
-    bytesFrom(AUTOMERGE_WASM) +
-    bytesFrom(SUBDUCTION_WASM) +
-    bytesFrom(KEYHIVE_WASM);
+  const bytes = bytesFrom(AUTOMERGE_WASM) + bytesFrom(SUBDUCTION_WASM);
   return Math.round(bytes / 1048576);
 }

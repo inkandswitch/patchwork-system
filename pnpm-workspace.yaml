@@ -14,24 +14,13 @@ overrides:
   "@automerge/automerge-repo-react-hooks": "catalog:"
   "@automerge/react": "catalog:"
   "@automerge/subduction": "catalog:"
-  "@keyhive/keyhive": "catalog:"
   solid-automerge: "catalog:"
-
-  # Prod keyhive sites use ARK 0.6's keyhive sync and blob encryption
-  # (@inkandswitch/patchwork-bootloader's `@ark-0.6/automerge-repo-keyhive`,
-  # see core/bootloader/src/hub/keyhive-ark06.ts). It keeps the automerge-repo
-  # 2 and keyhive 0.3 it was published with; the overrides above would pull
-  # them onto the current pins.
-  "@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@automerge/automerge-repo": 2.6.0-subduction.48
-  "@automerge/automerge-repo-keyhive@0.6.0-alpha.1>@keyhive/keyhive": 0.3.0-alpha.1
-  "@automerge/automerge-repo-network-websocket@2.6.0-subduction.48>@automerge/automerge-repo": 2.6.0-subduction.48
 
 minimumReleaseAgeExclude:
   - "@automerge/*"
   - "@inkandswitch/*"
   - "@chee/*"
   - solid-automerge
-  - "@keyhive/keyhive@0.6.0"
 
 catalog:
   "@automerge/automerge": 3.5.0
@@ -46,7 +35,6 @@ catalog:
   "@codemirror/language": ^6.12.4
   "@codemirror/state": ^6.7.1
   "@codemirror/view": ^6.43.6
-  "@keyhive/keyhive": 0.6.0
   solid-automerge: ^2.0.1
   solid-js: ^1.9.13
   "@types/node": ^24.0.0

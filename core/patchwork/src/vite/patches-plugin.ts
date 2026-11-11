@@ -8,7 +8,8 @@ import type { Plugin } from "vite";
  * passes through the bundler.
  *
  * The edit is this repo's `patches/` pnpm patch: it exposes the backend's
- * native Subduction engine, which keyhive sync talks to (keyline/sync.ts).
+ * native Subduction engine, which the automerge worker asks for its connected
+ * peers (hub/hub.ts).
  * A pnpm patch only exists in this repo's node_modules, though: a site that
  * installs @inkandswitch/patchwork resolves automerge-repo-subduction out of
  * its own tree and would bundle it unpatched. The plugin applies the patch
