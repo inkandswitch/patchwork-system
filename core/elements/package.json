@@ -28,6 +28,7 @@
   "keywords": [],
   "license": "MIT",
   "peerDependencies": {
+    "@automerge/automerge": "*",
     "@automerge/automerge-repo": "*",
     "@automerge/automerge-repo-keyhive": "*",
     "@inkandswitch/patchwork-filesystem": "workspace:^",

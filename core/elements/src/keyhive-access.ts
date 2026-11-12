@@ -49,6 +49,24 @@ export async function hasActiveAccess(
   return publicAccess ? publicAccess(docUrl).catch(() => false) : false;
 }
 
+/**
+ * The active identity's contact card as the phonebook copies it: base64 of
+ * its bytes. Undefined when there's no card to give.
+ */
+export function contactCardText(
+  hive: AutomergeRepoKeyhive | undefined
+): string | undefined {
+  try {
+    const bytes = hive?.active.contactCard.toBytes();
+    if (!bytes) return undefined;
+    let binary = "";
+    for (const byte of bytes) binary += String.fromCharCode(byte);
+    return btoa(binary);
+  } catch {
+    return undefined;
+  }
+}
+
 /** Called with the active identity's access after keyhive ingests remote ops. */
 export type AccessListener = (hasAccess: boolean) => void;
 

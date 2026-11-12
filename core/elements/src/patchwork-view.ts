@@ -297,6 +297,7 @@ export function registerPatchworkViewElement(
         if (this.#legacyImpl) return;
         this.#legacyImpl = new LegacyImpl(this, {
           repo: this.#ensureOverlayRepo(),
+          baseRepo: params.repo,
           hive: params.hive,
         });
         this.#legacyImpl.connectedCallback();
