@@ -222,7 +222,7 @@ export function missingTypeCard(props: {
         null,
         "no ",
         code("@patchwork"),
-        " metadata, so nothing here knows what kind of doc it is."
+        " metadata. probably an old file"
       );
 
   const listId = `pw-card-types-${++seq}`;
@@ -294,7 +294,7 @@ export function missingTypeCard(props: {
       "this doc has no type",
       why,
       anything
-        ? undefined // h("p", null, `a look inside might help`)
+        ? h("p", null, `a peek inside might help`)
         : undefined,
       actions,
       form
