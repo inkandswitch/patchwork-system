@@ -230,7 +230,7 @@ export function missingTypeCard(props: {
     class: "pw-card__input",
     type: "text",
     name: "type",
-    placeholder: "a type, like essay",
+    placeholder: "type",
     list: listId,
     autocomplete: "off",
     spellcheck: "false",
