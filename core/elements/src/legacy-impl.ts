@@ -13,19 +13,31 @@ import {
 import {
   getFallbackTool,
   getRegistry,
-  isKeyhiveDoc,
   isLoadablePlugin,
   registerPlugins,
+  type DatatypeDescription,
   type LoadedTool,
   type ToolDescription,
   type ToolElement,
 } from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { gateOnAccess } from "./keyhive-access.js";
-import { MountedEvent, UnmountedEvent } from "./events.js";
+import {
+  findingCard,
+  invalidUrlCard,
+  missingTypeCard,
+  noToolCard,
+  notSharedCard,
+  toolFailedCard,
+  unavailableCard,
+  type Anything,
+  type Card,
+} from "./cards.js";
+import { contactCardText, gateOnAccess } from "./keyhive-access.js";
+import { MountedEvent, NoToolEvent, UnmountedEvent } from "./events.js";
 import { loadRetryDelay, resyncBeforeRetry } from "./load-retry.js";
 import { importSource, presentableImportUrl } from "./import-url.js";
+import { readClaims } from "./package-info.js";
 import {
   dispatchFromNearestConnected,
   Serialized,
@@ -39,12 +51,54 @@ const log = debug("patchwork:elements:legacy");
  * raw viewer, not a tool built for that datatype.
  */
 function isWildcardOnlyMatch(
-  tool: LoadedTool,
+  tool: ToolDescription,
   type: string | undefined
 ): boolean {
   const datatypes = tool.supportedDatatypes;
-  const list = datatypes === "*" ? ["*"] : datatypes;
+  const list = datatypes === "*" ? ["*"] : (datatypes ?? []);
   return list.includes("*") && (type === undefined || !list.includes(type));
+}
+
+/**
+ * A tool that opens anything, to offer for a look at a doc's insides: `raw`
+ * when there is one, else the first listed `*` tool.
+ */
+function anythingTool(): Anything | undefined {
+  const wildcards = getRegistry<ToolDescription>("patchwork:tool").filter(
+    (tool) => !tool.unlisted && isWildcardOnlyMatch(tool, undefined)
+  );
+  const tool = wildcards.find((t) => t.id === "raw") ?? wildcards[0];
+  return tool && { id: tool.id, name: tool.name };
+}
+
+/** The types something here opens, to suggest when giving a doc a type. */
+function knownTypes(): { id: string; name?: string }[] {
+  const names = new Map<string, string | undefined>();
+  for (const tool of getRegistry<ToolDescription>("patchwork:tool").all()) {
+    const supported = tool.supportedDatatypes;
+    if (!supported || supported === "*") continue;
+    for (const type of supported) if (type !== "*") names.set(type, undefined);
+  }
+  for (const datatype of getRegistry<DatatypeDescription>(
+    "patchwork:datatype"
+  ).all()) {
+    if (datatype.unlisted) continue;
+    names.set(datatype.id, datatype.name);
+  }
+  return [...names]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// The repo says so when it can't parse a url: "Invalid AutomergeUrl: …" from
+// interpretAsDocumentId, "Invalid document URL: …" from parseAutomergeUrl.
+// We go by what the repo says rather than checking the url ourselves, so a
+// form the host's repo accepts is never turned away here.
+function isInvalidUrlError(error: unknown): boolean {
+  const message = (error as Error)?.message ?? String(error);
+  return /invalid (automergeurl|document url|documentid|document id)/i.test(
+    message
+  );
 }
 
 const State = {
@@ -70,6 +124,11 @@ export type LegacyImplParams = {
    * draft, say) decides which document the tool gets.
    */
   repo: Repo;
+  /**
+   * The realm's repo, for reading a suggested package's folder doc, which no
+   * remapper should have a say in. Defaults to `repo`.
+   */
+  baseRepo?: Repo;
   hive?: AutomergeRepoKeyhive;
 };
 
@@ -122,48 +181,6 @@ function ensureErrorStyles() {
       border-color: color-mix(in oklch, var(--studio-danger-text, #c2415f), transparent 40%);
     }
     .pw-error__face[aria-expanded="true"] { transform: rotate(90deg); }
-
-    .pw-error--offer {
-      flex-direction: column;
-      gap: 0.9rem;
-      justify-content: center;
-    }
-    .pw-error__message {
-      margin: 0;
-      max-width: 34em;
-      text-align: center;
-      overflow-wrap: anywhere;
-      font-family: var(--studio-family, system-ui, sans-serif);
-      font-size: 0.85rem;
-      line-height: 1.5;
-      color: var(--studio-line, #1a1a1a);
-    }
-    .pw-error__actions {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    /* Offer to run the package the document names. Deliberately quiet — it
-       executes third-party JavaScript, so it shouldn't read as the happy path. */
-    .pw-error__load {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35em;
-      font-family: var(--studio-family, system-ui, sans-serif);
-      font-size: 0.8rem;
-      line-height: 1;
-      color: var(--studio-line, #1a1a1a);
-      background: var(--studio-fill, white);
-      border: 1px solid var(--studio-fill-offset-30, rgba(0, 0, 0, 0.12));
-      border-radius: var(--studio-radius-md, 8px);
-      padding: 0.5em 0.7em;
-      cursor: pointer;
-      transition: background 0.12s ease, border-color 0.12s ease;
-    }
-    .pw-error__load:hover {
-      background: var(--studio-fill-offset-10, rgba(0, 0, 0, 0.04));
-      border-color: var(--studio-fill-offset-30, rgba(0, 0, 0, 0.24));
-    }
 
     /* Flyout: a Popover-API callout (top layer, so it escapes any overflow
        clipping) positioned under the button in JS, with a caret + shadow. */
@@ -232,21 +249,35 @@ function ensureErrorStyles() {
  * into an inner `.patchwork-view-content`, the only thing a re-render wipes, so
  * the host keeps its identity and events, with room beside the content for
  * things a re-render mustn't trample.
+ *
+ * When it can't show the doc, it says why in a card (see `cards.ts`) in place
+ * of the tool: still finding it, couldn't get it, not shared, a broken link,
+ * no type, no tool for the type, or a tool that didn't load. Only a tool that
+ * throws while rendering gets the bare `:(`, with its error under it.
  */
 export class LegacyImpl {
   #element: HostElement;
   #content: HostElement;
   #repo: Repo;
+  #baseRepo: Repo;
   #hive: AutomergeRepoKeyhive | undefined;
   // Set on disconnect. The host makes a fresh impl for each connection, so a
   // disposed impl never mounts again, whatever async work is still in flight.
   #disposed = false;
   #docUrl: AutomergeUrl | null = null;
   #toolId: string | null = null;
+  // A tool that opens anything, which the reader picked from a card to look
+  // at the doc with. Kept across restarts, dropped when the doc's type, the
+  // doc, or the asked-for tool changes.
+  #peekToolId: string | null = null;
   #handle: DocHandle<HasPatchworkMetadata> | null = null;
   #tool: LoadedTool | null = null;
   #state: State = State.none;
   #requestedToolImports = new Set<string>();
+  // Why the last import of a suggested package didn't bring a tool, by url.
+  #importFailures = new Map<string, string>();
+  // A tool whose code failed to load, and why; its card offers to try again.
+  #toolLoadError: { id: string; message: string } | null = null;
   #initEpoch = 0;
   #capturedParent: Element | null = null;
   #fallbackId: string | undefined;
@@ -260,20 +291,21 @@ export class LegacyImpl {
   #pendingRetryEpoch: number | null = null;
   #retryAttempt = 0;
   #retryTimer: ReturnType<typeof setTimeout> | null = null;
-  #toast: HTMLElement | null = null;
-  #toastTimer: ReturnType<typeof setTimeout> | null = null;
-  #toastPositioned = false;
-  #toastEscape: ((event: KeyboardEvent) => void) | null = null;
   #errorReposition: (() => void) | null = null;
+  // The card on screen, and what it was drawn from, so a render that would
+  // draw the same one leaves it be (and its fade-in doesn't replay).
+  #card: Card | null = null;
+  #cardKey: string | null = null;
 
   constructor(element: HTMLElement, params: LegacyImplParams) {
     this.#element = element as HostElement;
     this.#repo = params.repo;
+    this.#baseRepo = params.baseRepo ?? params.repo;
     this.#hive = params.hive;
     this.#element.hive = params.hive;
 
-  // Fills the host, so tools that measure their root element see the host's
-  // box.
+    // Fills the host, so tools that measure their root element see the host's
+    // box.
     this.#content = document.createElement("div") as HostElement;
     this.#content.className = "patchwork-view-content";
     this.#content.style.width = "100%";
@@ -309,18 +341,31 @@ export class LegacyImpl {
     if (old === val) return;
     if (name === ATTRS.toolId) {
       this.#toolId = val;
+      this.#peekToolId = null;
       void this.#restart();
     }
     if (name === ATTRS.docUrl) {
       this.#docUrl = val as AutomergeUrl;
+      this.#peekToolId = null;
+      this.#importFailures.clear();
       void this.#restart();
     }
   }
 
+  // A new type means a new tool, if there's one for it: a doc given a type
+  // (from its card, or in the raw view) opens with that type's tool.
   #onDocChange = (payload: DocHandleChangePayload<HasPatchworkMetadata>) => {
     const { before, after } = payload.patchInfo;
-    if (getType(before) != getType(after)) void this.#restart();
+    if (getType(before) != getType(after)) {
+      this.#peekToolId = null;
+      void this.#restart();
+    }
   };
+
+  /** The tool asked for: by `tool-id`, or picked from a card. */
+  #chosenToolId(): string | null {
+    return this.#toolId || this.#peekToolId;
+  }
 
   // Every remount goes through `#init`, which a disposed impl refuses, so one
   // disconnected mid-teardown stays down.
@@ -348,6 +393,9 @@ export class LegacyImpl {
     if (!hasAccess) {
       this.#state = State.unable;
       this.#unableNoAccess = true;
+      this.#showCard("not-shared", () =>
+        notSharedCard({ contactCard: contactCardText(this.#hive) })
+      );
       return;
     }
 
@@ -355,7 +403,7 @@ export class LegacyImpl {
       "registered",
       async (addedTool) => {
         const toolId = addedTool.id;
-        const isChosenTool = toolId == this.#toolId;
+        const isChosenTool = toolId == this.#chosenToolId();
         // getFallbackTool scans the whole registry: calling it on every
         // registration is O(N²) across a load burst.
         if (this.#handle && this.#couldChangeFallback(addedTool)) {
@@ -364,8 +412,15 @@ export class LegacyImpl {
         const isFallbackTool = toolId == this.#fallbackId;
         if (isChosenTool || isFallbackTool) {
           if (isLoadablePlugin(addedTool)) {
-            toolRegistry.load(addedTool.id);
+            this.#watchLoad(toolId, toolRegistry.load(addedTool.id));
           }
+        } else if (
+          this.#state === State.unable &&
+          this.#handle &&
+          isWildcardOnlyMatch(addedTool, undefined)
+        ) {
+          // a card that could offer a look with it now
+          this.#queueRender();
         }
       }
     );
@@ -374,7 +429,7 @@ export class LegacyImpl {
       "loaded",
       async (loadedTool) => {
         const toolId = loadedTool.id;
-        const isChosenTool = toolId == this.#toolId;
+        const isChosenTool = toolId == this.#chosenToolId();
         const isFallbackTool = toolId == this.#fallbackId;
         if (isChosenTool || isFallbackTool) {
           if (this.#state == "unable" || this.#state == "initializing") {
@@ -402,19 +457,36 @@ export class LegacyImpl {
     this.#element.repo = repo;
     this.#content.repo = repo;
 
+    this.#showCard("finding", () => findingCard("finding this doc…"), false);
+
     let handle: DocHandle<HasPatchworkMetadata>;
     try {
       handle = await repo.find<HasPatchworkMetadata>(this.#docUrl);
     } catch (err) {
       if (epoch !== this.#initEpoch) return;
       // Callers void `#init`'s promise, so a rethrow would only wedge `#state`
-      // in `initializing`. Usually the doc just hasn't synced yet, and a
-      // keyhive op or the timer retries.
+      // in `initializing`.
       console.error(`failed to load ${this.#docUrl}`, err);
       this.#state = State.unable;
+      // A url the repo can't even parse won't turn up however long we wait.
+      if (isInvalidUrlError(err)) {
+        const url = this.#docUrl;
+        this.#showCard("invalid-url", () => invalidUrlCard({ url }));
+        return;
+      }
+      // Usually the doc just hasn't synced yet, and a keyhive op, the timer
+      // or the sync server coming back retries.
       this.#loadFailed = true;
-      const e = err as Error;
-      this.#displayError(e?.message ?? String(err), e?.stack, err);
+      this.#showCard("unavailable", () =>
+        unavailableCard({
+          repo: this.#repo,
+          onReconnect: () => {
+            if (!this.#loadFailed) return;
+            this.#retryAttempt = 0;
+            void this.#retryLoad();
+          },
+        })
+      );
       this.#scheduleRetry();
       return;
     }
@@ -430,8 +502,8 @@ export class LegacyImpl {
     this.#queueRender();
   }
 
-  // Leaves the error up while it runs: a teardown would blank the view and fade
-  // the error back in on every keyhive op, and they come far faster than the
+  // Leaves the card up while it runs: a teardown would blank the view and fade
+  // the card back in on every keyhive op, and they come far faster than the
   // fade. Retries asked for during one collapse into a single follow-up.
   async #retryLoad(): Promise<void> {
     if (!this.#docUrl) return;
@@ -532,16 +604,15 @@ export class LegacyImpl {
     this.#pendingRetryEpoch = null;
     await this.#teardowns.run();
 
-    this.#dismissToast(true);
-    this.#removeErrorListeners();
     this.#unableNoAccess = false;
     this.#loadFailed = false;
     this.#cancelRetry();
     this.#retryAttempt = 0;
     this.#handle = null;
     this.#tool = null;
+    this.#toolLoadError = null;
     this.#requestedToolImports.clear();
-    this.#content.textContent = "";
+    this.#resetDisplay();
     this.#state = State.none;
 
     if (wasMounted && mountedUrl && mountedToolId) {
@@ -582,94 +653,49 @@ export class LegacyImpl {
       return;
     }
 
-    this.#resetDisplay();
-
     const doc = this.#handle.doc();
+    const type = getType(doc);
     const fallbackTool = getFallbackTool(doc);
     this.#fallbackId = fallbackTool?.id;
-    const fallingBack = !this.#toolId;
-    const toolId = this.#toolId || this.#fallbackId;
-
-    const mountingWildcardStopgap =
-      fallingBack &&
-      !!fallbackTool &&
-      isWildcardOnlyMatch(fallbackTool, getType(doc));
-
-    if (fallingBack) {
-      console.warn(`falling back to default tool for ${this.#docUrl}`);
-      // A wildcard stopgap is a raw viewer, not this datatype's editor. If the
-      // doc names a package that brings the real one, offer it rather than show
-      // raw JSON that'd be swapped out once the import lands. Parking in
-      // `unable` lets the registry listeners re-render then.
-      if (mountingWildcardStopgap) {
-        const suggestion = this.#suggestedImport();
-        if (suggestion) {
-          this.#state = State.unable;
-          // In flight: the progress toast is already up.
-          if (!suggestion.loading) {
-            this.#showToast(
-              "This document suggests a package",
-              suggestion.url,
-              () => this.#loadSuggestedImport(suggestion.url)
-            );
-          }
-          return;
-        }
-      }
-    }
+    const chosen = this.#chosenToolId();
+    const fallingBack = !chosen;
+    let toolId = chosen;
 
     if (!toolId) {
-      this.#state = "unable";
-      // Nothing is registered for this datatype. Offer the doc's suggested
-      // import, if any; the registry listeners re-render once it registers.
-      const suggestion = this.#suggestedImport();
-      if (suggestion) {
-        if (suggestion.loading) this.#displayLoading("");
-        else this.#displaySuggestion(suggestion.url);
+      // Nothing says what this doc is, so nothing can say how to open it.
+      if (!type) {
+        console.warn(`${this.#docUrl} has no @patchwork type`);
+        this.#state = State.unable;
+        this.#showMissingType(doc);
         return;
       }
-      const hasPatchworkMetadata = doc && "@patchwork" in doc;
-      if (!hasPatchworkMetadata) {
-        console.warn(`Document ${this.#docUrl} is missing @patchwork metadata`);
-        this.#displayError(
-          `This document is missing @patchwork metadata and cannot be opened.`
-        );
-      } else {
+      // A tool that opens anything (raw, an inspector) isn't this datatype's
+      // tool: offer it rather than open the doc's insides unasked.
+      if (!fallbackTool || isWildcardOnlyMatch(fallbackTool, type)) {
         console.warn(`no tool for ${this.#docUrl}`);
-        this.#displayError(`I couldn't find a tool to open ${this.#docUrl}.`);
+        this.#state = State.unable;
+        this.#showNoTool(type, fallbackTool);
+        return;
       }
-      return;
+      console.warn(`falling back to default tool for ${this.#docUrl}`);
+      toolId = fallbackTool.id;
     }
 
     this.#tool = getRegistry<LoadedTool>("patchwork:tool").get(toolId) ?? null;
 
     if (!this.#tool) {
-      this.#state = "unable";
-      const suggestion = this.#suggestedImport();
-      if (!suggestion) {
-        this.#displayError(`I couldn't find the tool with id ${toolId}.`);
-      } else if (suggestion.loading) {
-        this.#displayLoading(toolId);
-      } else {
-        this.#displaySuggestion(suggestion.url);
-      }
+      this.#state = State.unable;
+      this.#showNoTool(type ?? "doc with no type", undefined, toolId);
       return;
     }
 
     if (!this.#tool.module) {
-      const toolRegistry = getRegistry("patchwork:tool");
-      toolRegistry.load(this.#tool.id);
-      if (toolRegistry.isLoading(this.#tool.id)) {
-        this.#state = "unable";
-        log(`loading ${toolId}`);
-        this.#displayLoading(toolId);
-      } else {
-        this.#state = "unable";
-        this.#displayError(`I couldn't load the tool with id ${toolId}.`);
-      }
+      this.#state = State.unable;
+      this.#loadTool(this.#tool);
       return;
     }
 
+    this.#resetDisplay();
     try {
       // `#init` set the content's `repo` before `#queueRender`, so it is a
       // `ToolElement`.
@@ -682,9 +708,6 @@ export class LegacyImpl {
       } else {
         console.warn(`return a cleanup function from ${toolId}`);
       }
-      // A stopgap only gets this far when the doc suggests nothing, so no
-      // offer goes with the toast.
-      this.#dismissToast();
       this.#state = fallingBack ? "fallback" : "rendered";
       this.#element.dispatchEvent(
         new MountedEvent({ url: this.#docUrl, toolId })
@@ -697,45 +720,116 @@ export class LegacyImpl {
     }
   }
 
-  #displayLoading = (_toolId: string) => {
-    const div = document.createElement("div");
-    div.className = "pw-loading";
-    div.style.display = "flex";
-    div.style.alignItems = "center";
-    div.style.justifyContent = "center";
-    div.style.height = "100%";
-    div.style.opacity = "0";
-    div.style.transition = "opacity 0.8s ease-in";
-    div.innerHTML = /* html */ `
-      <style>
-        @keyframes pw-loading-pulse {
-          0%, 100% { opacity: 0; transform: scale(0); }
-          50% { opacity: 1; transform: scale(1); }
-        }
-      </style>
-      <div style="
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #888;
-        animation: pw-loading-pulse 2s ease-in-out infinite;
-      "></div>
-    `;
-    this.#content.append(div);
-    const timer = setTimeout(() => {
-      div.style.opacity = "1";
-    }, 2000);
-    this.#teardowns.add(() => clearTimeout(timer));
-  };
+  // Loads a registered tool's code, behind a loading dot; when it fails, a
+  // card says so, where the view would otherwise sit on the dot for good.
+  #loadTool(tool: LoadedTool): void {
+    const failed = this.#toolLoadError;
+    if (failed?.id === tool.id) {
+      this.#showCard(`tool-failed:${tool.id}:${failed.message}`, () =>
+        toolFailedCard({
+          name: tool.name ?? tool.id,
+          error: failed.message,
+          onRetry: () => {
+            // the registry forgets a failed load, so this asks again
+            this.#toolLoadError = null;
+            if (this.#state === State.unable) this.#queueRender();
+          },
+        })
+      );
+      return;
+    }
+    log(`loading ${tool.id}`);
+    this.#showCard(`loading:${tool.id}`, () => findingCard(), false);
+    this.#watchLoad(tool.id, getRegistry("patchwork:tool").load(tool.id));
+  }
+
+  // A load of the chosen or fallback tool that fails puts its card up; one
+  // that works is the registry's "loaded" listener's to mount.
+  #watchLoad(id: string, load: Promise<unknown>): void {
+    const epoch = this.#initEpoch;
+    load.catch((error) => {
+      if (this.#disposed || epoch !== this.#initEpoch) return;
+      const message = error instanceof Error ? error.message : String(error);
+      this.#toolLoadError = { id, message };
+      if (this.#state === State.unable) this.#queueRender();
+    });
+  }
+
+  #showMissingType(doc: HasPatchworkMetadata): void {
+    const handle = this.#handle!;
+    const hasMetadata = !!doc && "@patchwork" in doc;
+    const anything = anythingTool();
+    this.#showCard(
+      `missing-type:${hasMetadata}:${anything?.id ?? ""}`,
+      () =>
+        missingTypeCard({
+          hasMetadata,
+          anything,
+          onPeek: (id) => this.#peek(id),
+          knownTypes: knownTypes(),
+          // the change listener sees the new type and opens it with its tool
+          onSetType: (type) =>
+            handle.change((d) => {
+              const meta = (d as Partial<HasPatchworkMetadata>)["@patchwork"];
+              if (meta && typeof meta === "object") meta.type = type;
+              else d["@patchwork"] = { type };
+            }),
+        })
+    );
+  }
+
+  #showNoTool(
+    type: string,
+    fallbackTool: LoadedTool | undefined,
+    missingToolId?: string
+  ): void {
+    const suggestion = this.#suggestedImport();
+    const anything =
+      !missingToolId && fallbackTool && isWildcardOnlyMatch(fallbackTool, type)
+        ? { id: fallbackTool.id, name: fallbackTool.name }
+        : undefined;
+    this.#showCard(
+      JSON.stringify(["no-tool", type, missingToolId, suggestion, anything]),
+      () =>
+        noToolCard({
+          type,
+          missingToolId,
+          suggestion,
+          anything,
+          onLoad: (url) => this.#loadSuggestedImport(url),
+          onPeek: (id) => this.#peek(id),
+          repo: this.#baseRepo,
+          readClaims,
+        })
+    );
+  }
+
+  // Opens the doc with a tool the reader picked from a card.
+  #peek(toolId: string): void {
+    this.#peekToolId = toolId;
+    if (this.#state === State.unable) this.#queueRender();
+  }
+
+  /**
+   * Puts a card up in place of the tool, unless the same one is up already.
+   * `settled` says the view has given up on mounting a tool for now, which it
+   * tells whoever's waiting with a `patchwork:no-tool`; a loading dot hasn't.
+   */
+  #showCard(key: string, build: () => Card, settled = true): void {
+    if (this.#cardKey === key && this.#card?.element.isConnected) return;
+    this.#resetDisplay();
+    const card = build();
+    this.#card = card;
+    this.#cardKey = key;
+    this.#content.append(card.element);
+    if (settled && this.#docUrl) {
+      this.#element.dispatchEvent(new NoToolEvent({ url: this.#docUrl }));
+    }
+  }
 
   // A lone `:(` that fades in; clicking it pops the full error under it.
   // `original` is logged again on open, so it's easy to grab from the console.
-  #displayError = (
-    summary: string,
-    detail?: string,
-    original?: unknown,
-    action?: { label: string; run: () => void }
-  ) => {
+  #displayError = (summary: string, detail?: string, original?: unknown) => {
     ensureErrorStyles();
 
     // Stacks usually start with the message already.
@@ -827,28 +921,7 @@ export class LegacyImpl {
     window.addEventListener("resize", reposition);
     this.#errorReposition = reposition;
 
-    const actions = document.createElement("div");
-    actions.className = "pw-error__actions";
-    actions.append(face, flyout);
-
-    if (action) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "pw-error__load";
-      button.textContent = `⚡ ${action.label}`;
-      button.addEventListener("click", action.run);
-      actions.append(button);
-
-      // An unexplained button is worse than no button, so the summary reads out
-      // in the open here rather than hiding behind the `:(`.
-      const message = document.createElement("p");
-      message.className = "pw-error__message";
-      message.textContent = summary;
-      wrap.classList.add("pw-error--offer");
-      wrap.append(message);
-    }
-
-    wrap.append(actions);
+    wrap.append(face, flyout);
     this.#content.append(wrap);
     requestAnimationFrame(() => {
       wrap.style.opacity = "1";
@@ -864,39 +937,30 @@ export class LegacyImpl {
   }
 
   /**
-   * The module the doc suggests importing (as {@link presentableImportUrl}
-   * makes it), unless it's been refused. `loading` means it was accepted and
-   * is in flight: show a spinner, not the offer.
+   * The package the doc suggests (as {@link presentableImportUrl} makes its
+   * url), with how loading it stands: `loading` means it was accepted and is
+   * in flight, `failed` why the last try didn't bring a tool.
    */
-  #suggestedImport(): { url: string; loading: boolean } | null {
-    if (!this.#docUrl || !this.#handle) return null;
+  #suggestedImport():
+    | { url: string; loading: boolean; failed?: string }
+    | undefined {
+    if (!this.#docUrl || !this.#handle) return undefined;
     const url = presentableImportUrl(
       getSuggestedImportUrl(this.#handle.doc())
     );
-    if (!url) return null;
-    return { url, loading: this.#requestedToolImports.has(url) };
-  }
-
-  /**
-   * Offer to run the package the doc names. Never on our own: it's arbitrary
-   * JavaScript named by the document, so it takes a click, then a confirm
-   * naming the URL.
-   */
-  #displaySuggestion(url: string): void {
-    this.#displayError(
-      `No tool was found for this document, but it suggests a package at ${url}.`,
-      undefined,
-      undefined,
-      {
-        label: "Load suggested package",
-        run: () => this.#loadSuggestedImport(url),
-      }
-    );
+    if (!url) return undefined;
+    return {
+      url,
+      loading: this.#requestedToolImports.has(url),
+      failed: this.#importFailures.get(url),
+    };
   }
 
   /**
    * Confirm, then import, in this element's own realm, so a view inside an
-   * iframe (which an event couldn't bubble out of) still gets its tool.
+   * iframe (which an event couldn't bubble out of) still gets its tool. Never
+   * on our own: it's arbitrary JavaScript named by the document, so it takes
+   * a click, then a confirm naming the URL.
    */
   #loadSuggestedImport(url: string): void {
     const ok = window.confirm(
@@ -907,173 +971,10 @@ export class LegacyImpl {
     );
     if (!ok) return;
     this.#requestedToolImports.add(url);
-    this.#dismissToast(true);
-    this.#showToast("Loading tool", url);
+    this.#importFailures.delete(url);
+    // the card again, with its button saying it's on its way
     if (this.#state === State.unable) this.#queueRender();
     void this.#importSuggestedModule(url);
-  }
-
-  /**
-   * A small o-message-style toast over the view. It goes on the host, never
-   * `#content`, which a tool's re-render wipes.
-   */
-  #showToast(title: string, body: string, action?: () => void): void {
-    this.#dismissToast(true);
-
-    // Give the absolutely-positioned toast a containing block without
-    // clobbering an inline position the host author may have set.
-    if (getComputedStyle(this.#element).position === "static") {
-      this.#element.style.position = "relative";
-      this.#toastPositioned = true;
-    }
-
-    const toast = document.createElement("div");
-    toast.setAttribute("role", "status");
-    Object.assign(toast.style, {
-      position: "absolute",
-      top: "16px",
-      left: "50%",
-      transform: "translateX(-50%)",
-      zIndex: "2147483000",
-      maxWidth: "min(360px, calc(100% - 32px))",
-      boxSizing: "border-box",
-      display: "flex",
-      gap: "10px",
-      padding: "12px 14px",
-      borderRadius: "var(--studio-radius, 6px)",
-      // Themed surface, faintly tinted by the accent: a hardcoded light card
-      // would hold a dark-themed button (they share `--studio-*`) and read as
-      // black-on-black in a dark theme.
-      background:
-        "color-mix(in oklch, var(--studio-fill, #eaf1fb), var(--studio-primary, #1e5fbf) 8%)",
-      color: "var(--studio-line, #1a1a1a)",
-      borderLeft: "4px solid var(--studio-primary, #1e5fbf)",
-      boxShadow: "var(--studio-shadow-lg, 0 6px 20px rgba(0, 0, 0, 0.18))",
-      font: "13px/1.4 var(--studio-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif)",
-      opacity: "0",
-      transition: "opacity 0.25s ease",
-      pointerEvents: action ? "auto" : "none",
-    } as Partial<CSSStyleDeclaration>);
-
-    const dot = document.createElement("div");
-    Object.assign(dot.style, {
-      flex: "0 0 auto",
-      width: "8px",
-      height: "8px",
-      marginTop: "4px",
-      borderRadius: "50%",
-      background: "var(--studio-primary, #1e5fbf)",
-    });
-    if (!action) {
-      dot.animate(
-        [
-          { opacity: "0.3", transform: "scale(0.6)" },
-          { opacity: "1", transform: "scale(1)" },
-          { opacity: "0.3", transform: "scale(0.6)" },
-        ],
-        { duration: 1400, iterations: Infinity, easing: "ease-in-out" }
-      );
-    }
-
-    const inner = document.createElement("div");
-    inner.style.minWidth = "0";
-
-    const titleEl = document.createElement("div");
-    titleEl.textContent = title;
-    titleEl.style.fontWeight = "600";
-
-    const bodyEl = document.createElement("div");
-    bodyEl.textContent = body;
-    Object.assign(bodyEl.style, {
-      marginTop: "2px",
-      opacity: "0.75",
-      overflowWrap: "anywhere",
-    } as Partial<CSSStyleDeclaration>);
-
-    inner.append(titleEl, bodyEl);
-
-    if (action) {
-      ensureErrorStyles();
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "pw-error__load";
-      button.textContent = "⚡ Load suggested package";
-      button.style.marginTop = "8px";
-      button.addEventListener("click", action);
-      inner.append(button);
-    }
-
-    toast.append(dot, inner);
-
-    // Only the offer is dismissable — the progress toast retires itself, and a
-    // × on it would suggest it cancels the import, which it doesn't.
-    if (action) {
-      const close = document.createElement("button");
-      close.type = "button";
-      close.textContent = "×";
-      close.setAttribute("aria-label", "dismiss");
-      Object.assign(close.style, {
-        flex: "0 0 auto",
-        marginLeft: "auto",
-        alignSelf: "flex-start",
-        padding: "0 2px",
-        border: "none",
-        background: "none",
-        color: "inherit",
-        opacity: "0.5",
-        font: "16px/1 inherit",
-        cursor: "pointer",
-      } as Partial<CSSStyleDeclaration>);
-      close.addEventListener("click", () => this.#dismissToast());
-      toast.append(close);
-
-      const escape = (event: KeyboardEvent) => {
-        if (event.key === "Escape") this.#dismissToast();
-      };
-      window.addEventListener("keydown", escape);
-      this.#toastEscape = escape;
-    }
-    this.#element.append(toast);
-    this.#toast = toast;
-
-    requestAnimationFrame(() => {
-      toast.style.opacity = "1";
-    });
-
-    // An offer waits for the user; only the progress toast times itself out.
-    if (!action) {
-      this.#toastTimer = setTimeout(() => this.#dismissToast(), 8000);
-    }
-  }
-
-  #dismissToast(immediate = false): void {
-    if (this.#toastTimer) {
-      clearTimeout(this.#toastTimer);
-      this.#toastTimer = null;
-    }
-    if (this.#toastEscape) {
-      window.removeEventListener("keydown", this.#toastEscape);
-      this.#toastEscape = null;
-    }
-    const toast = this.#toast;
-    if (!toast) return;
-    this.#toast = null;
-    if (immediate) {
-      toast.remove();
-      this.#restoreToastPosition();
-      return;
-    }
-    toast.style.opacity = "0";
-    setTimeout(() => {
-      toast.remove();
-      this.#restoreToastPosition();
-    }, 300);
-  }
-
-  #restoreToastPosition(): void {
-    if (!this.#toastPositioned || this.#toast) return;
-    this.#toastPositioned = false;
-    this.#element.style.position = "";
   }
 
   async #importSuggestedModule(url: string): Promise<void> {
@@ -1083,42 +984,62 @@ export class LegacyImpl {
       // A `suggestedImportUrl` can be an `automerge:` folder doc served through
       // the service worker as well as a plain HTTP(S) module bundle.
       const mod = await importPackage(url);
-      if (Array.isArray(mod?.plugins)) {
-        registerPlugins(mod.plugins, url);
-      } else {
+      if (!Array.isArray(mod?.plugins)) {
         console.warn(`suggested module ${url} has no plugins array`);
-        this.#reportImportFailed(epoch, url);
+        this.#reportImportFailed(epoch, url, "it doesn't export any plugins");
+        return;
+      }
+      registerPlugins(mod.plugins, url);
+      // Once its tool registers, the registry listeners swap the card for it.
+      // A package that brings none would leave the card saying "loading…".
+      if (!this.#bringsTool(mod.plugins)) {
+        this.#reportImportFailed(epoch, url, this.#noToolReason());
       }
     } catch (error) {
       console.error(`Failed to import suggested module ${url}`, error);
-      this.#reportImportFailed(epoch, url, error);
+      const message = (error as Error)?.message ?? String(error);
+      this.#reportImportFailed(epoch, url, message);
     }
   }
 
+  // Whether `plugins` has a tool this view would open the doc with.
+  #bringsTool(plugins: unknown[]): boolean {
+    const chosen = this.#chosenToolId();
+    const type = this.#handle ? getType(this.#handle.doc()) : undefined;
+    return plugins.some((plugin) => {
+      const p = plugin as Partial<ToolDescription> | null;
+      if (p?.type !== "patchwork:tool") return false;
+      if (chosen) return p.id === chosen;
+      const supported = p.supportedDatatypes;
+      return (
+        !!type && !!supported && supported !== "*" && supported.includes(type)
+      );
+    });
+  }
+
+  #noToolReason(): string {
+    const chosen = this.#chosenToolId();
+    if (chosen) return `it doesn't have the ${chosen} tool`;
+    const type = this.#handle ? getType(this.#handle.doc()) : undefined;
+    return `it doesn't have a tool for ${type ?? "this"}`;
+  }
+
   /**
-   * The import registered nothing: say so and offer to try again, rather than
-   * sit empty once the progress toast times out. Only called where nothing
-   * could have registered, so no render is in flight.
+   * The import didn't bring a tool: say why on the card, and offer to try
+   * again, rather than leave it saying "loading…".
    */
-  #reportImportFailed(epoch: number, url: string, error?: unknown): void {
-    // It's over, so the suggestion can be offered again instead of a spinner.
+  #reportImportFailed(epoch: number, url: string, why: string): void {
     if (epoch !== this.#initEpoch) return;
     this.#requestedToolImports.delete(url);
-    if (this.#state !== State.unable) return;
-    this.#dismissToast(true);
-    // In place of the loading pulse, not under it.
-    this.#resetDisplay();
-    const err = error as Error | undefined;
-    this.#displayError(
-      `I couldn't load the package at ${url}.`,
-      err?.stack ?? err?.message,
-      error,
-      { label: "Try again", run: () => this.#loadSuggestedImport(url) }
-    );
+    this.#importFailures.set(url, why);
+    if (this.#state === State.unable) this.#queueRender();
   }
 
   #resetDisplay = () => {
     this.#removeErrorListeners();
+    this.#card?.dispose();
+    this.#card = null;
+    this.#cardKey = null;
     this.#content.replaceChildren();
   };
 }

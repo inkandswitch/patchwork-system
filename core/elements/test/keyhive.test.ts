@@ -210,6 +210,100 @@ describe("keyhive access (legacy mode)", () => {
     registered.length = 0;
   });
 
+  it("says a doc isn't shared, offers the reader's card, and opens on a grant", async () => {
+    const fake = fakeHive(false);
+    (fake.hive as unknown as { active: object }).active = {
+      individual: { id: "me" },
+      contactCard: { toBytes: () => new Uint8Array([104, 105]) },
+    };
+    const tag = `kh-legacy-${++seq}`;
+    registerPatchworkViewElement({ name: tag, repo: flakyRepo, hive: fake.hive });
+    const toolId = `kh-tool-${++seq}`;
+    const tool = { mounts: 0 };
+    const render = () => {
+      tool.mounts++;
+      return () => {};
+    };
+    tools.register(
+      {
+        id: toolId,
+        type: "patchwork:tool",
+        name: toolId,
+        supportedDatatypes: ["kh-type"],
+        load: async () => render,
+        module: render,
+      } as never,
+      `test://${toolId}`
+    );
+    registered.push(toolId);
+    backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
+    available = true;
+    const writeText = vi.fn(async () => {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const provider = document.createElement("repo-provider");
+    const view = document.createElement(tag);
+    view.setAttribute("doc-url", keyhiveUrl());
+    provider.append(view);
+    document.body.replaceChildren(provider);
+    await vi.waitFor(() =>
+      expect(view.querySelector('[data-card="not-shared"]')).toBeTruthy()
+    );
+    const copy = [...view.querySelectorAll("button")].find(
+      (b) => b.textContent === "copy my card"
+    )!;
+    copy.click();
+    expect(writeText).toHaveBeenCalledWith(btoa("hi"));
+    vi.unstubAllGlobals();
+
+    fake.setAccess(true);
+    fake.ingest();
+    await vi.waitFor(() => expect(tool.mounts).toBe(1));
+    expect(view.querySelector('[data-card="not-shared"]')).toBeNull();
+  });
+
+  it("asks again when the sync server comes back", async () => {
+    const fake = fakeHive(true);
+    const tag = `kh-legacy-${++seq}`;
+    // the connection, as a subduction repo reports it
+    let connected = false;
+    const onConnection = new Set<(p: { connected: boolean }) => void>();
+    const connectingRepo = Object.assign(Object.create(flakyRepo), {
+      isSubductionConnected: () => connected,
+      on: (_: string, cb: (p: { connected: boolean }) => void) =>
+        onConnection.add(cb),
+      off: (_: string, cb: (p: { connected: boolean }) => void) =>
+        onConnection.delete(cb),
+    }) as Repo;
+    registerPatchworkViewElement({
+      name: tag,
+      repo: connectingRepo,
+      hive: fake.hive,
+    });
+    backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
+    available = false;
+    find.mockClear();
+
+    const provider = document.createElement("repo-provider");
+    const view = document.createElement(tag);
+    view.setAttribute("doc-url", keyhiveUrl());
+    provider.append(view);
+    document.body.replaceChildren(provider);
+    await vi.waitFor(() =>
+      expect(view.querySelector('[data-card="unavailable"]')).toBeTruthy()
+    );
+    const sync = view.querySelector<HTMLButtonElement>(".pw-card__sync")!;
+    expect(sync.hasAttribute("data-connected")).toBe(false);
+    const before = find.mock.calls.length;
+
+    connected = true;
+    for (const cb of onConnection) cb({ connected: true });
+    expect(sync.hasAttribute("data-connected")).toBe(true);
+    await vi.waitFor(() =>
+      expect(find.mock.calls.length).toBeGreaterThan(before)
+    );
+  });
+
   it("retries a failed load in place instead of rebuilding the view", async () => {
     const fake = fakeHive(true);
     const tag = `kh-legacy-${++seq}`;
@@ -244,9 +338,9 @@ describe("keyhive access (legacy mode)", () => {
     provider.append(view);
     document.body.replaceChildren(provider);
     await vi.waitFor(() =>
-      expect(view.querySelector(".pw-error")).toBeTruthy()
+      expect(view.querySelector('[data-card="unavailable"]')).toBeTruthy()
     );
-    const error = view.querySelector(".pw-error");
+    const error = view.querySelector('[data-card="unavailable"]');
     expect(find).toHaveBeenCalledTimes(1);
 
     // Still unavailable: retried, but the error the reader is looking at stays
@@ -256,12 +350,12 @@ describe("keyhive access (legacy mode)", () => {
     // Past the 300ms the old retry path slept before rebuilding the view.
     await settle(400);
     expect(find).toHaveBeenCalledTimes(2);
-    expect(view.querySelector(".pw-error")).toBe(error);
+    expect(view.querySelector('[data-card="unavailable"]')).toBe(error);
 
     available = true;
     fake.ingest();
     await vi.waitFor(() => expect(tool.mounts).toBe(1));
-    expect(view.querySelector(".pw-error")).toBeNull();
+    expect(view.querySelector('[data-card="unavailable"]')).toBeNull();
   });
 
   it("retries after an ingest arrives during a failed lookup", async () => {
@@ -302,7 +396,7 @@ describe("keyhive access (legacy mode)", () => {
     provider.append(view);
     document.body.replaceChildren(provider);
     await vi.waitFor(() =>
-      expect(view.querySelector(".pw-error")).toBeTruthy()
+      expect(view.querySelector('[data-card="unavailable"]')).toBeTruthy()
     );
     expect(find).toHaveBeenCalledTimes(1);
 
@@ -323,7 +417,7 @@ describe("keyhive access (legacy mode)", () => {
     await vi.waitFor(() => expect(tool.mounts).toBe(1));
 
     expect(find).toHaveBeenCalledTimes(3);
-    expect(view.querySelector(".pw-error")).toBeNull();
+    expect(view.querySelector('[data-card="unavailable"]')).toBeNull();
   });
 
   it("doesn't mount a retry after access is revoked", async () => {
@@ -364,7 +458,7 @@ describe("keyhive access (legacy mode)", () => {
     provider.append(view);
     document.body.replaceChildren(provider);
     await vi.waitFor(() =>
-      expect(view.querySelector(".pw-error")).toBeTruthy()
+      expect(view.querySelector('[data-card="unavailable"]')).toBeTruthy()
     );
     expect(find).toHaveBeenCalledTimes(1);
 
@@ -425,7 +519,7 @@ describe("keyhive access (legacy mode)", () => {
     provider.append(view);
     document.body.replaceChildren(provider);
     await vi.waitFor(() =>
-      expect(view.querySelector(".pw-error")).toBeTruthy()
+      expect(view.querySelector('[data-card="unavailable"]')).toBeTruthy()
     );
     expect(find).toHaveBeenCalledTimes(1);
 
@@ -433,7 +527,7 @@ describe("keyhive access (legacy mode)", () => {
     available = true;
     await vi.waitFor(() => expect(tool.mounts).toBe(1), { timeout: 5_000 });
     expect(find).toHaveBeenCalledTimes(2);
-    expect(view.querySelector(".pw-error")).toBeNull();
+    expect(view.querySelector('[data-card="unavailable"]')).toBeNull();
 
     // a mounted view stops retrying
     await settle(2200);
@@ -506,14 +600,14 @@ describe("keyhive access (legacy mode)", () => {
     provider.append(view);
     document.body.replaceChildren(provider);
     await vi.waitFor(() =>
-      expect(view.querySelector(".pw-error")).toBeTruthy()
+      expect(view.querySelector('[data-card="unavailable"]')).toBeTruthy()
     );
 
     // the sender's device pushes it to the server; nothing tells us
     serverHasIt = true;
     await vi.waitFor(() => expect(tool.mounts).toBe(1), { timeout: 5_000 });
     expect(resyncSubduction).toHaveBeenCalledTimes(1);
-    expect(view.querySelector(".pw-error")).toBeNull();
+    expect(view.querySelector('[data-card="unavailable"]')).toBeNull();
   });
 });
 
