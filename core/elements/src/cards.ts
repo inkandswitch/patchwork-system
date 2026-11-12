@@ -141,8 +141,8 @@ export function noToolCard(props: {
     ".",
     h("br"),
     ...(props.missingToolId
-      ? ["it asked for the ", code(props.missingToolId), " tool, which isn't here."]
-      : ["nothing here opens one yet."])
+      ? ["it asked for the ", code(props.missingToolId), " tool, which isn't available."]
+      : ["there's no tool loaded that supports ", code(props.type)])
   );
   const body: Child[] = [what];
   const links: Child[] = [];
@@ -215,12 +215,12 @@ export function missingTypeCard(props: {
         null,
         "its ",
         code("@patchwork"),
-        " metadata doesn't say what type it is, so nothing here knows how to open it."
+        " metadata doesn't declare a type, so it's not clear how to open it."
       )
     : h(
         "p",
         null,
-        "it has no ",
+        "no ",
         code("@patchwork"),
         " metadata, so nothing here knows what kind of doc it is."
       );
@@ -249,9 +249,9 @@ export function missingTypeCard(props: {
     h(
       "p",
       { class: "pw-card__aside" },
-      "it's written to the doc's ",
+      "set doc's ",
       code("@patchwork.type"),
-      ". it'll open here with that type's tool, if there is one."
+      "."
     ),
     notice
   );
@@ -294,7 +294,7 @@ export function missingTypeCard(props: {
       "this doc has no type",
       why,
       anything
-        ? h("p", null, `a look at its insides might say what it's meant to be.`)
+        ? undefined // h("p", null, `a look inside might help`)
         : undefined,
       actions,
       form
