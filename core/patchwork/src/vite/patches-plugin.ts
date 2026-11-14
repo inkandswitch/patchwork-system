@@ -16,8 +16,12 @@ import type { Plugin } from "vite";
  * The edits are upstream-shaped and meant to be deleted once subduction takes
  * them. Until then each patch is pinned to one automerge-repo version and
  * every hunk has to match, so a dependency bump fails the build instead of
- * quietly un-patching it. There's one patch per version a build can bundle:
- * the current one, and the one the ARK 0.6 stack brings (`keyhive.ark`).
+ * quietly un-patching it.
+ *
+ * The current automerge-repo is @chee/automerge-repo, aliased in the catalog,
+ * which ships these edits already and installs under node_modules/@chee/, so
+ * this plugin leaves it alone. The one patch left is for the version the
+ * ARK 0.6 stack brings (`keyhive.ark`).
  */
 const AUTOMERGE_REPO = "@automerge/automerge-repo";
 const PATCHES_DIR = fileURLToPath(new URL("../patches/", import.meta.url));
@@ -237,13 +241,13 @@ export function patches({
       return apply(code, found.file, patch.files[found.file]);
     },
 
-    // A build bundles one automerge-repo, so only that version's patch has to
-    // have applied in full. Bundling none of them means a layout change.
+    // A patch that applied to some of its files has to have applied to all of
+    // them. Patching nothing is fine: the current automerge-repo comes
+    // pre-patched, and only the ARK 0.6 stack's needs it.
     async buildEnd(error) {
       if (serve || error || !complete) return;
       const patches = await load();
-      const versions = seen.size ? [...seen.keys()] : [...patches.keys()];
-      const missing = versions.flatMap((version) =>
+      const missing = [...seen.keys()].flatMap((version) =>
         Object.keys(patches.get(version)!).filter(
           (file) => !seen.get(version)?.has(file)
         )
