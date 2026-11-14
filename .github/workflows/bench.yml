@@ -59,7 +59,7 @@ jobs:
   # not what merging changes.
   bench:
     name: bench (${{ matrix.browser }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # Playwright 1.59 has no ubuntu 26.04 deps; unpin once main is on Playwright >= 1.65
     timeout-minutes: 120
     permissions:
       contents: read
