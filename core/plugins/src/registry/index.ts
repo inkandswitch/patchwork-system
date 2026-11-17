@@ -1,18 +1,20 @@
 import type { Tool } from "../tools.js";
 import { PluginRegistry } from "./registry.js";
 import { sourceOf } from "./source.js";
-import { LoadablePlugin, PluginDescription } from "./types.js";
+import { LoadablePlugin, PinnedSources, PluginDescription } from "./types.js";
 
 export { PluginRegistry };
 export type {
   LoadablePlugin,
   LoadedPlugin,
+  PinnedSources,
   Plugin,
   PluginDescription,
   PluginRegistryEvents,
 } from "./types.js";
 
 const registries: Record<string, PluginRegistry<any>> = {};
+let pinned: PinnedSources | undefined;
 
 /**
  * Get a registry for a specific plugin type, creating it if it doesn't exist
@@ -23,9 +25,26 @@ export function getRegistry<T extends PluginDescription>(
 ): PluginRegistry<T> {
   if (!registries[type]) {
     registries[type] = new PluginRegistry<T>();
+    registries[type].pinSources(pinned);
   }
 
   return registries[type] as PluginRegistry<T>;
+}
+
+/**
+ * Which packages are pinned, in every registry, now and made later: a pinned
+ * package's registration of an id is used over any other's that isn't, and
+ * the other's is used again if it goes. Without it (or with `undefined`),
+ * the latest package to register an id is the one used. A dev server's
+ * packages, say, used over everything else:
+ *
+ *     pinPluginSources((url) => url?.startsWith(devOrigin) ?? false)
+ */
+export function pinPluginSources(isPinned: PinnedSources | undefined) {
+  pinned = isPinned;
+  for (const registry of Object.values(registries)) {
+    registry.pinSources(isPinned);
+  }
 }
 
 // todo remove this tomorrow
@@ -52,17 +71,13 @@ function migrate(plugin: LoadablePlugin) {
 }
 
 /**
- * Remove every plugin registered from the same package as `importUrl`, except
- * those `keep` holds as "<type> <id>".
+ * Remove every plugin registered from the same package as `importUrl`,
+ * shadowed or not, except those `keep` holds as "<type> <id>".
  */
 function removeFromSource(importUrl: string, keep = new Set<string>()) {
   const source = sourceOf(importUrl);
   for (const [type, registry] of Object.entries(registries)) {
-    for (const plugin of registry.all()) {
-      if (sourceOf(plugin.importUrl) !== source) continue;
-      if (keep.has(`${type} ${plugin.id}`)) continue;
-      registry.remove(plugin.id);
-    }
+    registry.removeSource(source, (id) => keep.has(`${type} ${id}`));
   }
 }
 

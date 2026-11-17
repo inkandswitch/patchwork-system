@@ -9,6 +9,15 @@ export interface PluginRegistryEvents<D extends PluginDescription, I = any> {
 }
 
 /**
+ * Whether a package is pinned, by the url a plugin was registered from: a
+ * pinned package's registration of an id is used over any other's that isn't
+ * pinned, whichever was registered first (`PluginRegistry.pinSources`,
+ * `pinPluginSources`). The url is the one the package was loaded from, an
+ * automerge url (at heads) or an http one.
+ */
+export type PinnedSources = (importUrl: string | undefined) => boolean;
+
+/**
  * Map of registry types and their corresponding plugin description types
  * can be extended with `declare module "@inkandswitch/patchwork-plugins" { ... }`
  * to add new registry types in userland while maintaining type safety.

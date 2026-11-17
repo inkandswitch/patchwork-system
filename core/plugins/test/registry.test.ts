@@ -4,11 +4,12 @@ import {
   type DocumentId,
   type UrlHeads,
 } from "@automerge/automerge-repo/slim";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { PluginRegistry } from "../src/registry/registry.js";
 import {
   getRegistry,
   registerPlugins,
+  pinPluginSources,
   unregisterPlugins,
 } from "../src/registry/index.js";
 
@@ -193,5 +194,174 @@ describe("PluginRegistry.loadWhenReady", () => {
     );
 
     expect((await ready).module).toBe("v2");
+  });
+});
+
+describe("shadowed registrations", () => {
+  const DEV = "https://dev.example.test/tool/index.js";
+  const dev = (url: string | undefined) =>
+    url?.startsWith("https://dev.example.test/") ?? false;
+  afterEach(() => pinPluginSources(undefined));
+
+  it("brings back an overridden package's plugin when the overriding one goes", () => {
+    const type = "test:shadow-returns";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "shared")], at(ID, v1));
+    registerPlugins([plugin(type, "shared")], at(OTHER, v1));
+
+    unregisterPlugins(`automerge:${OTHER}`);
+
+    expect(registry.get("shared")?.importUrl).toBe(at(ID, v1));
+    unregisterPlugins(`automerge:${ID}`);
+    expect(registry.has("shared")).toBe(false);
+  });
+
+  it("brings it back when the overriding package drops the id", () => {
+    const type = "test:shadow-dropped";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "shared")], at(ID, v1));
+    registerPlugins([plugin(type, "shared"), plugin(type, "x")], DEV);
+
+    registerPlugins([plugin(type, "x")], DEV);
+
+    expect(registry.get("shared")?.importUrl).toBe(at(ID, v1));
+    unregisterPlugins(DEV);
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("keeps a package's place when it registers again", () => {
+    const type = "test:shadow-in-place";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "tool")], at(ID, v1));
+    registerPlugins([plugin(type, "tool")], at(OTHER, v1));
+    const events: string[] = [];
+    registry.on("registered", (p) => void events.push(`registered ${p.id}`));
+    registry.on("changed", () => void events.push("changed"));
+
+    registerPlugins([plugin(type, "tool")], at(ID, v2));
+
+    expect(registry.get("tool")?.importUrl).toBe(at(OTHER, v1));
+    expect(registry.get("tool")?.importUrl).toBe(at(OTHER, v1));
+    expect(registry.shadows("tool").map((p) => p.importUrl)).toEqual([
+      at(ID, v2),
+    ]);
+    expect(events).toEqual([]);
+    unregisterPlugins(`automerge:${OTHER}`);
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("updates the plugin in use in place", () => {
+    const type = "test:shadow-top-update";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "tool")], at(ID, v1));
+    registerPlugins([plugin(type, "tool")], at(OTHER, v1));
+    const next = plugin(type, "tool");
+
+    registerPlugins([next], at(OTHER, v2));
+
+    expect(registry.get("tool")).toBe(next);
+    expect(registry.shadows("tool")).toHaveLength(1);
+    unregisterPlugins(`automerge:${OTHER}`);
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("keeps a pinned package on top of one registering after it", () => {
+    pinPluginSources(dev);
+    const type = "test:shadow-pinned-first";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "tool")], DEV);
+    const events: string[] = [];
+    registry.on("registered", (p) => void events.push(`registered ${p.id}`));
+    registry.on("changed", () => void events.push("changed"));
+
+    registerPlugins([plugin(type, "tool")], at(ID, v1));
+    registerPlugins([plugin(type, "tool")], at(ID, v2));
+
+    expect(registry.get("tool")?.importUrl).toBe(DEV);
+    expect(events).toEqual([]);
+
+    unregisterPlugins(DEV);
+    expect(registry.get("tool")?.importUrl).toBe(at(ID, v2));
+    expect(events).toEqual(["registered tool", "changed"]);
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("moves pinned packages to the top when they're pinned", () => {
+    const type = "test:shadow-pin-later";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "tool")], DEV);
+    registerPlugins([plugin(type, "tool")], at(ID, v1));
+    expect(registry.get("tool")?.importUrl).toBe(at(ID, v1));
+
+    pinPluginSources(dev);
+
+    expect(registry.get("tool")?.importUrl).toBe(DEV);
+    unregisterPlugins(DEV);
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("pins in registries made after it's set", () => {
+    pinPluginSources(dev);
+    const type = "test:shadow-new-registry";
+    registerPlugins([plugin(type, "tool")], DEV);
+    registerPlugins([plugin(type, "tool")], at(ID, v1));
+
+    expect(getRegistry(type).get("tool")?.importUrl).toBe(DEV);
+    unregisterPlugins(DEV);
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("lists what each plugin in use shadows, in the order they'd take over", () => {
+    const registry = new PluginRegistry<any>();
+    registry.register(plugin("test:shadows", "a"), "https://a.test/a.js");
+    registry.register(plugin("test:shadows", "a"), "https://b.test/b.js");
+    registry.register(plugin("test:shadows", "a"), "https://c.test/c.js");
+    registry.register(plugin("test:shadows", "d"), "https://a.test/a.js");
+
+    expect(registry.all().map((p) => `${p.id} ${p.importUrl}`)).toEqual([
+      "a https://c.test/c.js",
+      "d https://a.test/a.js",
+    ]);
+    expect(registry.shadows("a").map((p) => p.importUrl)).toEqual([
+      "https://b.test/b.js",
+      "https://a.test/a.js",
+    ]);
+    expect(registry.shadows("d")).toEqual([]);
+    expect(registry.shadows("nothing")).toEqual([]);
+  });
+
+  it("keeps a shadowed plugin loaded, so it isn't loaded again when it's back", async () => {
+    const registry = new PluginRegistry<any>();
+    let loads = 0;
+    registry.register(
+      {
+        type: "test:loaded",
+        id: "tool",
+        name: "tool",
+        load: async () => ++loads,
+      } as any,
+      "https://a.test/a.js"
+    );
+    await registry.load("tool");
+    registry.register(plugin("test:loaded", "tool"), "https://b.test/b.js");
+
+    registry.removeSource("https://b.test/b.js");
+
+    expect((registry.get("tool") as any).module).toBe(1);
+    expect((await registry.load("tool"))?.module).toBe(1);
+    expect(loads).toBe(1);
+  });
+
+  it("remove takes the plugin in use, and the one it shadowed is in use", () => {
+    const registry = new PluginRegistry<any>();
+    registry.register(plugin("test:remove-top", "tool"), "https://a.test/a.js");
+    registry.register(plugin("test:remove-top", "tool"), "https://b.test/b.js");
+
+    expect(registry.remove("tool")).toBe(true);
+    expect(registry.get("tool")?.importUrl).toBe("https://a.test/a.js");
+
+    expect(registry.remove("tool")).toBe(true);
+    expect(registry.has("tool")).toBe(false);
+    expect(registry.remove("tool")).toBe(false);
   });
 });
