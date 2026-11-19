@@ -103,6 +103,17 @@ export function unregisterPlugins(importUrl: string) {
   removeFromSource(importUrl);
 }
 
+/** The url every registered plugin was imported from, across all registries, once each. */
+export function pluginImportUrls(): string[] {
+  const urls = new Set<string>();
+  for (const registry of Object.values(registries)) {
+    for (const plugin of registry.all()) {
+      if (plugin.importUrl) urls.add(plugin.importUrl);
+    }
+  }
+  return [...urls];
+}
+
 export function getAllRegistries(): Map<string, PluginRegistry<any>> {
   return new Map(Object.entries(registries));
 }
