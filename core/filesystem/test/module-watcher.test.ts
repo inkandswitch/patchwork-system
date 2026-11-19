@@ -1144,3 +1144,95 @@ describe("ModuleWatcher.prioritize", () => {
     }
   });
 });
+
+describe("ModuleWatcher package status", () => {
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  async function setup(importPackage: () => Promise<any>) {
+    const repo = new AutomergeRepo({ peerId: "status" as PeerId });
+    const doc = repo.create<any>({ "@patchwork": { type: "folder" } });
+    const settings = repo.create<any>({
+      "@patchwork": { type: "patchwork:module-settings" },
+      modules: [doc.url],
+    });
+    const tracker: PackageTracker = {
+      findLatest: async (url) => url,
+      watch: () => () => {},
+    };
+    const watcher = new ModuleWatcher(
+      repo,
+      { system: settings.url },
+      () => {},
+      undefined,
+      importPackage,
+      tracker
+    );
+    const events: string[] = [];
+    watcher.addEventListener("status", () =>
+      events.push(watcher.packageStatus(doc.url)?.state ?? "none")
+    );
+    await watcher.doneLoading;
+    const done = async () => {
+      watcher.dispose();
+      await repo.shutdown().catch(() => {});
+    };
+    return { doc, settings, watcher, events, done };
+  }
+
+  it("says a package loaded, and which plugins it brought", async () => {
+    const { doc, watcher, events, done } = await setup(async () => ({
+      plugins: [{ type: "patchwork:tool", id: "demo" }],
+    }));
+    try {
+      expect(watcher.packageStatus(doc.url)).toEqual({
+        state: "loaded",
+        plugins: ["demo"],
+      });
+      expect(watcher.packageStatus(doc.documentId)?.state).toBe("loaded");
+      expect(events).toEqual(["loading", "loaded"]);
+    } finally {
+      await done();
+    }
+  });
+
+  it("says a package failed, and why", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { doc, watcher, done } = await setup(async () => {
+      throw new Error("kaboom");
+    });
+    try {
+      expect(watcher.packageStatus(doc.url)).toEqual({
+        state: "failed",
+        error: "kaboom",
+      });
+    } finally {
+      await done();
+      errors.mockRestore();
+    }
+  });
+
+  it("forgets a package that leaves the settings", async () => {
+    const { doc, settings, watcher, events, done } = await setup(async () => ({
+      plugins: [],
+    }));
+    try {
+      settings.change((d: any) => {
+        d.modules = [];
+      });
+      await pause(100);
+      expect(watcher.packageStatus(doc.url)).toBeUndefined();
+      expect(events.at(-1)).toBe("none");
+    } finally {
+      await done();
+    }
+  });
+
+  it("knows nothing of a document that isn't a package", async () => {
+    const { watcher, done } = await setup(async () => ({ plugins: [] }));
+    try {
+      expect(watcher.packageStatus(AUTOMERGE_URL)).toBeUndefined();
+    } finally {
+      await done();
+    }
+  });
+});
