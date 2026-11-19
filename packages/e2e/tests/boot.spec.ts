@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { waitForRepoReady, waitForServiceWorkerActive } from "./helpers.js";
+import {
+  navigate,
+  reload,
+  waitForRepoReady,
+  waitForServiceWorkerActive,
+} from "./helpers.js";
 
 /**
  * Cold boot: a fresh visit registers the service worker, initialises wasm and
@@ -8,7 +13,7 @@ import { waitForRepoReady, waitForServiceWorkerActive } from "./helpers.js";
  * suites (cross-profile-sync, install-tool) cover that.
  */
 test("cold boot brings up the service worker and tab repo", async ({ page }) => {
-  await page.goto("/");
+  await navigate(page, "/");
 
   await waitForServiceWorkerActive(page);
 
@@ -23,13 +28,13 @@ test("cold boot brings up the service worker and tab repo", async ({ page }) => 
 test("a second load reuses the already-active service worker quickly", async ({
   page,
 }) => {
-  await page.goto("/");
+  await navigate(page, "/");
   await waitForServiceWorkerActive(page);
   await waitForRepoReady(page);
 
   // A second load meets the already-active service worker: no fresh install.
   const start = Date.now();
-  await page.reload();
+  await reload(page);
   await waitForRepoReady(page, 15_000);
   const elapsed = Date.now() - start;
 

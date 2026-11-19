@@ -13,6 +13,10 @@ import {
 import {
   getFallbackTool,
   getRegistry,
+  opensAnything,
+  toolMatch,
+  toolSupports,
+  whereFields,
   isLoadablePlugin,
   registerPlugins,
   type DatatypeDescription,
@@ -47,16 +51,13 @@ import {
 const log = debug("patchwork:elements:legacy");
 
 /**
- * Whether `tool` takes `type` only through a `*`: a generic fallback like a
- * raw viewer, not a tool built for that datatype.
+ * Whether `tool` takes `doc` only through a `*`: a generic fallback like a
+ * raw viewer, not a tool built for that kind of doc. With no doc, whether it
+ * opens anything at all.
  */
-function isWildcardOnlyMatch(
-  tool: ToolDescription,
-  type: string | undefined
-): boolean {
-  const datatypes = tool.supportedDatatypes;
-  const list = datatypes === "*" ? ["*"] : (datatypes ?? []);
-  return list.includes("*") && (type === undefined || !list.includes(type));
+function isWildcardOnlyMatch(tool: ToolDescription, doc?: unknown): boolean {
+  if (doc === undefined) return opensAnything(tool);
+  return toolMatch(tool, doc) === "wildcard";
 }
 
 /**
@@ -75,9 +76,9 @@ function anythingTool(): Anything | undefined {
 function knownTypes(): { id: string; name?: string }[] {
   const names = new Map<string, string | undefined>();
   for (const tool of getRegistry<ToolDescription>("patchwork:tool").all()) {
-    const supported = tool.supportedDatatypes;
-    if (!supported || supported === "*") continue;
-    for (const type of supported) if (type !== "*") names.set(type, undefined);
+    for (const { datatype } of toolSupports(tool)) {
+      if (datatype !== "*") names.set(datatype, undefined);
+    }
   }
   for (const datatype of getRegistry<DatatypeDescription>(
     "patchwork:datatype"
@@ -357,11 +358,23 @@ export class LegacyImpl {
   }
 
   // A new type means a new tool, if there's one for it: a doc given a type
-  // (from its card, or in the raw view) opens with that type's tool.
+  // (from its card, or in the raw view) opens with that type's tool. So does
+  // a change to a field some tool's `where` reads (a file's mimeType), when
+  // that changes which tool it falls back to.
   #onDocChange = (payload: DocHandleChangePayload<HasPatchworkMetadata>) => {
     const { before, after } = payload.patchInfo;
     if (getType(before) != getType(after)) {
       this.#peekToolId = null;
+      void this.#restart();
+      return;
+    }
+    if (this.#chosenToolId()) return;
+    const was = before as Record<string, unknown>;
+    const now = after as Record<string, unknown>;
+    const touched = [...whereFields()].some(
+      (field) => was[field] !== now[field]
+    );
+    if (touched && getFallbackTool(after)?.id !== this.#fallbackId) {
       void this.#restart();
     }
   };
@@ -583,15 +596,11 @@ export class LegacyImpl {
     if (granted || revoked) void this.#restart();
   }
 
-  // Only when there's no fallback yet, or the new tool supports the doc's type
-  // (a specific match sorts ahead of a wildcard).
+  // Only when there's no fallback yet, or the new tool takes the doc at all.
   #couldChangeFallback(added: ToolDescription): boolean {
     if (!this.#fallbackId) return true;
-    const supported = added.supportedDatatypes;
-    if (!supported) return false;
-    if (supported === "*" || supported.includes("*")) return true;
-    const type = this.#handle ? getType(this.#handle.doc()) : undefined;
-    return type != null && supported.includes(type);
+    const doc = this.#handle?.doc();
+    return doc !== undefined && toolMatch(added, doc) !== undefined;
   }
 
   async #runTeardown(): Promise<void> {
@@ -645,9 +654,7 @@ export class LegacyImpl {
   // until their own cleanup runs, hence the in-flight check.
   #mayRender(epoch: number): boolean {
     return (
-      !this.#disposed &&
-      epoch === this.#initEpoch &&
-      !this.#teardown.pending
+      !this.#disposed && epoch === this.#initEpoch && !this.#teardown.pending
     );
   }
 
@@ -676,7 +683,7 @@ export class LegacyImpl {
       }
       // A tool that opens anything (raw, an inspector) isn't this datatype's
       // tool: offer it rather than open the doc's insides unasked.
-      if (!fallbackTool || isWildcardOnlyMatch(fallbackTool, type)) {
+      if (!fallbackTool || isWildcardOnlyMatch(fallbackTool, doc)) {
         console.warn(`no tool for ${this.#docUrl}`);
         this.#state = State.unable;
         this.#showNoTool(type, fallbackTool);
@@ -776,22 +783,20 @@ export class LegacyImpl {
     const handle = this.#handle!;
     const hasMetadata = !!doc && "@patchwork" in doc;
     const anything = anythingTool();
-    this.#showCard(
-      `missing-type:${hasMetadata}:${anything?.id ?? ""}`,
-      () =>
-        missingTypeCard({
-          hasMetadata,
-          anything,
-          onPeek: (id) => this.#peek(id),
-          knownTypes: knownTypes(),
-          // the change listener sees the new type and opens it with its tool
-          onSetType: (type) =>
-            handle.change((d) => {
-              const meta = (d as Partial<HasPatchworkMetadata>)["@patchwork"];
-              if (meta && typeof meta === "object") meta.type = type;
-              else d["@patchwork"] = { type };
-            }),
-        })
+    this.#showCard(`missing-type:${hasMetadata}:${anything?.id ?? ""}`, () =>
+      missingTypeCard({
+        hasMetadata,
+        anything,
+        onPeek: (id) => this.#peek(id),
+        knownTypes: knownTypes(),
+        // the change listener sees the new type and opens it with its tool
+        onSetType: (type) =>
+          handle.change((d) => {
+            const meta = (d as Partial<HasPatchworkMetadata>)["@patchwork"];
+            if (meta && typeof meta === "object") meta.type = type;
+            else d["@patchwork"] = { type };
+          }),
+      })
     );
   }
 
@@ -802,7 +807,9 @@ export class LegacyImpl {
   ): void {
     const suggestion = this.#suggestedImport();
     const anything =
-      !missingToolId && fallbackTool && isWildcardOnlyMatch(fallbackTool, type)
+      !missingToolId &&
+      fallbackTool &&
+      isWildcardOnlyMatch(fallbackTool, this.#handle?.doc())
         ? { id: fallbackTool.id, name: fallbackTool.name }
         : undefined;
     this.#showCard(
@@ -959,12 +966,9 @@ export class LegacyImpl {
    * in flight, `failed` why the last try didn't bring a tool.
    */
   #suggestedImport():
-    | { url: string; loading: boolean; failed?: string }
-    | undefined {
+    { url: string; loading: boolean; failed?: string } | undefined {
     if (!this.#docUrl || !this.#handle) return undefined;
-    const url = presentableImportUrl(
-      getSuggestedImportUrl(this.#handle.doc())
-    );
+    const url = presentableImportUrl(getSuggestedImportUrl(this.#handle.doc()));
     if (!url) return undefined;
     return {
       url,
@@ -1022,15 +1026,13 @@ export class LegacyImpl {
   // Whether `plugins` has a tool this view would open the doc with.
   #bringsTool(plugins: unknown[]): boolean {
     const chosen = this.#chosenToolId();
-    const type = this.#handle ? getType(this.#handle.doc()) : undefined;
+    const doc = this.#handle?.doc();
     return plugins.some((plugin) => {
       const p = plugin as Partial<ToolDescription> | null;
       if (p?.type !== "patchwork:tool") return false;
       if (chosen) return p.id === chosen;
-      const supported = p.supportedDatatypes;
-      return (
-        !!type && !!supported && supported !== "*" && supported.includes(type)
-      );
+      const match = doc === undefined ? undefined : toolMatch(p, doc);
+      return match !== undefined && match !== "wildcard";
     });
   }
 
