@@ -2,18 +2,18 @@
 // them needs only their descriptions (id, type, name, icon…), so this imports
 // the package's entry point, keeps what can be cloned from its `plugins`, and
 // posts that back. The main thread imports the package (at the same heads)
-// only when a plugin is loaded: see `importPluginFromFolderDocUrl`.
+// only when a plugin is loaded: see `importPluginFromPackage`.
 //
 // Its `import()` of `/<automergeUrl>/…` is served by the service worker that
 // controls this worker.
 
-import { importPackageFromFolderDocUrl } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import { importPackage } from "@inkandswitch/patchwork-filesystem";
 
 type DiscoverRequest = {
   type: "discover";
   id: number;
-  url: AutomergeUrl;
+  /** A folder doc pinned to heads, or an http url. */
+  url: string;
 };
 
 // `load` is a closure and `module` the implementation, so neither can cross to
@@ -48,7 +48,7 @@ self.addEventListener("message", (event: MessageEvent) => {
   if (!isDiscoverRequest(data)) return;
   const { id, url } = data;
 
-  importPackageFromFolderDocUrl(url)
+  importPackage(url)
     .then((mod) => {
       const plugins: any[] = Array.isArray(mod?.plugins) ? mod.plugins : [];
       const descriptors = plugins.map(toDescriptor);

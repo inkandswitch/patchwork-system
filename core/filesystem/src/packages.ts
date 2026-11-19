@@ -157,33 +157,30 @@ async function httpEntryPointUrl(
 }
 
 /**
- * Import the entry point of a package (at `folderDocUrl`, pinned to heads) and
- * return the loaded implementation of one plugin it exports, picked by
- * `pluginType` and `pluginId`: an id is only unique within a type.
+ * Import the entry point of a package (at `packageUrl`: a folder doc pinned to
+ * heads, or an http url) and return the loaded implementation of one plugin it
+ * exports, picked by `pluginType` and `pluginId`: an id is only unique within a
+ * type.
  *
  * The main-thread half of discovering plugins in a worker: the worker says
  * which plugins a package exports, and this runs one's own `load()` or
  * `import`, so its description and implementation come from the same version.
  */
-export async function importPluginFromFolderDocUrl(
-  folderDocUrl: AutomergeUrl,
+export async function importPluginFromPackage(
+  packageUrl: string,
   pluginType: string,
   pluginId: string,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions
 ) {
-  const mod = await importPackageFromFolderDocUrl(
-    folderDocUrl,
-    subpath,
-    conditions
-  );
+  const mod = await importPackage(packageUrl, subpath, conditions);
   const plugins: any[] = Array.isArray(mod?.plugins) ? mod.plugins : [];
   const plugin = plugins.find(
     (p) => p?.type === pluginType && p?.id === pluginId
   );
   if (!plugin) {
     throw new Error(
-      `No plugin "${pluginType}:${pluginId}" exported by the package at ${folderDocUrl}`
+      `No plugin "${pluginType}:${pluginId}" exported by the package at ${packageUrl}`
     );
   }
   if (typeof plugin.load === "function") {
@@ -193,9 +190,18 @@ export async function importPluginFromFolderDocUrl(
     return import(/* @vite-ignore */ plugin.import);
   }
   throw new Error(
-    `Plugin "${pluginType}:${pluginId}" at ${folderDocUrl} has no load() function or import URL`
+    `Plugin "${pluginType}:${pluginId}" at ${packageUrl} has no load() function or import URL`
   );
 }
+
+/** @deprecated Use {@link importPluginFromPackage}, which also takes an http url. */
+export const importPluginFromFolderDocUrl: (
+  folderDocUrl: AutomergeUrl,
+  pluginType: string,
+  pluginId: string,
+  subpath?: string,
+  conditions?: string[]
+) => Promise<any> = importPluginFromPackage;
 
 async function packageJsonContentsFromFolderDocUrl(
   folderDocUrl: AutomergeUrl
