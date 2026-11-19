@@ -483,12 +483,29 @@ async function serveHandoff(
 
   if (reply.type === "response") {
     log(`serving handed-off response for ${handoffURL}`, reply);
-    return new Response(reply.response.body ?? null, {
+    const response = new Response(reply.response.body ?? null, {
       status: reply.response.status ?? 200,
       headers: reply.response.headers,
     });
+    // Resolvers hand everything back inline; what's immutable is kept here,
+    // under the request, as resolvers used to keep it. Not cachePage: a
+    // navigation to a document in a doc must not replace the app shell's
+    // offline copy at / and /index.html.
+    if (isImmutable(response)) {
+      const copy = response.clone();
+      fetchEvent.waitUntil(
+        cache.put(fetchEvent.request, copy).catch((error) => {
+          // Always loud, as for the page cache: a QuotaExceededError here is
+          // the first sign the origin is under storage pressure.
+          console.warn("error caching %s in %s", handoffURL.href, cachename, error);
+        })
+      );
+    }
+    return response;
   }
 
+  // A resolver from a build before resolvers answered inline wrote the cache
+  // itself and says so.
   const stored = await cache.match(fetchEvent.request);
   if (!stored) {
     return new Response(
@@ -498,6 +515,20 @@ async function serveHandoff(
   }
   log(`serving ${handoffURL} from cache ${cachename} after handoff`);
   return stored;
+}
+
+const IMMUTABLE_STATUSES = [200, 203, 204];
+
+/**
+ * Whether a resolver's response is one to keep: errors and redirects aren't,
+ * and neither is anything `no-store`, which a url without heads answers with
+ * since it can resolve to something else later.
+ */
+function isImmutable(response: Response): boolean {
+  return (
+    IMMUTABLE_STATUSES.includes(response.status) &&
+    !/(^|,)\s*no-store(\s*,|$)/.test(response.headers.get("cache-control") ?? "")
+  );
 }
 
 async function servePassthrough(
