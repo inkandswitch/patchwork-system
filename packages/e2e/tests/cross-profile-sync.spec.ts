@@ -1,4 +1,5 @@
 import { expect, test, type Browser, type Page } from "@playwright/test";
+import { navigate } from "./helpers.js";
 
 /**
  * Full-boot cross-profile sync: the whole product loop, not just the relay.
@@ -23,7 +24,7 @@ const LIVE_ORIGIN = process.env.PATCHWORK_E2E_LIVE_SITE;
 // Full-UI boots fetch the module bundle over the network and compete with
 // every other parallel test for cpu, so they get generous budgets.
 async function bootToFrame(page: Page, origin: string, path = "/") {
-  await page.goto(origin + path, { timeout: 120_000 });
+  await navigate(page, origin + path, { timeout: 120_000 });
   await page.waitForSelector(".threepane-sidebar", { timeout: 180_000 });
 }
 

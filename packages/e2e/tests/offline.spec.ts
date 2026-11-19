@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import {
   createDoc,
   findDocField,
+  navigate,
+  reload,
   setDocField,
   waitForRepoReady,
   waitForServiceWorkerActive,
@@ -16,12 +18,12 @@ import {
 
 test("docs sync between tabs while offline", async ({ context }) => {
   const tabA = await context.newPage();
-  await tabA.goto("/");
+  await navigate(tabA, "/");
   await waitForServiceWorkerActive(tabA);
   await waitForRepoReady(tabA);
 
   const tabB = await context.newPage();
-  await tabB.goto("/");
+  await navigate(tabB, "/");
   await waitForRepoReady(tabB);
 
   await context.setOffline(true);
@@ -53,14 +55,14 @@ test("the app boots from the SW cache while offline and keeps its docs", async (
   // the SW gets a chance to serve from cache.
   test.skip(browserName === "webkit", "flaky offline emulation in webkit");
 
-  await page.goto("/");
+  await navigate(page, "/");
   await waitForServiceWorkerActive(page);
   await waitForRepoReady(page);
 
   // First load may have fetched some assets before the SW controlled the
   // page. A second online load routes everything through the SW so its
   // background cache holds the full app shell.
-  await page.reload();
+  await reload(page);
   await waitForRepoReady(page);
 
   const url = await createDoc(page, { note: "offline-survivor" });
@@ -95,7 +97,7 @@ test("the app boots from the SW cache while offline and keeps its docs", async (
     .toBe(0);
 
   await context.setOffline(true);
-  await page.reload();
+  await reload(page);
   await waitForRepoReady(page);
 
   const value = await findDocField<string>(page, url, "note");

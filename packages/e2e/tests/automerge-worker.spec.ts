@@ -1,6 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import {
   createDoc,
+  navigate,
   waitForRepoReady,
   waitForServiceWorkerActive,
 } from "./helpers.js";
@@ -36,7 +37,7 @@ declare global {
 test("the automerge worker holds its lock once the tab is up", async ({
   page,
 }) => {
-  await page.goto("/");
+  await navigate(page, "/");
   await waitForServiceWorkerActive(page);
   await waitForRepoReady(page);
   // Not holding it means it failed before taking it, or it's a build from
@@ -48,7 +49,7 @@ test("an automerge worker that's still booting isn't reported missing", async ({
   context,
 }) => {
   const first = await context.newPage();
-  await first.goto("/");
+  await navigate(first, "/");
   await waitForServiceWorkerActive(first);
   await waitForRepoReady(first);
   const url = await createDoc(first, { title: "booting" });
@@ -57,7 +58,7 @@ test("an automerge worker that's still booting isn't reported missing", async ({
   // The worker goes with its last tab. Wait for that from a same-origin page
   // that doesn't boot the app, so the next tab has to start a fresh one.
   const probe = await context.newPage();
-  await probe.goto("/automerge-protocol-handler-worker.js");
+  await navigate(probe, "/automerge-protocol-handler-worker.js");
   await expect.poll(() => workerLockHeld(probe)).toBe(false);
   await probe.close();
 
@@ -95,7 +96,7 @@ test("an automerge worker that's still booting isn't reported missing", async ({
     },
     [LOCK, url] as const
   );
-  await tab.goto("/");
+  await navigate(tab, "/");
   await waitForRepoReady(tab);
 
   // Otherwise this passes without having raced anything.

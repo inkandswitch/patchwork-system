@@ -2,6 +2,8 @@ import { expect, test } from "@playwright/test";
 import {
   createDoc,
   findDocField,
+  navigate,
+  reload,
   waitForRepoReady,
   waitForServiceWorkerActive,
 } from "./helpers.js";
@@ -14,7 +16,7 @@ test("a doc survives a page reload via IndexedDB", async ({
   context,
   page,
 }) => {
-  await page.goto("/");
+  await navigate(page, "/");
   await waitForServiceWorkerActive(page);
   await waitForRepoReady(page);
 
@@ -24,7 +26,7 @@ test("a doc survives a page reload via IndexedDB", async ({
   // proves nothing (its own Repo answers from memory), so ask a tab that never
   // had it: otherwise the reload can come mid-save and the doc is lost.
   const probe = await context.newPage();
-  await probe.goto("/");
+  await navigate(probe, "/");
   await waitForRepoReady(probe);
   await expect
     .poll(async () => findDocField<string>(probe, url, "note"), {
@@ -33,7 +35,7 @@ test("a doc survives a page reload via IndexedDB", async ({
     .toBe("persist-me");
   await probe.close();
 
-  await page.reload();
+  await reload(page);
   await waitForRepoReady(page);
 
   const value = await findDocField<string>(page, url, "note");

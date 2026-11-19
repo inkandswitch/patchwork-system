@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import {
   createDoc,
   findDocField,
+  navigate,
   waitForRepoReady,
   waitForServiceWorkerActive,
 } from "./helpers.js";
@@ -14,12 +15,12 @@ test("a doc created in tab A is found in tab B via the SW relay", async ({
   context,
 }) => {
   const tabA = await context.newPage();
-  await tabA.goto("/");
+  await navigate(tabA, "/");
   await waitForServiceWorkerActive(tabA);
   await waitForRepoReady(tabA);
 
   const tabB = await context.newPage();
-  await tabB.goto("/");
+  await navigate(tabB, "/");
   await waitForServiceWorkerActive(tabB);
   await waitForRepoReady(tabB);
 
@@ -34,11 +35,11 @@ test("an edit in tab A propagates to an already-open doc in tab B", async ({
   context,
 }) => {
   const tabA = await context.newPage();
-  await tabA.goto("/");
+  await navigate(tabA, "/");
   await waitForRepoReady(tabA);
 
   const tabB = await context.newPage();
-  await tabB.goto("/");
+  await navigate(tabB, "/");
   await waitForRepoReady(tabB);
 
   const url = await createDoc(tabA, { count: 1 });

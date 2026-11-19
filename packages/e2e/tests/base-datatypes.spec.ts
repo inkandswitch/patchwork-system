@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import {
   createDoc,
   findDocField,
+  navigate,
   waitForRepoReady,
   waitForServiceWorkerActive,
 } from "./helpers.js";
@@ -32,12 +33,12 @@ declare global {
 
 test("a folder's doc references resolve across tabs", async ({ context }) => {
   const tabA = await context.newPage();
-  await tabA.goto("/");
+  await navigate(tabA, "/");
   await waitForServiceWorkerActive(tabA);
   await waitForRepoReady(tabA);
 
   const tabB = await context.newPage();
-  await tabB.goto("/");
+  await navigate(tabB, "/");
   await waitForRepoReady(tabB);
 
   const noteUrl = await createDoc(tabA, { content: "# Meeting notes" });
@@ -65,12 +66,12 @@ test("a folder's doc references resolve across tabs", async ({ context }) => {
 
 test("concurrent text splices from two tabs converge", async ({ context }) => {
   const tabA = await context.newPage();
-  await tabA.goto("/");
+  await navigate(tabA, "/");
   await waitForServiceWorkerActive(tabA);
   await waitForRepoReady(tabA);
 
   const tabB = await context.newPage();
-  await tabB.goto("/");
+  await navigate(tabB, "/");
   await waitForRepoReady(tabB);
 
   const url = await createDoc(tabA, { content: "# Untitled\n" });
