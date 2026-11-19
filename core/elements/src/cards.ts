@@ -32,15 +32,30 @@ function roughFilter(): SVGSVGElement {
   return svg;
 }
 
+// The sheet is always a popover, but sits inline while the card has room for
+// it. In a space too small to read it in, the card shows just a `!`, and the
+// `!` opens the sheet in the top layer, over whatever the view is nested in.
 function sheet(kind: string, title: string, ...body: Child[]): HTMLElement {
   ensureCardStyles();
+  const id = `pw-card-sheet-${++seq}`;
   return h(
     "div",
-    { class: "pw-card", "data-card": kind },
+    { class: "pw-card pw-card--sheet", "data-card": kind },
     roughFilter(),
     h(
+      "button",
+      {
+        type: "button",
+        class: "pw-card__peek",
+        popovertarget: id,
+        title,
+        "aria-label": title,
+      },
+      "!"
+    ),
+    h(
       "div",
-      { class: "pw-card__sheet" },
+      { class: "pw-card__sheet", id, popover: "" },
       h("h2", { class: "pw-card__rough" }, title),
       ...body
     )
@@ -74,7 +89,7 @@ function link(label: string, onClick: () => void): HTMLButtonElement {
 
 const nothing = () => {};
 
-// distinct ids for each card's datalist
+// distinct ids for each card's sheet and datalist
 let seq = 0;
 
 /** Still looking: a quiet dot, and only once it's been a moment. */
@@ -546,6 +561,78 @@ const CARD_CSS = /* css */ `
   background: var(--pw-card-sheet);
   box-shadow: 0 0 10px 2px #66003322;
   text-align: center;
+}
+/* a card with a sheet is the container its size is asked of. size
+   containment means it can't grow to fit the sheet, so where the view's
+   height isn't set it takes a height of its own, and scrolls */
+.pw-card--sheet {
+  container: pw-card / size;
+  contain-intrinsic-size: 24em 24em;
+  min-height: 0;
+  padding: 0;
+  /* a sheet taller than the card scrolls from its top, not its middle */
+  place-items: safe center;
+}
+/* the sheet's a popover, but in the card while it's closed: undo the UA's
+   popover styles */
+.pw-card__sheet:not(:popover-open) {
+  display: block;
+  position: static;
+  width: auto;
+  height: auto;
+  margin: 16px;
+  overflow: visible;
+}
+.pw-card__sheet {
+  color: var(--pw-card-ink);
+}
+.pw-card__sheet:popover-open {
+  max-width: min(440px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  box-shadow: 0 0 10px 2px #66003322, 3px 3px 0 var(--pw-card-line);
+}
+.pw-card__sheet::backdrop {
+  background: color-mix(in oklab, var(--pw-card-ink) 12%, transparent);
+}
+/* the whole card, folded to a mark, for a space too small to read it in */
+.pw-card__peek {
+  display: none;
+  place-items: center;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--pw-card-line);
+  border-radius: 50%;
+  background: var(--pw-card-sheet);
+  box-shadow: 1px 1px 0 var(--pw-card-line);
+  color: var(--pw-card-danger);
+  font: 700 15px/1 var(--pw-card-serif);
+  cursor: pointer;
+}
+.pw-card__peek:hover {
+  translate: -1px -1px;
+  box-shadow: 2px 2px 0 var(--pw-card-line);
+}
+.pw-card__peek:active {
+  translate: 1px 1px;
+  box-shadow: none;
+}
+.pw-card__peek:focus-visible {
+  outline: 2px solid var(--pw-card-accent);
+  outline-offset: 1px;
+}
+/* chromium queries a size container whose own size isn't set (a view with no
+   height) as 0, whatever contain-intrinsic-size makes it on screen, so 0
+   means "unknown", not "small" */
+@container pw-card (0px < width <= 240px) or (0px < height <= 160px) {
+  .pw-card__peek {
+    display: grid;
+  }
+  .pw-card__sheet:not(:popover-open) {
+    display: none;
+  }
 }
 .pw-card__sheet p {
   margin: 0 0 12px;
