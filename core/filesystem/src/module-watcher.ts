@@ -159,14 +159,26 @@ function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
 // todo this can be a function that takes a plugin system and returns a change
 // handler
 
+/** How a package is doing: what a list of packages shows beside each one. */
+export type PackageStatus =
+  | { state: "loading" }
+  | { state: "loaded"; plugins: string[] }
+  | { state: "failed"; error: string };
+
+const describeError = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
 /**
  * Settings sources come keyed by name (`{ system, user }`). Each is an
  * Automerge module-settings doc (`automerge:…`, live) or an HTTP(S) URL to a
  * static JSON manifest of the same shape (fetched once), mixed freely. The
  * module URLs in either can be Automerge package docs or plain HTTP(S)
  * bundles.
+ *
+ * Dispatches a `"status"` event whenever a package's {@link PackageStatus}
+ * changes; read it with {@link ModuleWatcher.packageStatus}.
  */
-export class ModuleWatcher {
+export class ModuleWatcher extends EventTarget {
   repo: Repo;
   urls: Record<string, string>;
   handles: Record<string, DocHandle<ModuleSettingsDoc>> | undefined;
@@ -184,6 +196,8 @@ export class ModuleWatcher {
   // what an unload has to name for its plugins to be found.
   #loadedUrls = new Map<string, string>();
   #activeModules = new Set<string>();
+  /** Package status, by the package doc's documentId. */
+  #status = new Map<string, PackageStatus>();
   #disposed = false;
   #plan: LoadPlan | undefined;
   // The sources given to the constructor have been read.
@@ -227,6 +241,7 @@ export class ModuleWatcher {
       importPackage(url),
     tracker: PackageTracker = trackPackagesInRepo(repo)
   ) {
+    super();
     this.repo = repo;
     this.urls = { ...urls };
     this.onLoad = callback;
@@ -445,6 +460,7 @@ export class ModuleWatcher {
         latest = await this.findLatestVersion(importName, entry);
       } catch (error) {
         this.retryLookup(importName, entry, error);
+        this.#setStatus(importName, { state: "failed", error: describeError(error) });
         this.#noteFailed(importName);
         return;
       }
@@ -461,23 +477,44 @@ export class ModuleWatcher {
     await this.announce(importName);
   }
 
-  private async importPackageSafe(importName: string): Promise<any> {
+  /**
+   * How the package doc `urlOrDocumentId` is doing, or undefined if it isn't a
+   * package this watcher loads (an http module has none).
+   */
+  packageStatus(urlOrDocumentId: string): PackageStatus | undefined {
+    const documentId = isValidAutomergeUrl(urlOrDocumentId)
+      ? parseAutomergeUrl(urlOrDocumentId).documentId
+      : urlOrDocumentId;
+    return this.#status.get(documentId);
+  }
+
+  #setStatus(moduleKey: string, status: PackageStatus) {
+    if (!isValidAutomergeUrl(moduleKey)) return;
+    this.#status.set(parseAutomergeUrl(moduleKey).documentId, status);
+    this.dispatchEvent(new Event("status"));
+  }
+
+  private async importPackageSafe(
+    importName: string
+  ): Promise<{ mod: any } | { error: unknown }> {
     try {
       if (isValidAutomergeUrl(importName)) {
         // Pin to heads so descriptor discovery and any later main-thread load
         // resolve against the exact same version of the package doc.
-        return await this.importAutomergePackage(
-          await this.tracker.findLatest(importName)
-        );
+        return {
+          mod: await this.importAutomergePackage(
+            await this.tracker.findLatest(importName)
+          ),
+        };
       }
-      return await importPackageFromHttpUrl(importName);
+      return { mod: await importPackageFromHttpUrl(importName) };
     } catch (error) {
       console.error(
         `%c Failed to import ${importName}`,
         "color: #000, background: #ffbcef",
         error
       );
-      return undefined;
+      return { error };
     }
   }
 
@@ -518,17 +555,35 @@ export class ModuleWatcher {
       this.#announceGenerations.get(moduleKey) === generation;
 
     const attempt = async (attemptIndex: number): Promise<void> => {
-      const mod = await this.importPackageSafe(importUrl);
+      // A reload keeps saying "loaded" until the new version is in or fails.
+      if (attemptIndex === 0 && !this.#loadedUrls.has(moduleKey)) {
+        this.#setStatus(moduleKey, { state: "loading" });
+      }
+      const result = await this.importPackageSafe(importUrl);
       // A newer announce started meanwhile; its result wins.
       if (!current()) return;
+      const mod = "mod" in result ? result.mod : undefined;
       if (mod) {
         this.#lastAnnounced.set(moduleKey, versionKey);
         this.unloadIfDocumentChanged(moduleKey, importUrl);
         this.#loadedUrls.set(moduleKey, importUrl);
+        this.#setStatus(moduleKey, {
+          state: "loaded",
+          plugins: Array.isArray(mod.plugins)
+            ? mod.plugins
+                .map((plugin: { id?: unknown }) => plugin?.id)
+                .filter((id: unknown): id is string => typeof id === "string")
+            : [],
+        });
         this.onLoad(importUrl, mod, moduleKey);
         this.#noteLoaded(moduleKey, mod);
         return;
       }
+      this.#setStatus(moduleKey, {
+        state: "failed",
+        error:
+          "error" in result ? describeError(result.error) : "it exported nothing",
+      });
       this.#noteFailed(moduleKey);
       const delay = RETRY_DELAYS_MS[attemptIndex];
       if (delay === undefined) return;
@@ -748,6 +803,10 @@ export class ModuleWatcher {
     this.#lastAnnounced.delete(entry);
     const loadedUrl = this.#loadedUrls.get(entry) ?? entry;
     this.#loadedUrls.delete(entry);
+    if (isValidAutomergeUrl(entry)) {
+      this.#status.delete(parseAutomergeUrl(entry).documentId);
+      this.dispatchEvent(new Event("status"));
+    }
     this.onUnload?.(entry, loadedUrl);
   }
 
