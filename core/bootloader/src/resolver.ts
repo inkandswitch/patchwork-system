@@ -256,13 +256,12 @@ export function createResolver(
         if (error instanceof AbortHandoff) {
           return { id, type: "abort", reason: error.message };
         }
-        console.error(`error resolving ${request.url}`, error);
+        console.error("error resolving %s", request.url, error);
+        // The stack is in the console above; the page gets the message only.
         return inline(
           id,
           557,
-          error instanceof Error
-            ? `${error.message}\n\n${error.stack}`
-            : String(error)
+          error instanceof Error ? error.message : "couldn't resolve it"
         );
       }
 
@@ -303,8 +302,12 @@ export function createResolver(
         log(`cached ${cacheKey.url} in ${cachename}`);
         return { id, type: "cached" };
       } catch (error) {
-        console.error(`failed to reply for ${request.url}`, error);
-        return inline(id, 558, String(error));
+        console.error("failed to reply for %s", request.url, error);
+        return inline(
+          id,
+          558,
+          error instanceof Error ? error.message : "couldn't reply"
+        );
       }
     },
   };
