@@ -131,11 +131,11 @@ export async function createRepo(): Promise<TabRepo> {
   });
   const signerIdentity = {
     peerId: signer.peerId().toString(),
-    verifyingKey: (
-      signer.verifyingKey() as Uint8Array<ArrayBufferLike> & {
-        toHex(): string;
-      }
-    ).toHex(),
+    // not Uint8Array.prototype.toHex: that's Safari 18.2+, and older iOS
+    // would fail to boot on a log line
+    verifyingKey: Array.from(signer.verifyingKey(), (b) =>
+      b.toString(16).padStart(2, "0"),
+    ).join(""),
   };
   log("repo created, tab subduction identity:", signerIdentity);
   return { repo, signerIdentity };
