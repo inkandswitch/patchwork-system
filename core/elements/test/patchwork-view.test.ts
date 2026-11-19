@@ -379,6 +379,35 @@ describe("patchwork-view (legacy mode)", () => {
     expect(card(view, "tool-failed")).toBeNull();
   });
 
+  it("reloads the page when trying a tool again fails again", async () => {
+    const id = `failing-tool-${++seq}`;
+    toolRegistry.register(
+      {
+        id,
+        type: "patchwork:tool",
+        name: "Failing",
+        supportedDatatypes: ["failing-again-type"],
+        load: async () => {
+          throw new Error("the file didn't arrive");
+        },
+      } as never,
+      `test://${id}`
+    );
+    registeredTools.push(id);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const reload = vi
+      .spyOn(window.location, "reload")
+      .mockImplementation(() => {});
+
+    const view = mount({ "@patchwork": { type: "failing-again-type" } });
+    await vi.waitFor(() => expect(card(view, "tool-failed")).toBeTruthy());
+    // the first failure only puts the card up
+    expect(reload).not.toHaveBeenCalled();
+
+    buttonLabelled(view, "try again").click();
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+
   it("doesn't mount a tool-id change on a view removed in the same task", async () => {
     const first = registerTool(["lifecycle-type"]);
     const second = registerTool(["unrelated-type"]);

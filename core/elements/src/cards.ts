@@ -436,7 +436,7 @@ export function notSharedCard(props: { contactCard?: string }): Card {
 /**
  * A tool that's registered but whose code didn't load: an import that
  * failed, a file that didn't arrive. Says which tool, what went wrong, and
- * lets you ask again.
+ * lets you ask again; if that fails too, the view reloads the page.
  */
 export function toolFailedCard(props: {
   name: string;
@@ -650,6 +650,8 @@ const CARD_CSS = /* css */ `
 }
 .pw-card__sheet .pw-card__notice {
   color: var(--pw-card-danger);
+  /* an error can carry a url with nowhere to break */
+  overflow-wrap: anywhere;
 }
 .pw-card__pkg {
   color: var(--pw-card-ink);

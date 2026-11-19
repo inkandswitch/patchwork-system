@@ -278,6 +278,10 @@ export class LegacyImpl {
   #importFailures = new Map<string, string>();
   // A tool whose code failed to load, and why; its card offers to try again.
   #toolLoadError: { id: string; message: string } | null = null;
+  // The tool the reader just asked to try again. If that load fails too, a
+  // fresh import won't fix it (the browser holds on to the failed module), so
+  // the page reloads instead.
+  #retryingToolId: string | null = null;
   #initEpoch = 0;
   #capturedParent: Element | null = null;
   #fallbackId: string | undefined;
@@ -611,6 +615,7 @@ export class LegacyImpl {
     this.#handle = null;
     this.#tool = null;
     this.#toolLoadError = null;
+    this.#retryingToolId = null;
     this.#requestedToolImports.clear();
     this.#resetDisplay();
     this.#state = State.none;
@@ -732,6 +737,7 @@ export class LegacyImpl {
           onRetry: () => {
             // the registry forgets a failed load, so this asks again
             this.#toolLoadError = null;
+            this.#retryingToolId = tool.id;
             if (this.#state === State.unable) this.#queueRender();
           },
         })
@@ -740,15 +746,26 @@ export class LegacyImpl {
     }
     log(`loading ${tool.id}`);
     this.#showCard(`loading:${tool.id}`, () => findingCard(), false);
-    this.#watchLoad(tool.id, getRegistry("patchwork:tool").load(tool.id));
+    const retrying = this.#retryingToolId === tool.id;
+    this.#retryingToolId = null;
+    this.#watchLoad(
+      tool.id,
+      getRegistry("patchwork:tool").load(tool.id),
+      retrying
+    );
   }
 
   // A load of the chosen or fallback tool that fails puts its card up; one
   // that works is the registry's "loaded" listener's to mount.
-  #watchLoad(id: string, load: Promise<unknown>): void {
+  // One the reader asked to try again that fails again reloads the page.
+  #watchLoad(id: string, load: Promise<unknown>, retrying = false): void {
     const epoch = this.#initEpoch;
     load.catch((error) => {
       if (this.#disposed || epoch !== this.#initEpoch) return;
+      if (retrying) {
+        location.reload();
+        return;
+      }
       const message = error instanceof Error ? error.message : String(error);
       this.#toolLoadError = { id, message };
       if (this.#state === State.unable) this.#queueRender();
