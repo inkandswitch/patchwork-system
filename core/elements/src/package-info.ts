@@ -16,6 +16,10 @@
 import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
 import * as Automerge from "@automerge/automerge/slim";
 import { getImportableUrlFromAutomergeUrl } from "@inkandswitch/patchwork-filesystem";
+import {
+  toolSupports,
+  type ToolSupport,
+} from "@inkandswitch/patchwork-plugins";
 
 export const isAutomergeUrl = (url: string): boolean =>
   url.startsWith("automerge:");
@@ -38,6 +42,7 @@ export interface PluginClaim {
   name?: string;
   type?: string;
   supportedDatatypes?: string[];
+  supports?: ToolSupport[];
 }
 
 export interface PackageClaims {
@@ -64,20 +69,24 @@ function author(value: unknown): string | undefined {
   return undefined;
 }
 
+const strings = (value: unknown): string[] | undefined =>
+  typeof value === "string"
+    ? [value]
+    : Array.isArray(value)
+      ? value.filter((d): d is string => typeof d === "string")
+      : undefined;
+
 function pluginClaim(plugin: unknown): PluginClaim {
   if (!plugin || typeof plugin !== "object") return {};
   const p = plugin as Record<string, unknown>;
-  const datatypes = p.supportedDatatypes;
   return {
     id: text(p.id),
     name: text(p.name),
     type: text(p.type),
-    supportedDatatypes:
-      typeof datatypes === "string"
-        ? [datatypes]
-        : Array.isArray(datatypes)
-          ? datatypes.filter((d): d is string => typeof d === "string")
-          : undefined,
+    supportedDatatypes: strings(p.supportedDatatypes),
+    supports: Array.isArray(p.supports)
+      ? toolSupports({ supports: p.supports as ToolSupport[] })
+      : undefined,
   };
 }
 
@@ -91,7 +100,15 @@ async function fetchJson(url: string): Promise<unknown> {
 }
 
 // build output dirs to look past for an http package's package.json
-const BUILD_DIRS = new Set(["dist", "build", "lib", "out", "esm", "src", "public"]);
+const BUILD_DIRS = new Set([
+  "dist",
+  "build",
+  "lib",
+  "out",
+  "esm",
+  "src",
+  "public",
+]);
 
 async function packageJson(url: string): Promise<unknown> {
   if (isAutomergeUrl(url)) {
@@ -117,7 +134,9 @@ async function packageJson(url: string): Promise<unknown> {
 }
 
 /** What the package's package.json says, read without running anything. */
-export async function readClaims(url: string): Promise<PackageClaims | undefined> {
+export async function readClaims(
+  url: string
+): Promise<PackageClaims | undefined> {
   const pkg = (await packageJson(url)) as Record<string, unknown> | undefined;
   if (!pkg) return undefined;
   return {
@@ -126,7 +145,9 @@ export async function readClaims(url: string): Promise<PackageClaims | undefined
     version: text(pkg.version),
     description: text(pkg.description),
     author: author(pkg.author),
-    plugins: Array.isArray(pkg.plugins) ? pkg.plugins.map(pluginClaim) : undefined,
+    plugins: Array.isArray(pkg.plugins)
+      ? pkg.plugins.map(pluginClaim)
+      : undefined,
   };
 }
 
@@ -162,7 +183,9 @@ function moduleLoader(): Worker {
   });
   w.addEventListener("error", (event) => {
     // not tied to any one request: fail them all, and start afresh next time
-    const error = new Error(`the background worker stopped: ${event.message ?? "no reason given"}`);
+    const error = new Error(
+      `the background worker stopped: ${event.message ?? "no reason given"}`
+    );
     for (const entry of waiting.values()) entry.reject(error);
     waiting.clear();
     worker = undefined;
@@ -177,7 +200,10 @@ function moduleLoader(): Worker {
  * but with the site's storage and network), so only call it once the reader
  * has said yes. Automerge packages only: there's no worker that imports http.
  */
-export function askPlugins(url: string, timeoutMs = 15000): Promise<PluginClaim[]> {
+export function askPlugins(
+  url: string,
+  timeoutMs = 15000
+): Promise<PluginClaim[]> {
   const id = nextRequest++;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -225,7 +251,10 @@ export interface PackageHistory {
  * the folder doc itself: each file in the package is a doc of its own, with
  * its own history. Rejects when the repo can't get the folder.
  */
-export async function readHistory(repo: Repo, url: string): Promise<PackageHistory> {
+export async function readHistory(
+  repo: Repo,
+  url: string
+): Promise<PackageHistory> {
   const handle = await repo.find(bareAutomergeUrl(url));
   const doc = handle.doc();
   // give the page a moment before walking what may be a long history
@@ -236,7 +265,12 @@ export async function readHistory(repo: Repo, url: string): Promise<PackageHisto
     const time = meta.time ?? 0;
     const writer = byActor.get(meta.actor);
     if (!writer) {
-      byActor.set(meta.actor, { actor: meta.actor, changes: 1, first: time, last: time });
+      byActor.set(meta.actor, {
+        actor: meta.actor,
+        changes: 1,
+        first: time,
+        last: time,
+      });
       continue;
     }
     writer.changes++;

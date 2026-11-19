@@ -75,10 +75,12 @@ export function packageDetails(props: {
       return;
     history = { state: "loading" };
     render();
-    readHistory(props.repo, props.url).then(
-      (value) => (history = { state: "ready", value }),
-      () => (history = { state: "failed", error: "couldn't get its folder." })
-    ).finally(render);
+    readHistory(props.repo, props.url)
+      .then(
+        (value) => (history = { state: "ready", value }),
+        () => (history = { state: "failed", error: "couldn't get its folder." })
+      )
+      .finally(render);
   });
 
   void props.claims.then((value) => {
@@ -92,7 +94,8 @@ export function packageDetails(props: {
       "h3",
       { class: "pw-card__rough" },
       said?.title ?? said?.name ?? "package",
-      said?.version && h("span", { class: "pw-pkg__version" }, ` ${said.version}`)
+      said?.version &&
+        h("span", { class: "pw-pkg__version" }, ` ${said.version}`)
     );
     const close = h(
       "button",
@@ -109,7 +112,12 @@ export function packageDetails(props: {
     const claimed = h(
       "section",
       { class: "pw-pkg__section pw-pkg__section--claims" },
-      h("h4", null, "self-reported ", h("span", { class: "pw-pkg__tag" }, "unverified"))
+      h(
+        "h4",
+        null,
+        "self-reported ",
+        h("span", { class: "pw-pkg__tag" }, "unverified")
+      )
     );
     if (claims.state === "loading") {
       claimed.append(quiet("p", "reading…"));
@@ -137,7 +145,8 @@ export function packageDetails(props: {
       } else {
         plugins.append(quiet("span", "unknown until loaded"));
       }
-      if (askFailed) plugins.append(h("p", { class: "pw-card__notice" }, askFailed));
+      if (askFailed)
+        plugins.append(h("p", { class: "pw-card__notice" }, askFailed));
       facts.append(h("dt", null, "plugins"), plugins);
       claimed.append(facts);
     }
@@ -145,7 +154,11 @@ export function packageDetails(props: {
     const source = h("dl", { class: "pw-pkg__facts" });
     source.append(
       h("dt", null, "url"),
-      h("dd", null, h("code", { class: "pw-card__code pw-card__url" }, props.url))
+      h(
+        "dd",
+        null,
+        h("code", { class: "pw-card__code pw-card__url" }, props.url)
+      )
     );
     if (pinned.length) {
       source.append(h("dt", null, "pinned"), h("dd", null, heads(pinned)));
@@ -176,7 +189,12 @@ export function packageDetails(props: {
     popover.replaceChildren(
       h("header", { class: "pw-pkg__header" }, heading, close),
       claimed,
-      h("section", { class: "pw-pkg__section" }, h("h4", null, "source"), source)
+      h(
+        "section",
+        { class: "pw-pkg__section" },
+        h("h4", null, "source"),
+        source
+      )
     );
   }
 
@@ -197,17 +215,24 @@ function pluginList(plugins: PluginClaim[]): Node {
   return h(
     "ul",
     { class: "pw-pkg__list" },
-    ...plugins.map((p) =>
-      h(
+    ...plugins.map((p) => {
+      const supports = [
+        ...(p.supportedDatatypes ?? []),
+        ...(p.supports ?? []).map(({ datatype, where }) => {
+          const fields = Object.values(where ?? {});
+          return fields.length
+            ? `${datatype} (${fields.join(", ")})`
+            : datatype;
+        }),
+      ];
+      return h(
         "li",
         null,
         p.name ?? p.id ?? "(unnamed)",
         p.type && quiet("span", ` · ${p.type}`),
-        p.supportedDatatypes?.length
-          ? quiet("span", ` for ${p.supportedDatatypes.join(", ")}`)
-          : null
-      )
-    )
+        supports.length ? quiet("span", ` for ${supports.join(", ")}`) : null
+      );
+    })
   );
 }
 
@@ -228,15 +253,21 @@ function writerList(writers: Writer[]): Node {
   return h(
     "ul",
     { class: "pw-pkg__list" },
-    ...writers.slice(0, MOST_WRITERS).map((w) =>
-      h(
-        "li",
-        null,
-        h("code", { class: "pw-card__code", title: w.actor }, w.actor.slice(0, 8)),
-        ` ${w.changes} ${w.changes === 1 ? "change" : "changes"}`,
-        w.last ? quiet("span", ` · ${span(w)}`) : null
-      )
-    ),
+    ...writers
+      .slice(0, MOST_WRITERS)
+      .map((w) =>
+        h(
+          "li",
+          null,
+          h(
+            "code",
+            { class: "pw-card__code", title: w.actor },
+            w.actor.slice(0, 8)
+          ),
+          ` ${w.changes} ${w.changes === 1 ? "change" : "changes"}`,
+          w.last ? quiet("span", ` · ${span(w)}`) : null
+        )
+      ),
     more > 0 && quiet("li", `and ${more} more`)
   );
 }
