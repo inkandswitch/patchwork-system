@@ -7,7 +7,7 @@ import {
   stringifyAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
 import {
-  importPackageFromFolderDocUrl,
+  importPackage,
   importPackageFromHttpUrl,
 } from "./packages.js";
 import { type HasPatchworkMetadata } from "./metadata.js";
@@ -224,7 +224,7 @@ export class ModuleWatcher {
     callback: (name: string, mod: any, moduleKey: string) => void,
     onUnload?: (moduleKey: string, importUrl: string) => void,
     importAutomergePackage: (urlAtHeads: string) => Promise<any> = (url) =>
-      importPackageFromFolderDocUrl(url as AutomergeUrl),
+      importPackage(url),
     tracker: PackageTracker = trackPackagesInRepo(repo)
   ) {
     this.repo = repo;

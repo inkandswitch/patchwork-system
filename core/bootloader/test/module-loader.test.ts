@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/emitted.js", () => ({ MODULE_LOADER_WORKER: "/loader.js" }));
 vi.mock("@inkandswitch/patchwork-filesystem", () => ({
-  importPluginFromFolderDocUrl: vi.fn(),
+  importPluginFromPackage: vi.fn(),
 }));
 
 class FakeWorker extends EventTarget {
