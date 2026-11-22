@@ -1,5 +1,15 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.9.8
+
+### Patch Changes
+
+- e472651: The bootloader depends on `@chee/automerge-repo@2.6.0-rabbit.1` (and its storage, network and vanillajs packages), aliased as `@automerge/automerge-repo`, as the rest of the core has since the catalog moved. 0.9.7 still asked for `2.6.0-subduction.49`, so a site installing `@inkandswitch/patchwork@0.10.2` got that one too, and the build failed in patchwork's patches plugin, which has no patch for it.
+- 0f3687e: `importPluginFromPackage` replaces `importPluginFromFolderDocUrl`. It takes any package url `importPackage` does, an automerge folder doc or an http url, where the old one took only a folder doc. `importPluginFromFolderDocUrl` stays as a deprecated alias. The module-loader worker and `importAutomergePackageViaWorker` take the same urls, and the ModuleWatcher's default import goes through `importPackage`.
+- Updated dependencies [0f3687e]
+- Updated dependencies [afd6c93]
+  - @inkandswitch/patchwork-filesystem@0.2.20
+
 ## 0.9.7
 
 ### Patch Changes

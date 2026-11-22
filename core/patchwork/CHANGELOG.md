@@ -1,5 +1,18 @@
 # @inkandswitch/patchwork
 
+## 0.10.3
+
+### Patch Changes
+
+- 3600173: The boot status box says "Finding account" during the identity stage, instead of "Opening your identity".
+- 523fe25: The generated `index.html` declares `<meta name="color-scheme" content="light dark">`, so the browser's own canvas is dark in dark mode from the first frame. This covers the gap the dark loading backdrop leaves: once a theme sets the `theme` attribute on `<html>`, the backdrop rule stops matching, but the theme's stylesheet may not have loaded yet.
+- 3600173: The loading pulse no longer flashes white in dark mode. Under `prefers-color-scheme: dark` the page is black until a theme sets the `theme` attribute on `<html>`, so the pulse's low-opacity frames no longer let the browser's white canvas through. The rule ships in `@inkandswitch/patchwork/global.css`, which the generated `index.html` links in `<head>`, so it holds from the first frame; the loading screen's own styles carry it too, for hosts that write their own HTML.
+- Updated dependencies [e472651]
+- Updated dependencies [0f3687e]
+- Updated dependencies [afd6c93]
+  - @inkandswitch/patchwork-bootloader@0.9.8
+  - @inkandswitch/patchwork-filesystem@0.2.20
+
 ## 0.10.2
 
 ### Patch Changes

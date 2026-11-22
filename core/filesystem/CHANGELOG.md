@@ -1,5 +1,12 @@
 # @inkandswitch/patchwork-filesystem
 
+## 0.2.20
+
+### Patch Changes
+
+- 0f3687e: `importPluginFromPackage` replaces `importPluginFromFolderDocUrl`. It takes any package url `importPackage` does, an automerge folder doc or an http url, where the old one took only a folder doc. `importPluginFromFolderDocUrl` stays as a deprecated alias. The module-loader worker and `importAutomergePackageViaWorker` take the same urls, and the ModuleWatcher's default import goes through `importPackage`.
+- afd6c93: The ModuleWatcher says how each package is doing. `packageStatus(urlOrDocumentId)` answers `{ state: "loading" }`, `{ state: "loaded", plugins }` with the ids of the plugins the package brought, or `{ state: "failed", error }` with the message of the lookup or import that failed, and undefined for anything that isn't a package doc it loads. The watcher is now an `EventTarget` and dispatches `"status"` whenever one changes. `PackageStatus` is exported.
+
 ## 0.2.19
 
 ### Patch Changes
