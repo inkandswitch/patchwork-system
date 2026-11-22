@@ -11,7 +11,7 @@ const REST_MAX_MS = 30_000;
 
 const STAGE_TEXT: Record<BootStage, string> = {
   workers: "Starting up",
-  identity: "Opening your identity",
+  identity: "Finding account",
   // Boot waits here on the account, which on a first visit waits on the public
   // reader catching up, so it can read the account's datatype.
   "package-list": "Opening your account",
