@@ -20,6 +20,13 @@ const LOADING_CSS = `
     transition: opacity 0.6s ease-out;
   }
   @media (prefers-color-scheme: dark) {
+    /* The pulse dips to 0.25 opacity, so whatever's behind it shows through.
+       Until a theme puts its \`theme\` attribute on <html>, that's the UA's
+       white canvas. */
+    html:not([theme]),
+    html:not([theme]) body {
+      background-color: #000;
+    }
     #${LOADING_ELEMENT_ID} {
       background-color: #000;
       background-image:
