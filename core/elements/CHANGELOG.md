@@ -1,5 +1,12 @@
 # @inkandswitch/patchwork-elements
 
+## 6.2.3
+
+### Patch Changes
+
+- b5e066f: `<patchwork-view>`'s cards ("can't load this doc", "no tool for this", and the rest) fold down to a small `!` button when the view is too small to read them in: 240px wide or less, or 160px tall or less. Clicking the `!` opens the full card in a popover above the page. The card works this out with a container query, so a card sitting in a thin strip or a narrow sidebar no longer gets cut off. A view with no set height gives its card a 24em height, and a card taller than that scrolls.
+- e3be145: The "can't load" card for a tool whose code didn't load now reloads the page if "try again" fails as well. The browser keeps a failed module import for that URL, so importing it a second time usually fails the same way, and a reload is what actually fixes it. Long error messages on the card, such as a failed import's URL, now wrap inside the card instead of running past its edge.
+
 ## 6.2.2
 
 ### Patch Changes
