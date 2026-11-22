@@ -1,12 +1,7 @@
 @import "@inkandswitch/patchwork-bootloader/global.css";
-
-/* Before a theme sets the `theme` attribute on <html>, the page is the UA's
-   white canvas, which flashes through the loading pulse in dark mode. This is
-   a blocking stylesheet in the generated <head>, so it holds from the first
-   frame, before any script runs. */
-@media (prefers-color-scheme: dark) {
-  html:not([theme]),
-  html:not([theme]) body {
-    background-color: #000;
-  }
-}
+/* The fallback theme: every --studio-* token, following the computer's light or
+   dark mode, under every theme. It sits in `@layer patchwork`, so a theme's
+   unlayered [theme="…"] rules win whenever they arrive. This is a blocking
+   stylesheet in the generated <head>, so the tokens are there from the first
+   frame, before any theme's stylesheet has loaded. */
+@import "./theme.css";
