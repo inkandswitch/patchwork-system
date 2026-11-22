@@ -91,6 +91,7 @@ export const folderProvider: PathProvider = {
     );
   },
   lookup(node, names) {
+    if (!folderProvider.matches(node)) return undefined;
     const entry = (node as FolderDoc).docs.find(
       (doc) => doc && String(doc.name) === names[0]
     );
@@ -98,6 +99,7 @@ export const folderProvider: PathProvider = {
     return link ? { child: { name: names[0], link }, consumed: 1 } : undefined;
   },
   list(node) {
+    if (!folderProvider.matches(node)) return [];
     return (node as FolderDoc).docs.flatMap((doc) => {
       const link = asLink(doc?.url);
       return link ? [{ name: String(doc.name), link }] : [];
