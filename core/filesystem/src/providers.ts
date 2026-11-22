@@ -55,7 +55,11 @@ function childOf(name: string, value: unknown): Child {
 export const directoryProvider: PathProvider = {
   kind: "directory",
   matches(doc) {
-    return getType(doc as Partial<HasPatchworkMetadata>) === "directory";
+    return (
+      !!doc &&
+      typeof doc === "object" &&
+      getType(doc as Partial<HasPatchworkMetadata>) === "directory"
+    );
   },
   // Longest-prefix match: try "main/dist/index.js", then "main/dist", then "main"
   lookup(node, names) {
