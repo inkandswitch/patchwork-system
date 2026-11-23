@@ -6,7 +6,7 @@
     "directory": "core/filesystem"
   },
   "type": "module",
-  "version": "0.2.20",
+  "version": "0.2.21",
   "author": "Ink & Switch",
   "description": "",
   "main": "dist/index.js",
