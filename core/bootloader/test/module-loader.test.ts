@@ -3,7 +3,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../src/emitted.js", () => ({ MODULE_LOADER_WORKER: "/loader.js" }));
 vi.mock("@inkandswitch/patchwork-filesystem", () => ({
   importPluginFromPackage: vi.fn(),
+  readPluginManifest: vi.fn(async () => undefined),
 }));
+
+import { readPluginManifest } from "@inkandswitch/patchwork-filesystem";
 
 class FakeWorker extends EventTarget {
   static instances: FakeWorker[] = [];
@@ -49,9 +52,14 @@ afterEach(() => {
 
 const workers = () => FakeWorker.instances;
 
+// A request reaches the worker only once package.json has been read for a
+// manifest, which takes a few microtasks.
+const started = () => vi.advanceTimersByTimeAsync(0);
+
 describe("module loader worker", () => {
   it("resolves a request from its reply", async () => {
     const result = load("automerge:a");
+    await started();
     workers()[0].say({
       type: "descriptors",
       id: workers()[0].sent[0].id,
@@ -64,6 +72,7 @@ describe("module loader worker", () => {
     const first = load("automerge:a");
     const second = load("automerge:b");
     const caught = Promise.allSettled([first, second]);
+    await started();
     workers()[0].fail("script failed");
     const results = await caught;
     expect(results.map((r) => r.status)).toEqual(["rejected", "rejected"]);
@@ -71,6 +80,7 @@ describe("module loader worker", () => {
     expect(workers()[0].terminated).toBe(true);
 
     const third = load("automerge:c");
+    await started();
     expect(workers()).toHaveLength(2);
     workers()[1].say({
       type: "descriptors",
@@ -83,8 +93,10 @@ describe("module loader worker", () => {
   it("ignores a late error from a worker it already dropped", async () => {
     const first = load("automerge:a");
     first.catch(() => {});
+    await started();
     workers()[0].fail();
     const second = load("automerge:b");
+    await started();
     workers()[0].fail("late");
     workers()[1].say({
       type: "descriptors",
@@ -97,6 +109,7 @@ describe("module loader worker", () => {
   it("gives up on a request the worker never answers", async () => {
     const result = load("automerge:a");
     const caught = result.catch((error) => error);
+    await started();
     vi.advanceTimersByTime(60_000);
     expect(String(await caught)).toContain("timed out");
     // a reply after that is ignored, and the worker is still used
@@ -106,6 +119,7 @@ describe("module loader worker", () => {
       descriptors: [],
     });
     const next = load("automerge:b");
+    await started();
     expect(workers()).toHaveLength(1);
     workers()[0].say({
       type: "descriptors",
@@ -113,5 +127,18 @@ describe("module loader worker", () => {
       descriptors: [],
     });
     await expect(next).resolves.toEqual({ plugins: [] });
+  });
+
+  it("reads a package that lists its plugins in package.json without the worker", async () => {
+    const plugins = [{ type: "patchwork:tool", id: "t", load: async () => 1 }];
+    vi.mocked(readPluginManifest).mockResolvedValueOnce({ plugins });
+    await expect(load("automerge:a")).resolves.toEqual({ plugins });
+    expect(workers()).toHaveLength(0);
+  });
+
+  it("fails without the worker when package.json can't be read", async () => {
+    vi.mocked(readPluginManifest).mockRejectedValueOnce(new Error("HTTP 404"));
+    await expect(load("automerge:a")).rejects.toThrow("HTTP 404");
+    expect(workers()).toHaveLength(0);
   });
 });

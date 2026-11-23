@@ -2,8 +2,15 @@
 // `importAutomergePackageViaWorker` in place of importing a package here: the
 // worker says which plugins it exports, and each plugin's `load()` imports
 // the package on this thread (at the same heads) and runs the real loader.
+//
+// A package that lists its plugins in package.json (`patchwork.plugins`)
+// doesn't need the worker: reading that runs none of its code, so it's read
+// here, and each plugin's `load()` imports only its own export.
 
-import { importPluginFromPackage } from "@inkandswitch/patchwork-filesystem";
+import {
+  importPluginFromPackage,
+  readPluginManifest,
+} from "@inkandswitch/patchwork-filesystem";
 import { MODULE_LOADER_WORKER } from "./emitted.js";
 
 type Descriptor = Record<string, unknown> & { id?: string; type?: string };
@@ -106,6 +113,8 @@ function discoverDescriptors(urlAtHeads: string): Promise<Descriptor[]> {
 export async function importAutomergePackageViaWorker(
   url: string
 ): Promise<{ plugins: Descriptor[] }> {
+  const fromManifest = await readPluginManifest(url);
+  if (fromManifest) return fromManifest;
   const descriptors = await discoverDescriptors(url);
   const plugins = descriptors.map((descriptor) => {
     const { id, type } = descriptor;

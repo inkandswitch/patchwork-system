@@ -37,20 +37,11 @@ export async function importPackageFromFolderDocUrl(
   conditions: string[] = defaultImportConditions
 ) {
   log(`importPackage ${folderDocUrl}... (subpath: ${subpath})`);
-  const entryPointUrl = await packageEntryPointUrl(
-    folderDocUrl,
+  return importFromPackage(
+    await locateFolderDocPackage(folderDocUrl),
     subpath,
     conditions
   );
-  if (!entryPointUrl) {
-    throw new Error(
-      `No entry point found for subpath "${subpath}" in package.json`
-    );
-  }
-
-  log(`importing ${entryPointUrl.slice(-60)}`);
-
-  return await importModule(entryPointUrl);
 }
 
 export async function importPackageFromHttpUrl(
@@ -58,9 +49,7 @@ export async function importPackageFromHttpUrl(
   subpath: string = ".",
   conditions: string[] = defaultImportConditions
 ) {
-  const entryPointUrl = await httpEntryPointUrl(url, subpath, conditions);
-  log(`importing ${entryPointUrl.slice(-60)}`);
-  return await importModule(entryPointUrl);
+  return importFromPackage(await locateHttpPackage(url), subpath, conditions);
 }
 
 /**
@@ -77,15 +66,43 @@ export async function importPackage(
     : importPackageFromHttpUrl(url, subpath, conditions);
 }
 
+/**
+ * The plugins a package lists in its `package.json` under `patchwork.plugins`
+ * (see {@link pluginsFromManifest}), read without importing any of its code;
+ * `undefined` if it has no such list, or isn't a package root.
+ *
+ * Reading a manifest runs nothing, so it's safe on the main thread: the
+ * bootloader asks this first and only sends a package to its worker when it
+ * has to import the entry point to find out what's in it.
+ */
+export async function readPluginManifest(
+  url: string,
+  conditions: string[] = defaultImportConditions
+): Promise<{ plugins: Array<Record<string, any>> } | undefined> {
+  const location = isValidAutomergeUrl(url)
+    ? await locateFolderDocPackage(url)
+    : await locateHttpPackage(url);
+  if (location.kind !== "package" || !hasPluginManifest(location.pkgJson)) {
+    return undefined;
+  }
+  return {
+    plugins: pluginsFromManifest(location.pkgJson, location.base, conditions),
+  };
+}
+
 // Module file extensions that mark a URL as a direct entry point rather than a
 // package/site root to look for a `package.json` in.
 const MODULE_FILE_EXTENSION = /\.(mjs|cjs|js|mts|cts|ts|jsx|tsx)$/;
 
-async function httpEntryPointUrl(
-  url: string,
-  subpath: string = ".",
-  conditions: string[] = defaultImportConditions
-): Promise<string> {
+/**
+ * Where a package's code is: a module to import as it is, or a package root
+ * (`base`, ending in `/`) with the `package.json` read from it.
+ */
+type PackageLocation =
+  | { kind: "module"; href: string }
+  | { kind: "package"; base: string; pkgJson: Record<string, any> };
+
+async function locateHttpPackage(url: string): Promise<PackageLocation> {
   // Absolute URLs (http(s), data:, blob:) resolve on their own; only a relative
   // URL needs the document base, which isn't available off the main thread.
   let resolved: URL;
@@ -99,7 +116,7 @@ async function httpEntryPointUrl(
   const isHttp =
     resolved.protocol === "http:" || resolved.protocol === "https:";
   if (!isHttp || MODULE_FILE_EXTENSION.test(resolved.pathname)) {
-    return resolved.href;
+    return { kind: "module", href: resolved.href };
   }
 
   // Treat the URL as a directory: resolve `package.json` against it with a
@@ -140,7 +157,7 @@ async function httpEntryPointUrl(
     log(
       `no package.json at ${packageJsonUrl} (HTTP ${response.status}); importing ${resolved.href} directly`
     );
-    return resolved.href;
+    return { kind: "module", href: resolved.href };
   }
 
   let pkgJson: Record<string, any>;
@@ -152,8 +169,107 @@ async function httpEntryPointUrl(
     });
   }
 
-  const entryPoint = resolvePackageExport(pkgJson, subpath, conditions);
-  return new URL(entryPoint, base).href;
+  return { kind: "package", base, pkgJson };
+}
+
+async function locateFolderDocPackage(
+  folderDocUrl: AutomergeUrl
+): Promise<PackageLocation> {
+  const base = new URL(
+    getImportableUrlFromAutomergeUrl(folderDocUrl),
+    documentBaseOrigin()
+  ).href;
+  const pkgJson = await packageJsonContentsFromFolderDocUrl(folderDocUrl);
+  return { kind: "package", base, pkgJson };
+}
+
+async function importFromPackage(
+  location: PackageLocation,
+  subpath: string,
+  conditions: string[]
+) {
+  if (location.kind === "module") {
+    log(`importing ${location.href.slice(-60)}`);
+    return importModule(location.href);
+  }
+  const { base, pkgJson } = location;
+  // A package that lists its plugins in package.json says what they are
+  // without running any of its code: its entry point isn't imported, and each
+  // plugin's `load()` imports only its own export.
+  if (subpath === "." && hasPluginManifest(pkgJson)) {
+    log(`reading plugins from package.json at ${base.slice(-60)}`);
+    return { plugins: pluginsFromManifest(pkgJson, base, conditions) };
+  }
+  const entryPointUrl = new URL(
+    resolvePackageExport(pkgJson, subpath, conditions),
+    base
+  ).href;
+  log(`importing ${entryPointUrl.slice(-60)}`);
+  return importModule(entryPointUrl);
+}
+
+function isRecord(value: unknown): value is Record<string, any> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Whether `package.json` lists its plugins under `patchwork.plugins`. */
+export function hasPluginManifest(pkgJson: Record<string, any>): boolean {
+  return isRecord(pkgJson?.patchwork?.plugins);
+}
+
+/**
+ * The plugins a `package.json` lists under `patchwork.plugins`, keyed by type
+ * and then id:
+ *
+ * ```json
+ * "patchwork": {
+ *   "plugins": {
+ *     "patchwork:tool": {
+ *       "some-id": { "name": "…", "export": "./tools/whatever" }
+ *     }
+ *   }
+ * }
+ * ```
+ *
+ * Each entry's other fields are its description. Its `load()` resolves
+ * `export` through the package's `exports` with `conditions`, imports that,
+ * and returns its default export, or the whole module if it has none.
+ */
+export function pluginsFromManifest(
+  pkgJson: Record<string, any>,
+  base: string,
+  conditions: string[] = defaultImportConditions
+): Array<Record<string, any>> {
+  const byType = pkgJson?.patchwork?.plugins;
+  if (!isRecord(byType)) return [];
+  const plugins: Array<Record<string, any>> = [];
+  for (const [type, byId] of Object.entries(byType)) {
+    if (!isRecord(byId)) continue;
+    for (const [id, entry] of Object.entries(byId)) {
+      if (!isRecord(entry)) continue;
+      const { export: subpath, ...description } = entry;
+      plugins.push({
+        ...description,
+        type,
+        id,
+        load: async () => {
+          if (typeof subpath !== "string") {
+            throw new Error(
+              `Plugin "${type}:${id}" in ${base}package.json has no "export" naming the subpath to load it from`
+            );
+          }
+          const url = new URL(
+            resolvePackageExport(pkgJson, subpath, conditions),
+            base
+          ).href;
+          log(`importing ${type}:${id} from ${url.slice(-60)}`);
+          const mod = await importModule(url);
+          return "default" in mod ? mod.default : mod;
+        },
+      });
+    }
+  }
+  return plugins;
 }
 
 /**
@@ -251,24 +367,4 @@ export function resolvePackageExport(
   throw new Error(
     `No valid 'exports' for "${subpath}" or 'main' in package.json`
   );
-}
-
-async function packageEntryPointUrl(
-  folderDocUrl: AutomergeUrl,
-  subpath: string = ".",
-  conditions: string[] = defaultImportConditions
-) {
-  const pkgJson = await packageJsonContentsFromFolderDocUrl(folderDocUrl);
-
-  const entryPoint = resolvePackageExport(pkgJson, subpath, conditions);
-  if (!entryPoint) return undefined;
-
-  const base = new URL(
-    getImportableUrlFromAutomergeUrl(folderDocUrl),
-    documentBaseOrigin()
-  );
-
-  const entry = new URL(entryPoint, base);
-
-  return entry.href;
 }
