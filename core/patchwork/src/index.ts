@@ -35,9 +35,11 @@ import {
   type DatatypeDescription,
   type LoadedDatatype,
   createDocOfDatatype2,
+  followThemePreferences,
   getRegistry,
   registerPlugins,
   resolveAccountHandle,
+  startThemes,
   unregisterPlugins,
 } from "@inkandswitch/patchwork-plugins";
 import * as plugins from "@inkandswitch/patchwork-plugins";
@@ -144,6 +146,10 @@ async function doSetup(
   const routing = options.routing ?? "hash";
 
   log("booting", options);
+
+  // The site's default theme for now, and every theme's stylesheet as its
+  // package registers. The account's choice joins once the account is open.
+  startThemes();
 
   if (!options.repo) await initWasm();
 
@@ -275,6 +281,8 @@ async function doSetup(
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
+
+  followThemePreferences(repo, accountDocHandle);
 
   // Once the account's packages are listed too, the list is whole, and a
   // package that's left it since last visit is forgotten.
