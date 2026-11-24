@@ -1,6 +1,6 @@
 import {
-  isValidAutomergeUrl,
   type AutomergeUrl,
+  isValidAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
 import { resolve } from "resolve.exports";
 import debug from "debug";
@@ -34,20 +34,20 @@ async function importModule(entryPointUrl: string) {
 export async function importPackageFromFolderDocUrl(
   folderDocUrl: AutomergeUrl,
   subpath: string = ".",
-  conditions: string[] = defaultImportConditions
+  conditions: string[] = defaultImportConditions,
 ) {
   log(`importPackage ${folderDocUrl}... (subpath: ${subpath})`);
   return importFromPackage(
     await locateFolderDocPackage(folderDocUrl),
     subpath,
-    conditions
+    conditions,
   );
 }
 
 export async function importPackageFromHttpUrl(
   url: string,
   subpath: string = ".",
-  conditions: string[] = defaultImportConditions
+  conditions: string[] = defaultImportConditions,
 ) {
   return importFromPackage(await locateHttpPackage(url), subpath, conditions);
 }
@@ -59,7 +59,7 @@ export async function importPackageFromHttpUrl(
 export async function importPackage(
   url: string,
   subpath: string = ".",
-  conditions: string[] = defaultImportConditions
+  conditions: string[] = defaultImportConditions,
 ) {
   return isValidAutomergeUrl(url)
     ? importPackageFromFolderDocUrl(url, subpath, conditions)
@@ -77,7 +77,7 @@ export async function importPackage(
  */
 export async function readPluginManifest(
   url: string,
-  conditions: string[] = defaultImportConditions
+  conditions: string[] = defaultImportConditions,
 ): Promise<{ plugins: Array<Record<string, any>> } | undefined> {
   const location = isValidAutomergeUrl(url)
     ? await locateFolderDocPackage(url)
@@ -113,8 +113,8 @@ async function locateHttpPackage(url: string): Promise<PackageLocation> {
   }
   // Only http(s) directories get a package.json probe. A module file, or a
   // `data:`/`blob:` module, is imported as given.
-  const isHttp =
-    resolved.protocol === "http:" || resolved.protocol === "https:";
+  const isHttp = resolved.protocol === "http:" ||
+    resolved.protocol === "https:";
   if (!isHttp || MODULE_FILE_EXTENSION.test(resolved.pathname)) {
     return { kind: "module", href: resolved.href };
   }
@@ -147,7 +147,7 @@ async function locateHttpPackage(url: string): Promise<PackageLocation> {
       : `This is usually a network error (offline/unreachable) or a cross-origin request blocked by CORS (a missing \`Access-Control-Allow-Origin\` header).`;
     throw new Error(
       `Couldn't fetch ${packageJsonUrl} to resolve the module entry point. ${hint}`,
-      { cause }
+      { cause },
     );
   }
 
@@ -155,7 +155,7 @@ async function locateHttpPackage(url: string): Promise<PackageLocation> {
   // that serves an `index.js` works.
   if (!response.ok) {
     log(
-      `no package.json at ${packageJsonUrl} (HTTP ${response.status}); importing ${resolved.href} directly`
+      `no package.json at ${packageJsonUrl} (HTTP ${response.status}); importing ${resolved.href} directly`,
     );
     return { kind: "module", href: resolved.href };
   }
@@ -173,11 +173,11 @@ async function locateHttpPackage(url: string): Promise<PackageLocation> {
 }
 
 async function locateFolderDocPackage(
-  folderDocUrl: AutomergeUrl
+  folderDocUrl: AutomergeUrl,
 ): Promise<PackageLocation> {
   const base = new URL(
     getImportableUrlFromAutomergeUrl(folderDocUrl),
-    documentBaseOrigin()
+    documentBaseOrigin(),
   ).href;
   const pkgJson = await packageJsonContentsFromFolderDocUrl(folderDocUrl);
   return { kind: "package", base, pkgJson };
@@ -186,7 +186,7 @@ async function locateFolderDocPackage(
 async function importFromPackage(
   location: PackageLocation,
   subpath: string,
-  conditions: string[]
+  conditions: string[],
 ) {
   if (location.kind === "module") {
     log(`importing ${location.href.slice(-60)}`);
@@ -202,7 +202,7 @@ async function importFromPackage(
   }
   const entryPointUrl = new URL(
     resolvePackageExport(pkgJson, subpath, conditions),
-    base
+    base,
   ).href;
   log(`importing ${entryPointUrl.slice(-60)}`);
   return importModule(entryPointUrl);
@@ -238,7 +238,7 @@ export function hasPluginManifest(pkgJson: Record<string, any>): boolean {
 export function pluginsFromManifest(
   pkgJson: Record<string, any>,
   base: string,
-  conditions: string[] = defaultImportConditions
+  conditions: string[] = defaultImportConditions,
 ): Array<Record<string, any>> {
   const byType = pkgJson?.patchwork?.plugins;
   if (!isRecord(byType)) return [];
@@ -248,24 +248,29 @@ export function pluginsFromManifest(
     for (const [id, entry] of Object.entries(byId)) {
       if (!isRecord(entry)) continue;
       const { export: subpath, ...description } = entry;
+      let load = async () => {};
+      if (subpath) {
+        if (!(subpath in pkgJson)) {
+          throw new Error(
+            `Plugin "${type}:${id}" in ${base}package.json "export" "${subpath}" has no matching entry in the package.json`,
+          );
+        }
+        load = async () => {
+          const url = new URL(
+            resolvePackageExport(pkgJson, subpath, conditions),
+            base,
+          ).href;
+          log(`importing ${type}:${id} from ${url.slice(-60)}`);
+          const mod = await importModule(url);
+          // todo this may be a bad idea
+          return "default" in mod ? mod.default : mod;
+        };
+      }
       plugins.push({
         ...description,
         type,
         id,
-        load: async () => {
-          if (typeof subpath !== "string") {
-            throw new Error(
-              `Plugin "${type}:${id}" in ${base}package.json has no "export" naming the subpath to load it from`
-            );
-          }
-          const url = new URL(
-            resolvePackageExport(pkgJson, subpath, conditions),
-            base
-          ).href;
-          log(`importing ${type}:${id} from ${url.slice(-60)}`);
-          const mod = await importModule(url);
-          return "default" in mod ? mod.default : mod;
-        },
+        load,
       });
     }
   }
@@ -287,16 +292,16 @@ export async function importPluginFromPackage(
   pluginType: string,
   pluginId: string,
   subpath: string = ".",
-  conditions: string[] = defaultImportConditions
+  conditions: string[] = defaultImportConditions,
 ) {
   const mod = await importPackage(packageUrl, subpath, conditions);
   const plugins: any[] = Array.isArray(mod?.plugins) ? mod.plugins : [];
   const plugin = plugins.find(
-    (p) => p?.type === pluginType && p?.id === pluginId
+    (p) => p?.type === pluginType && p?.id === pluginId,
   );
   if (!plugin) {
     throw new Error(
-      `No plugin "${pluginType}:${pluginId}" exported by the package at ${packageUrl}`
+      `No plugin "${pluginType}:${pluginId}" exported by the package at ${packageUrl}`,
     );
   }
   if (typeof plugin.load === "function") {
@@ -306,7 +311,7 @@ export async function importPluginFromPackage(
     return import(/* @vite-ignore */ plugin.import);
   }
   throw new Error(
-    `Plugin "${pluginType}:${pluginId}" at ${packageUrl} has no load() function or import URL`
+    `Plugin "${pluginType}:${pluginId}" at ${packageUrl} has no load() function or import URL`,
   );
 }
 
@@ -316,18 +321,18 @@ export const importPluginFromFolderDocUrl: (
   pluginType: string,
   pluginId: string,
   subpath?: string,
-  conditions?: string[]
+  conditions?: string[],
 ) => Promise<any> = importPluginFromPackage;
 
 async function packageJsonContentsFromFolderDocUrl(
-  folderDocUrl: AutomergeUrl
+  folderDocUrl: AutomergeUrl,
 ): Promise<Record<string, any>> {
   const packageJSONPath = new URL(
     "package.json",
     new URL(
       getImportableUrlFromAutomergeUrl(folderDocUrl),
-      documentBaseOrigin()
-    )
+      documentBaseOrigin(),
+    ),
   ).href;
 
   log(`fetching ${packageJSONPath.slice(-60)}`);
@@ -338,12 +343,12 @@ async function packageJsonContentsFromFolderDocUrl(
   } catch (cause) {
     throw new Error(
       `Couldn't fetch ${packageJSONPath} for ${folderDocUrl} — a network error, or the service worker isn't serving automerge module URLs`,
-      { cause }
+      { cause },
     );
   }
   if (!response.ok) {
     throw new Error(
-      `Failed to fetch ${packageJSONPath} for ${folderDocUrl}: HTTP ${response.status}`
+      `Failed to fetch ${packageJSONPath} for ${folderDocUrl}: HTTP ${response.status}`,
     );
   }
   log(`package.json OK for ${folderDocUrl.slice(0, 25)}...`);
@@ -353,7 +358,7 @@ async function packageJsonContentsFromFolderDocUrl(
 export function resolvePackageExport(
   pkgJson: Record<string, any>,
   subpath: string = ".",
-  conditions: string[] = defaultImportConditions
+  conditions: string[] = defaultImportConditions,
 ): string {
   try {
     const resolved = resolve(pkgJson, subpath, { conditions });
@@ -365,6 +370,6 @@ export function resolvePackageExport(
   }
 
   throw new Error(
-    `No valid 'exports' for "${subpath}" or 'main' in package.json`
+    `No valid 'exports' for "${subpath}" or 'main' in package.json`,
   );
 }
