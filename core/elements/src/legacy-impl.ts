@@ -203,7 +203,7 @@ async function loadPackageTool(
     (typeof tool.load === "function"
       ? await tool.load()
       : typeof tool.import === "string"
-        ? await import(/* @vite-ignore */ tool.import)
+        ? (await import(/* @vite-ignore */ tool.import)).default
         : undefined);
   if (typeof render !== "function") {
     throw new Error(`its ${tool.id} tool has no render function`);
