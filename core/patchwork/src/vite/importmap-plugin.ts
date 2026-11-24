@@ -29,6 +29,13 @@ export const builtins = externals.reduce(
 // This package importmaps itself too, so tool code loaded at runtime can
 // bare-import it just like the other @inkandswitch/patchwork-* packages.
 builtins["@inkandswitch/patchwork"] = "/packages/@inkandswitch/patchwork.js";
+// The Writers sidebar, which setup registers in every site. The isolated
+// iframe imports it by this url.
+builtins["@inkandswitch/patchwork-provenance"] =
+  "/packages/@inkandswitch/patchwork-provenance.js";
+
+/** Builtins that are this package's own dependencies, not the bootloader's. */
+const own = new Set(["@inkandswitch/patchwork", "@inkandswitch/patchwork-provenance"]);
 
 export const chunks = Object.keys(builtins).filter((id) => !(id in slim));
 
@@ -53,7 +60,7 @@ function resolveBuiltin(
   context: import("rollup").PluginContext,
   id: string
 ): Promise<string> {
-  return id === "@inkandswitch/patchwork"
+  return own.has(id)
     ? resolveSelf.call(context, id)
     : resolveExternal.call(context, id);
 }
@@ -70,6 +77,7 @@ function createImportMap(options?: PatchworkVitePluginOptions) {
 
 export function devDependencyId(id: string): string {
   if (id === "@inkandswitch/patchwork") return id;
+  if (own.has(id)) return `@inkandswitch/patchwork > ${id}`;
   if (id === "@inkandswitch/patchwork-bootloader") {
     return `@inkandswitch/patchwork > ${id}`;
   }

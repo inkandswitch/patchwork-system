@@ -8,6 +8,7 @@ export default defineConfig({
       "core/plugins",
       "core/patchwork",
       "packages/edge-handles",
+      "packages/provenance",
       "packages/providers/core",
     ],
   },

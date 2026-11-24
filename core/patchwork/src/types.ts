@@ -9,6 +9,8 @@ import type {
   AccountDoc,
 } from "@inkandswitch/patchwork-plugins";
 import type * as pluginsNS from "@inkandswitch/patchwork-plugins";
+import type { Heads } from "@automerge/automerge/slim";
+import type { ExplainedChange, WriterSummary } from "./provenance/index.js";
 import type { PublicReaderStatus } from "@inkandswitch/patchwork-bootloader";
 
 export type PluginsApi = typeof pluginsNS;
@@ -181,4 +183,14 @@ export interface Patchwork {
   readonly packages: ModuleWatcher;
   readonly plugins: PluginsApi;
   readonly sw: ServiceWorkerApi;
+
+  /** Which package version made each of a doc's changes, newest first. */
+  explain(
+    target: AutomergeUrl | DocHandle<unknown>,
+    options?: { limit?: number; since?: Heads }
+  ): Promise<ExplainedChange[]>;
+  /** A doc's whole history grouped by the package version that made it. */
+  explainSummary(
+    target: AutomergeUrl | DocHandle<unknown>
+  ): Promise<WriterSummary[]>;
 }
