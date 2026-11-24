@@ -1,5 +1,11 @@
 # @inkandswitch/patchwork-e2e
 
+## 0.2.5
+
+### Patch Changes
+
+- 5c7d422: The install-tool spec finds the Packages tool by its current class names (`pw-pkg-packages__*`, `pw-pkg-install*`). pkg-base renamed them on 2026-11-12, and since then the spec failed on chromium waiting for a search box that was there under its new name.
+
 ## 0.2.4
 
 ### Patch Changes
