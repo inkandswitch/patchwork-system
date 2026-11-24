@@ -102,7 +102,8 @@ export interface PatchworkOptions {
 
   /**
    * How document navigation maps onto the URL. `"hash"` (the default) drives
-   * the root view from `location.hash`. `false` installs no router — call
+   * the root view from `location.hash`, or from `window.patchworkRoute` when
+   * the site has put one there. `false` installs no router — call
    * `patchwork.open()` directly.
    */
   routing?: "hash" | false;

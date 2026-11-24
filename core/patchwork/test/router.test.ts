@@ -96,6 +96,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  delete window.patchworkRoute;
   vi.restoreAllMocks();
   for (const [type, listener] of listeners.splice(0)) {
     window.removeEventListener(type, listener);
@@ -214,5 +215,72 @@ describe("the root view", () => {
     await go(apples);
     await vi.waitFor(() => expect(location.hash).toBe(`#doc=${apples}`));
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
+  });
+});
+
+describe("a site that says where it is", () => {
+  // A route that keeps its params to itself and announces a move the way a
+  // change of hash would.
+  function install(params = new URLSearchParams()) {
+    const went: string[] = [];
+    window.patchworkRoute = {
+      params: () => new URLSearchParams(params),
+      go(next) {
+        params = new URLSearchParams(next);
+        went.push(next.toString());
+        window.dispatchEvent(new Event("hashchange"));
+      },
+    };
+    return {
+      went,
+      params: () => params,
+      async move(next: Record<string, string>) {
+        params = new URLSearchParams(next);
+        window.dispatchEvent(new Event("hashchange"));
+        await ticks();
+      },
+    };
+  }
+
+  it("opens the route's document, not the hash's", async () => {
+    const apples = note("Apples");
+    const pears = note("Pears");
+    await go(`doc=${pears}`);
+    const route = install(
+      new URLSearchParams({ doc: apples, tool: "outline" })
+    );
+    const opened: any[] = [];
+    root.addEventListener("patchwork:open-document", (event) =>
+      opened.push((event as CustomEvent).detail)
+    );
+    start();
+    await ticks();
+    expect(opened.at(-1)).toMatchObject({ url: apples, toolId: "outline" });
+    // already there, so there's nowhere to go
+    expect(route.went).toEqual([]);
+    await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
+  });
+
+  it("goes through the route, leaving the hash alone", async () => {
+    const route = install();
+    start();
+    const apples = note("Apples");
+    open(apples);
+    await ticks();
+    expect(route.went).toHaveLength(1);
+    expect(route.params().get("doc")).toBe(apples);
+    expect(location.hash).toBe("");
+    await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
+  });
+
+  it("takes the frame from the route", async () => {
+    const pears = note("Pears");
+    const route = install();
+    start();
+    await route.move({ frame: "other-frame", doc: pears });
+    expect(root.getAttribute("tool-id")).toBe("other-frame");
+    expect(root.getAttribute("doc-url")).toBe(pears);
+    await route.move({ doc: pears });
+    expect(root.getAttribute("tool-id")).toBe("home-frame");
   });
 });

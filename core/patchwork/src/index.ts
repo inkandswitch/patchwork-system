@@ -523,7 +523,7 @@ function subscribeSyncState(
 
 export { createRepo, initWasm } from "./repo.js";
 export { watchDocument } from "./watch-document.js";
-export { createRouter } from "./router.js";
+export { createRouter, type PatchworkRoute } from "./router.js";
 export {
   showLoadingAnimation,
   hideLoadingAnimation,

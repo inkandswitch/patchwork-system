@@ -60,6 +60,33 @@ export function docParamToUrl(docParam: string | null): AutomergeUrl | undefined
   return stringifyAutomergeUrl({ documentId: documentId as DocumentId });
 }
 
+/**
+ * Where the site is, for a site that says so some other way than the hash (by
+ * path, say). A site puts one on `window.patchworkRoute` before `setup()`, and
+ * the router reads and writes the address only through it. It still announces
+ * a move with a `hashchange` on `window`, as a change of hash would.
+ */
+export type PatchworkRoute = {
+  /** What's open: the params a hash would have (`doc`, `tool`, `frame`, …). */
+  params(): URLSearchParams;
+  /** Go to `params`, a step Back can return from. */
+  go(params: URLSearchParams): void;
+};
+
+declare global {
+  interface Window {
+    patchworkRoute?: PatchworkRoute;
+  }
+}
+
+/** The address's params: the site's route's, or else the hash's. */
+function routeParams(): URLSearchParams {
+  return (
+    window.patchworkRoute?.params() ??
+    new URLSearchParams(window.location.hash.slice(1))
+  );
+}
+
 export interface RouterParams {
   rootElement: HTMLElement;
   repo: Repo;
@@ -69,7 +96,7 @@ export interface RouterParams {
 }
 
 export interface Router {
-  /** Apply `location.hash` to the view. */
+  /** Apply the address (`window.patchworkRoute`, or else the hash) to the view. */
   route(): Promise<void>;
 }
 
@@ -103,7 +130,7 @@ export function createRouter({
       return;
     }
 
-    const params = new URLSearchParams(hash);
+    const params = routeParams();
     const docUrl = docParamToUrl(params.get("doc"));
     const frame = params.get("frame");
 
@@ -157,7 +184,7 @@ export function createRouter({
       title?: string;
     };
 
-    const params = new URLSearchParams(window.location.hash.slice(1));
+    const params = routeParams();
     // `doc` is the full automerge URL, so heads live inside it and the separate
     // `heads=` param is gone.
     params.delete("heads");
@@ -180,7 +207,14 @@ export function createRouter({
       if (value) params.set(key, value);
       else params.delete(key);
     }
-    window.location.hash = serializeHashParams(params);
+    const next = serializeHashParams(params);
+    if (!window.patchworkRoute) window.location.hash = next;
+    // Setting the hash to what it already is announces nothing; a route is
+    // held to the same, or the open-document its announcement causes would
+    // go there again without end.
+    else if (next !== serializeHashParams(routeParams())) {
+      window.patchworkRoute.go(params);
+    }
     void tabTitle.follow(url, type);
   });
 
