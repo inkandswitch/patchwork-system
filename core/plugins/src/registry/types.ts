@@ -1,5 +1,6 @@
 import { DatatypeDescription } from "../datatypes.js";
 import { ToolDescription } from "../tools.js";
+import type { ThemeDescription } from "../themes.js";
 
 export interface PluginRegistryEvents<D extends PluginDescription, I = any> {
   registered: (plugin: Plugin<D, I>) => void;
@@ -16,6 +17,7 @@ export interface PluginRegistryEvents<D extends PluginDescription, I = any> {
 export type RegistryTypeMap = {
   "patchwork:tool": ToolDescription;
   "patchwork:datatype": DatatypeDescription;
+  "patchwork:theme": ThemeDescription;
 };
 
 /**

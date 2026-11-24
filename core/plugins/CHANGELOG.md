@@ -1,5 +1,43 @@
 # @inkandswitch/patchwork-plugins
 
+## 1.2.9
+
+### Patch Changes
+
+- b1aceaf: A plugin in a `package.json` manifest no longer needs an `export`. One without it is listed as before, and its `load()` now does nothing instead of throwing, so a plugin that is all description, like a theme whose `style` is the whole of it, needs no module. A plugin's `export` is resolved through the package's `exports` when the manifest is read, using the same resolver and conditions `load()` imports with, so string `exports`, condition objects and subpath patterns all work. If it matches nothing, `pluginsFromManifest` throws, naming the plugin and the export.
+
+  A theme's relative `style` is resolved against the package that registered it, whether that's a folder doc or an http package root, so a manifest can say `"style": "./theme.css"`. `@inkandswitch/patchwork-plugins` exports `themeStylesheetUrl(theme)`, which takes a theme id or a `ThemeDescription` and returns its stylesheet as an absolute URL. It returns `undefined` for a theme that isn't registered or has no `style`.
+
+## 1.2.8
+
+### Patch Changes
+
+- cfa22a0: Theming is part of the host now, not something a package has to provide. `setup()` loads the stylesheet of every registered `patchwork:theme` plugin. It sets the active theme as the `theme` attribute on `<html>` and keeps it in step with the computer's light and dark mode. It also answers `patchwork:current-theme` with the active theme id, so isolated views can follow it.
+
+  The active theme is the account's choice for the current mode: the `light` and `dark` of the doc at `accountDoc.toolStorage["theme-preferences"]`. Without one, it's the site's default from `<html data-theme-light="…" data-theme-dark="…">`, and failing that `lychee` or `gloom`. The host reads that doc and never writes or creates it. The tools that let you pick a theme still write `light` and `dark` into it, as before.
+
+  `@inkandswitch/patchwork-plugins` exports:
+
+  - `ThemeDescription` and `Theme`, the `patchwork:theme` plugin type, now in `RegistryTypeMap`
+  - `getActiveTheme()` and `onActiveThemeChange(listener)`, for the active theme and each mode's theme
+  - `themeDefaults()`, `currentThemeMode()` and `resolveTheme(preferences, mode, defaults)`, for how the choice is made
+  - `followCurrentTheme(element)`, for a view that can't see the host's `<html>`: it applies the theme from `patchwork:current-theme`
+  - `startThemes()`, `followThemePreferences(repo, account)`, `loadThemeStylesheets()` and `serveCurrentTheme(root)`, which `setup()` calls
+  - `CURRENT_THEME_SELECTOR` and `THEME_PREFERENCES_TOOL_ID`
+
+  `AccountDoc` gains `toolStorage?: Record<string, AutomergeUrl>`. `@inkandswitch/patchwork-plugins` now depends on `@inkandswitch/patchwork-providers`.
+
+## 1.2.7
+
+### Patch Changes
+
+- 8ee14a5: `loadWhenReady` no longer hangs. When the plugin was re-registered while it loaded (a package reload), `load` gave up on the old description and `loadWhenReady` waited for a registration that had already happened; a registration landing during its first load was missed the same way. It now loads again while the id is registered, and waits only when it isn't.
+- 9f5930b: Removing a package from settings now removes its tools and datatypes. They were registered under the heads-pinned url they were loaded from and unregistered by the bare settings entry, so nothing matched until a reload. `unregisterPlugins` now removes everything from the same package at any heads, and `registerPlugins` first removes whatever an earlier version of the same package registered that the new one no longer provides (a renamed or dropped id); ids the new version still provides are replaced in place, so a mounted view reloads once.
+
+  `ModuleWatcher`'s `onUnload` is now called with `(moduleKey, importUrl)`: the settings entry, and the url the module was last loaded from. A package published as a branches doc loads from its default branch, a different document, so unregister by `importUrl`. When the default branch moves to another document, the old branch's plugins are unloaded before the new ones register.
+
+  A package whose first lookup failed (the service worker or automerge worker still booting) is now looked up again on the import retry schedule; it used to stay unloaded until the package changed twice. And a module listed as a service-worker url for a file inside a package (`…/automerge%3A<id>/path/entry.js`) now reloads that same file at the new heads; since September 2025 a reload had imported the package's root entry point instead.
+
 ## 1.2.6
 
 ### Patch Changes

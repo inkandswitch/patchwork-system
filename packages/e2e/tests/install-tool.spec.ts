@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
-import { waitForRepoReady } from "./helpers.js";
+import { navigate, reload, waitForRepoReady } from "./helpers.js";
 
 /**
  * The extensibility loop: install a package at runtime, then use the tool it
@@ -26,7 +26,7 @@ test("a counter tool installed from an automerge url can be created and clicked"
   test.skip(browserName !== "chromium", "full-UI boot is only reliable on chromium: firefox fails cors fetches from inside service workers, webkit is flaky on SW timing and emulation");
   test.setTimeout(300_000);
 
-  await page.goto("/", { timeout: 120_000 });
+  await navigate(page, "/", { timeout: 120_000 });
   await page.waitForSelector(".threepane-sidebar", { timeout: 180_000 });
   await waitForRepoReady(page);
 
@@ -48,16 +48,16 @@ test("a counter tool installed from an automerge url can be created and clicked"
   }, COUNTER_SOURCE);
 
   await page.getByRole("button", { name: "Packages" }).click();
-  const search = page.locator(".pw-packages__search");
+  const search = page.locator(".pw-pkg-packages__search");
   await expect(search).toBeVisible({ timeout: 30_000 });
 
   // On webkit the Add click can be swallowed while the modal is still
   // settling, so retry the whole install until the "my package list" plugin
   // count proves the settings doc took the module (the counter package
   // registers 2 plugins: the datatype and the tool).
-  const install = page.locator(".pw-install");
+  const install = page.locator(".pw-pkg-install");
   const installedCount = page.locator(
-    '.pw-packages__origin-chip[data-origin="installed"] .pw-packages__origin-count',
+    '.pw-pkg-packages__origin-chip[data-origin="installed"] .pw-pkg-packages__origin-count',
   );
   await expect(async () => {
     if ((await installedCount.textContent()) === "0") {
@@ -76,7 +76,7 @@ test("a counter tool installed from an automerge url can be created and clicked"
           }),
         );
       }, packageUrl);
-      await expect(install.locator(".pw-install__card")).toBeVisible({
+      await expect(install.locator(".pw-pkg-install__card")).toBeVisible({
         timeout: 10_000,
       });
       await install
@@ -114,7 +114,7 @@ test("a counter tool installed from an automerge url can be created and clicked"
     () => new URLSearchParams(location.hash.slice(1)).get("doc")!,
   );
   const checkTab = await page.context().newPage();
-  await checkTab.goto("/");
+  await navigate(checkTab, "/");
   await waitForRepoReady(checkTab);
   await expect
     .poll(
@@ -130,7 +130,7 @@ test("a counter tool installed from an automerge url can be created and clicked"
 
   // The installed module and the doc both survive a reload: the settings doc
   // re-loads the package, the hash re-opens the counter.
-  await page.reload();
+  await reload(page);
   await expect(page.locator(".e2e-counter__count")).toHaveText("3", {
     timeout: 90_000,
   });

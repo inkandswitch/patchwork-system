@@ -1,5 +1,71 @@
 # @inkandswitch/patchwork-filesystem
 
+## 0.2.23
+
+### Patch Changes
+
+- e4afc61: A plugin in a `package.json` manifest whose `export` matches nothing in the package's `exports` no longer takes the rest of the package down with it. `pluginsFromManifest` doesn't throw any more: it warns, naming the plugin and the export, still lists that plugin, and gives it a `load()` that rejects with the same error. The package's other plugins are listed and load as usual.
+
+  A plugin's relative `style` is resolved against the package when the manifest is read, so the description carries an absolute URL. Anything that reads `style` straight off a theme, like a settings page fetching its stylesheet, gets a URL that works from any page, not one relative to wherever it's running.
+
+## 0.2.22
+
+### Patch Changes
+
+- b1aceaf: A plugin in a `package.json` manifest no longer needs an `export`. One without it is listed as before, and its `load()` now does nothing instead of throwing, so a plugin that is all description, like a theme whose `style` is the whole of it, needs no module. A plugin's `export` is resolved through the package's `exports` when the manifest is read, using the same resolver and conditions `load()` imports with, so string `exports`, condition objects and subpath patterns all work. If it matches nothing, `pluginsFromManifest` throws, naming the plugin and the export.
+
+  A theme's relative `style` is resolved against the package that registered it, whether that's a folder doc or an http package root, so a manifest can say `"style": "./theme.css"`. `@inkandswitch/patchwork-plugins` exports `themeStylesheetUrl(theme)`, which takes a theme id or a `ThemeDescription` and returns its stylesheet as an absolute URL. It returns `undefined` for a theme that isn't registered or has no `style`.
+
+## 0.2.21
+
+### Patch Changes
+
+- fef3890: A package can list its plugins in `package.json` under `patchwork.plugins`, keyed by plugin type and then id. Each entry's `export` names a subpath in `exports`. When a package has this field, importing it no longer runs its main entry point. The returned `{ plugins }` comes from `package.json`, and each plugin's `load()` imports only its own export, resolved with the same conditions as before (`patchwork`, `browser`, `import`). It returns that module's default export, or the whole module if there's no default. A plugin with no `export` is still listed, and its `load()` throws. `pluginsFromManifest`, `hasPluginManifest` and `readPluginManifest` are exported for reading the field directly.
+
+  The bootloader reads the manifest on the main thread, since that runs none of the package's code. Its module-loader worker is used only for packages without one.
+
+  ```json
+  {
+    "exports": {
+      "./tools/whatever": { "patchwork": "./dist/whatever.js" }
+    },
+    "patchwork": {
+      "plugins": {
+        "patchwork:tool": {
+          "some-id": {
+            "name": "hehe",
+            "supportedDatatypes": ["a", "b"],
+            "export": "./tools/whatever"
+          }
+        }
+      }
+    }
+  }
+  ```
+
+## 0.2.20
+
+### Patch Changes
+
+- 0f3687e: `importPluginFromPackage` replaces `importPluginFromFolderDocUrl`. It takes any package url `importPackage` does, an automerge folder doc or an http url, where the old one took only a folder doc. `importPluginFromFolderDocUrl` stays as a deprecated alias. The module-loader worker and `importAutomergePackageViaWorker` take the same urls, and the ModuleWatcher's default import goes through `importPackage`.
+- afd6c93: The ModuleWatcher says how each package is doing. `packageStatus(urlOrDocumentId)` answers `{ state: "loading" }`, `{ state: "loaded", plugins }` with the ids of the plugins the package brought, or `{ state: "failed", error }` with the message of the lookup or import that failed, and undefined for anything that isn't a package doc it loads. The watcher is now an `EventTarget` and dispatches `"status"` whenever one changes. `PackageStatus` is exported.
+
+## 0.2.19
+
+### Patch Changes
+
+- a7bf755: Boot loads first the packages for what's about to be on screen. Each visit stores in localStorage (`patchwork:load-order:<accountKey>`) which tools and components every settings entry provided, and which ones the mounted `<patchwork-view>`s showed, by depth from the outermost. The next boot loads the packages behind the hash's `frame` and `tool` first, then the root view's, then the views inside it, and so on, one batch at a time, then everything else. It starts loading each of those tools as soon as it registers, and opens the root view once they've all registered, without waiting for the rest of the site's packages. If a package fails, comes back without a tool it was expected to provide, or a batch takes more than 3s, everything still held back loads at once, and the root view waits for all of the site's packages as before. With nothing stored, or a hash naming a tool no package provided last time, boot works as it did.
+
+  `ModuleWatcher` gets `prioritize(batches)`, with the new `LoadBatch` and `PluginRef` types. Call it straight after constructing the watcher. While a plan is running, `addUrl` waits only for the constructor's sources to be read, not for their packages to load, since the plan may want the new source's packages first.
+
+  The tab's title now names a document whose datatype registers after the document opened. Before, it stayed on the site's name.
+
+- 9f5930b: Removing a package from settings now removes its tools and datatypes. They were registered under the heads-pinned url they were loaded from and unregistered by the bare settings entry, so nothing matched until a reload. `unregisterPlugins` now removes everything from the same package at any heads, and `registerPlugins` first removes whatever an earlier version of the same package registered that the new one no longer provides (a renamed or dropped id); ids the new version still provides are replaced in place, so a mounted view reloads once.
+
+  `ModuleWatcher`'s `onUnload` is now called with `(moduleKey, importUrl)`: the settings entry, and the url the module was last loaded from. A package published as a branches doc loads from its default branch, a different document, so unregister by `importUrl`. When the default branch moves to another document, the old branch's plugins are unloaded before the new ones register.
+
+  A package whose first lookup failed (the service worker or automerge worker still booting) is now looked up again on the import retry schedule; it used to stay unloaded until the package changed twice. And a module listed as a service-worker url for a file inside a package (`…/automerge%3A<id>/path/entry.js`) now reloads that same file at the new heads; since September 2025 a reload had imported the package's root entry point instead.
+
 ## 0.2.18
 
 ### Patch Changes
