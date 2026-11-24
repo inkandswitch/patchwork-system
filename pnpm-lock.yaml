@@ -231,6 +231,9 @@ importers:
       '@automerge/automerge-repo':
         specifier: npm:@chee/automerge-repo@2.6.0-rabbit.1
         version: '@chee/automerge-repo@2.6.0-rabbit.1'
+      bs58:
+        specifier: ^6.0.0
+        version: 6.0.0
       debug:
         specifier: ^4.4.3
         version: 4.4.3
