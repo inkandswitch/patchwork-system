@@ -231,9 +231,10 @@ export function hasPluginManifest(pkgJson: Record<string, any>): boolean {
  * }
  * ```
  *
- * Each entry's other fields are its description. Its `load()` resolves
- * `export` through the package's `exports` with `conditions`, imports that,
- * and returns its default export, or the whole module if it has none.
+ * Each entry's other fields are its description. Its `export` is resolved
+ * through the package's `exports` with `conditions` up front, and this throws
+ * if it matches nothing. `load()` imports it and returns its default export,
+ * or the whole module if it has none. An entry with no `export` loads nothing.
  */
 export function pluginsFromManifest(
   pkgJson: Record<string, any>,
@@ -249,17 +250,20 @@ export function pluginsFromManifest(
       if (!isRecord(entry)) continue;
       const { export: subpath, ...description } = entry;
       let load = async () => {};
-      if (subpath) {
-        if (!(subpath in pkgJson)) {
+      if (subpath !== undefined) {
+        let entryPoint: string;
+        try {
+          if (typeof subpath !== "string") throw new Error("not a string");
+          entryPoint = resolvePackageExport(pkgJson, subpath, conditions);
+        } catch {
           throw new Error(
-            `Plugin "${type}:${id}" in ${base}package.json "export" "${subpath}" has no matching entry in the package.json`,
+            `Plugin "${type}:${id}" in ${base}package.json has "export" ${
+              JSON.stringify(subpath)
+            }, which matches nothing in its "exports"`,
           );
         }
         load = async () => {
-          const url = new URL(
-            resolvePackageExport(pkgJson, subpath, conditions),
-            base,
-          ).href;
+          const url = new URL(entryPoint, base).href;
           log(`importing ${type}:${id} from ${url.slice(-60)}`);
           const mod = await importModule(url);
           // todo this may be a bad idea

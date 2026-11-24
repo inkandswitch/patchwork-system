@@ -94,11 +94,37 @@ describe("patchwork.plugins in package.json", () => {
     expect(loaded.getTitle()).toBe("named");
   });
 
-  it("fails the load, not discovery, of a plugin without an export", async () => {
+  it("lists a plugin without an export, and its load does nothing", async () => {
     const noExport = pluginsFromManifest(manifest, fixtureBase).find(
       (p) => p.id === "no-export"
     )!;
-    await expect(noExport.load()).rejects.toThrow(/has no "export"/);
+    await expect(noExport.load()).resolves.toBeUndefined();
+  });
+
+  it("throws when an export matches nothing in exports", () => {
+    const broken = {
+      ...manifest,
+      patchwork: {
+        plugins: {
+          "patchwork:tool": { missing: { export: "./tools/missing" } },
+        },
+      },
+    };
+    expect(() => pluginsFromManifest(broken, fixtureBase)).toThrow(
+      /"\.\/tools\/missing", which matches nothing in its "exports"/
+    );
+  });
+
+  it("resolves an export from a string exports field", async () => {
+    const plain = {
+      name: "plain",
+      exports: "./build/named.js",
+      patchwork: {
+        plugins: { "patchwork:datatype": { named: { export: "." } } },
+      },
+    };
+    const [named] = pluginsFromManifest(plain, fixtureBase);
+    expect((await named.load()).getTitle()).toBe("named");
   });
 
   it("still imports the entry point of a package without patchwork.plugins", async () => {

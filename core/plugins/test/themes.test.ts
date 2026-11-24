@@ -99,6 +99,42 @@ describe("themeDefaults", () => {
   });
 });
 
+describe("themeStylesheetUrl", () => {
+  it("resolves a theme's stylesheet from its id or its description", () => {
+    registry.registerPlugins(
+      [
+        {
+          type: "patchwork:theme",
+          id: "warm",
+          name: "Warm",
+          style: "./warm.css",
+          load: async () => ({}),
+        },
+        {
+          type: "patchwork:theme",
+          id: "plain",
+          name: "Plain",
+          load: async () => ({}),
+        },
+      ],
+      "https://example.com/pkg"
+    );
+    expect(themes.themeStylesheetUrl("warm")).toBe(
+      "https://example.com/pkg/warm.css"
+    );
+    expect(
+      themes.themeStylesheetUrl({
+        type: "patchwork:theme",
+        id: "absolute",
+        name: "Absolute",
+        style: "https://cdn.example.com/absolute.css",
+      })
+    ).toBe("https://cdn.example.com/absolute.css");
+    expect(themes.themeStylesheetUrl("plain")).toBeUndefined();
+    expect(themes.themeStylesheetUrl("nobody")).toBeUndefined();
+  });
+});
+
 describe("startThemes", () => {
   it("puts the default theme for the mode on <html>, and follows the mode", () => {
     start();
@@ -134,6 +170,42 @@ describe("startThemes", () => {
 
     registry.unregisterPlugins("https://example.com/pkg/");
     expect(hrefs()).toEqual([]);
+  });
+
+  it("resolves a relative stylesheet against the package that registered it", () => {
+    start();
+    const folder = "automerge:4NMNnkMhL8jXrdJ9jamS58PAVdXu";
+    registry.registerPlugins(
+      [
+        {
+          type: "patchwork:theme",
+          id: "warm",
+          name: "Warm",
+          style: "./warm.css",
+          load: async () => ({}),
+        },
+      ],
+      "https://example.com/pkg"
+    );
+    registry.registerPlugins(
+      [
+        {
+          type: "patchwork:theme",
+          id: "cool",
+          name: "Cool",
+          style: "./themes/cool.css",
+          load: async () => ({}),
+        },
+      ],
+      folder
+    );
+    const hrefs = [...document.head.querySelectorAll("link[rel=stylesheet]")]
+      .map((link) => (link as HTMLLinkElement).href);
+    expect(hrefs).toEqual([
+      "https://example.com/pkg/warm.css",
+      new URL(`/${encodeURIComponent(folder)}/themes/cool.css`, document.baseURI)
+        .href,
+    ]);
   });
 
   it("tells listeners when the theme changes", () => {

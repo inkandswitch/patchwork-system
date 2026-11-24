@@ -18,7 +18,11 @@
  * theme write `light` and `dark` into it; an unset one resolves at read time,
  * so a site changing its defaults moves everyone who never picked.
  */
-import type { DocHandle, Repo } from "@automerge/automerge-repo/slim";
+import {
+  isValidAutomergeUrl,
+  type DocHandle,
+  type Repo,
+} from "@automerge/automerge-repo/slim";
 import {
   accept,
   subscribe,
@@ -30,7 +34,11 @@ import type { LoadablePlugin, PluginDescription } from "./registry/types.js";
 
 export interface ThemeDescription extends PluginDescription {
   type: "patchwork:theme";
-  /** The theme's stylesheet. Its rules are all under `[theme="<id>"]`. */
+  /**
+   * The theme's stylesheet. Its rules are all under `[theme="<id>"]`. A
+   * relative URL is relative to the package that registered the theme, so a
+   * `package.json` manifest can say `"style": "./theme.css"`.
+   */
   style?: string;
 }
 
@@ -147,9 +155,60 @@ export function onActiveThemeChange(
   };
 }
 
+// Module file extensions that mark an import URL as a module, not a package root.
+const MODULE_FILE_EXTENSION = /\.(mjs|cjs|js|mts|cts|ts|jsx|tsx)$/;
+
+/**
+ * What a theme's relative `style` is relative to: the package it came from.
+ * A folder doc is served at `/<encoded automerge url>/` (as in
+ * `getImportableUrlFromAutomergeUrl`); an http package root gets a trailing
+ * slash so its last segment isn't dropped; a module URL is used as it is.
+ */
+function styleBase(importUrl: string | undefined): string {
+  const page = document.baseURI;
+  if (!importUrl) return page;
+  if (isValidAutomergeUrl(importUrl)) {
+    return new URL(`/${encodeURIComponent(importUrl)}/`, page).href;
+  }
+  const url = new URL(importUrl, page);
+  if (
+    (url.protocol === "http:" || url.protocol === "https:") &&
+    !MODULE_FILE_EXTENSION.test(url.pathname) &&
+    !url.pathname.endsWith("/")
+  ) {
+    url.pathname += "/";
+  }
+  return url.href;
+}
+
+/**
+ * A theme's stylesheet as an absolute URL, with a relative `style` resolved
+ * against the package that registered it. Takes the theme's description, or
+ * its id to look it up in the registry. Undefined for a theme that isn't
+ * registered or has no `style`.
+ */
+export function themeStylesheetUrl(
+  theme: ThemeDescription | string
+): string | undefined {
+  if (typeof theme === "string") {
+    const registered = getRegistry<ThemeDescription>("patchwork:theme").get(
+      theme
+    );
+    if (!registered) return undefined;
+    theme = registered;
+  }
+  if (!theme.style) return undefined;
+  try {
+    return new URL(theme.style, styleBase(theme.importUrl)).href;
+  } catch {
+    return theme.style;
+  }
+}
+
 /**
  * Keep a `<link rel="stylesheet">` on the page for every registered theme's
- * `style`, and take it away when no registered theme uses it any more.
+ * `style`, and take it away when no registered theme uses it any more. A
+ * relative `style` resolves against the package that registered the theme.
  * Returns a function that stops watching and removes them.
  */
 export function loadThemeStylesheets(): () => void {
@@ -160,7 +219,7 @@ export function loadThemeStylesheets(): () => void {
     const styles = new Set(
       registry
         .all()
-        .map((theme) => theme.style)
+        .map((theme) => themeStylesheetUrl(theme))
         .filter((style): style is string => Boolean(style))
     );
     for (const style of styles) {
