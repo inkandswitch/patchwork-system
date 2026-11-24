@@ -168,6 +168,16 @@ const supports = (tool: Partial<ToolDescription>, type: string) => {
 };
 
 /**
+ * The package imported, but no tool in it is the one asked for. `missing` is
+ * what it lacks, for the card to name: the `tool-id`, or a tool for the type.
+ */
+class MissingPackageToolError extends Error {
+  constructor(readonly missing: string) {
+    super(`it doesn't have ${missing}`);
+  }
+}
+
+/**
  * The tool `toolId` names in the package at `pinned`, or with no `toolId`,
  * the package's tool for `type` (one made for it ahead of one for anything).
  * Taken from the package's own `plugins`, not the registry.
@@ -191,10 +201,8 @@ async function loadPackageTool(
         tools.find((t) => supports(t, type)))
       : undefined;
   if (!tool?.id) {
-    throw new Error(
-      toolId
-        ? `it doesn't have the ${toolId} tool`
-        : `it doesn't have a tool for ${type ?? "a doc with no type"}`
+    throw new MissingPackageToolError(
+      toolId ?? `a tool for ${type ?? "a doc with no type"}`
     );
   }
   // as the registry loads a plugin
@@ -385,7 +393,8 @@ export class LegacyImpl {
   // Why the last import of a suggested package didn't bring a tool, by url.
   #importFailures = new Map<string, string>();
   // A tool whose code failed to load, and why; its card offers to try again.
-  #toolLoadError: { id: string; message: string } | null = null;
+  #toolLoadError: { id: string; message: string; missing?: string } | null =
+    null;
   // The tool the reader just asked to try again. If that load fails too, a
   // fresh import won't fix it (the browser holds on to the failed module), so
   // the page reloads instead.
@@ -842,8 +851,11 @@ export class LegacyImpl {
     const epoch = this.#initEpoch;
     const toolId = this.#toolId;
     const type = this.#handle ? getType(this.#handle.doc()) : undefined;
-    const load = this.#loadCode(url, toolId ?? url, async () =>
-      loadPackageTool(await this.#pinPackageUrl(url), toolId, type)
+    const load = this.#loadCode(
+      url,
+      toolId ?? "this doc's tool",
+      async () => loadPackageTool(await this.#pinPackageUrl(url), toolId, type),
+      true
     );
     load?.then(
       (tool) => {
@@ -939,10 +951,12 @@ export class LegacyImpl {
   }
 
   // The loading dot and the load, or the card for a load of `id` that failed.
+  // `inPackage` when `id` is a `package-url`, so the card blames the package.
   #loadCode<T>(
     id: string,
     name: string,
-    load: () => Promise<T>
+    load: () => Promise<T>,
+    inPackage = false
   ): Promise<T> | undefined {
     const failed = this.#toolLoadError;
     if (failed?.id === id) {
@@ -950,6 +964,8 @@ export class LegacyImpl {
         toolFailedCard({
           name,
           error: failed.message,
+          inPackage,
+          missingFromPackage: failed.missing,
           onRetry: () => {
             // the failed load was forgotten, so this asks again
             this.#toolLoadError = null;
@@ -981,7 +997,9 @@ export class LegacyImpl {
         return;
       }
       const message = error instanceof Error ? error.message : String(error);
-      this.#toolLoadError = { id, message };
+      const missing =
+        error instanceof MissingPackageToolError ? error.missing : undefined;
+      this.#toolLoadError = { id, message, missing };
       if (this.#state === State.unable) this.#queueRender();
     });
   }

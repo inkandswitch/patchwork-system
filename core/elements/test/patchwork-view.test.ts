@@ -524,6 +524,19 @@ describe("patchwork-view (legacy mode)", () => {
       expect(live()[0].toolId).toBe("made");
     });
 
+    it("names the type when the package has no tool for it", async () => {
+      servePackage({ other: ["other-type"] });
+      const view = mountWith(
+        { "@patchwork": { type: "lonely-type" } },
+        { "package-url": "http://example.invalid/no-type-pkg/" }
+      );
+      await vi.waitFor(() =>
+        expect(card(view, "tool-failed")?.textContent).toContain(
+          "the package doesn't have a tool for lonely-type"
+        )
+      );
+    });
+
     it("says so when the package has no such tool", async () => {
       servePackage({ other: ["pkg-type"] });
       const view = mountWith(
@@ -535,9 +548,28 @@ describe("patchwork-view (legacy mode)", () => {
       );
       await vi.waitFor(() =>
         expect(card(view, "tool-failed")?.textContent).toContain(
-          "it doesn't have the missing tool"
+          "the package doesn't have missing"
         )
       );
+      expect(card(view, "tool-failed")?.textContent).not.toContain(
+        "can't load"
+      );
+    });
+
+    it("blames the package when it doesn't import", async () => {
+      vi.mocked(importPackage).mockRejectedValue(new Error("not json"));
+      const view = mountWith(
+        { "@patchwork": { type: "pkg-type" } },
+        {
+          "tool-id": "broken",
+          "package-url": "http://example.invalid/broken-pkg/",
+        }
+      );
+      await vi.waitFor(() => expect(card(view, "tool-failed")).toBeTruthy());
+      const text = card(view, "tool-failed")?.textContent;
+      expect(text).toContain("can't load the package containing broken");
+      expect(text).toContain("the package containing the tool");
+      expect(text).toContain("not json");
     });
 
     it("follows an automerge package without heads to its new heads", async () => {
