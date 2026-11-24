@@ -6,6 +6,7 @@ import {
   online,
   openTab,
   record,
+  said,
   serverConfirmed,
   setField,
 } from "./bench.js";
@@ -30,15 +31,27 @@ for (const mode of MODES) {
     await first.close();
 
     const started = Date.now();
-    const ok = await Promise.all([
-      awaitField(c, url, "n", 1).then(() => true, () => false),
-      setField(b, url, "n", 1).then(() => serverConfirmed(b, url)).then(() => true, () => false),
-    ]).then((results) => results.every(Boolean));
+    const failures = (
+      await Promise.all([
+        awaitField(c, url, "n", 1).then(
+          () => undefined,
+          (error) => `tab c: ${said(error)}`
+        ),
+        setField(b, url, "n", 1)
+          .then(() => serverConfirmed(b, url))
+          .then(
+            () => undefined,
+            (error) => `tab b: ${said(error)}`
+          ),
+      ])
+    ).filter((failure) => failure !== undefined);
+    const ok = failures.length === 0;
     record({
       metric: "sync still works after the first tab closes",
       mode,
       value: ok,
       unit: "ok",
+      note: ok ? undefined : failures.join("; "),
     });
     if (ok) {
       record({

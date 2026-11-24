@@ -90,6 +90,55 @@ describe("the boot status box", () => {
     status.done();
   });
 
+  it("goes on counting the packages still loading once the first view is up", () => {
+    const status = showBootStatus({ draw: true, stuckAfterMs: 30_000 });
+    status.update({
+      stage: "opening",
+      packages: { loaded: 4, total: 9, latest: "markdown" },
+    });
+    vi.advanceTimersByTime(1_000);
+    status.mounted();
+    expect(box()?.hasAttribute("data-mounted")).toBe(true);
+    expect(box()?.textContent).toContain("Loading packages");
+    expect(box()?.textContent).toContain("4 of 9 (markdown)");
+    status.update({
+      stage: "opening",
+      packages: { loaded: 8, total: 9, latest: "tldraw" },
+    });
+    expect(box()?.textContent).toContain("8 of 9 (tldraw)");
+    status.update({
+      stage: "opening",
+      packages: { loaded: 9, total: 9, latest: "chat" },
+    });
+    expect(box()).toBe(null);
+  });
+
+  it("isn't stuck once the first view is up, and gives up on a package that never loads", () => {
+    const onStuck = vi.fn();
+    const status = showBootStatus({
+      draw: true,
+      stuckAfterMs: 30_000,
+      onStuck,
+    });
+    status.update({ stage: "opening", packages: { loaded: 4, total: 9 } });
+    vi.advanceTimersByTime(2_000);
+    status.mounted();
+    vi.advanceTimersByTime(28_000);
+    expect(onStuck).not.toHaveBeenCalled();
+    expect(box()?.querySelector("button")).toBe(null);
+    expect(box()?.textContent).toContain("4 of 9");
+    vi.advanceTimersByTime(2_000);
+    expect(box()).toBe(null);
+  });
+
+  it("goes as soon as the first view is up if every package is in", () => {
+    const status = showBootStatus({ draw: true, stuckAfterMs: 30_000 });
+    status.update({ stage: "opening", packages: { loaded: 9, total: 9 } });
+    vi.advanceTimersByTime(1_000);
+    status.mounted();
+    expect(box()).toBe(null);
+  });
+
   it("is never stuck without a timeout", () => {
     const onStuck = vi.fn();
     const status = showBootStatus({ draw: true, onStuck });

@@ -11,6 +11,7 @@ import {
   probeServerPeer,
   record,
   rendererMemory,
+  said,
   serverConfirmed,
   setField,
   timeFind,
@@ -123,6 +124,7 @@ for (const mode of MODES) {
     const missed = pages.map(() => 0);
     const confirmMs: number[] = [];
     let unconfirmed = 0;
+    let firstUnconfirmed: string | undefined;
     const { stall } = await withStall(creator, async () => {
       for (let r = 0; r < ROUNDS; r++) {
         const editor = pages[(r * 7) % N];
@@ -140,7 +142,10 @@ for (const mode of MODES) {
         const [arrived, confirmed] = await Promise.all([
           Promise.all(seen),
           settled(
-            serverConfirmed(editor, url, EDIT_TIMEOUT_MS),
+            serverConfirmed(editor, url, EDIT_TIMEOUT_MS).catch((error) => {
+              firstUnconfirmed ??= `edit ${r + 1}: ${said(error)}`;
+              throw error;
+            }),
             EDIT_TIMEOUT_MS + 1_000
           ),
         ]);
@@ -212,8 +217,11 @@ for (const mode of MODES) {
       bootServerLastMs: maxOrNull(connected),
     };
 
+    const confirmNote = unconfirmed
+      ? `${unconfirmed} of ${ROUNDS} edits unconfirmed; the first, ${firstUnconfirmed ?? "timed out"}`
+      : undefined;
     const rows: Array<
-      [string, number | boolean | null, "ms" | "MB" | "n" | "ok"]
+      [string, number | boolean | null, "ms" | "MB" | "n" | "ok", string?]
     > = [
       [`open ${N} tabs, wall clock`, result.openMs, "ms"],
       [`boot → repo, last of ${N} tabs`, result.bootRepoMs, "ms"],
@@ -229,15 +237,15 @@ for (const mode of MODES) {
       [`edit → seen in ${N - 1} tabs: slowest tab`, result.seenSlowestMs, "ms"],
       [`…tabs that saw every edit (of ${N - 1})`, result.tabsSawEveryEdit, "n"],
       [`edit → server holds our heads (${N} tabs)`, result.confirmMedianMs, "ms"],
-      [`…server confirmed every edit (${N} tabs)`, result.allConfirmed, "ok"],
+      [`…server confirmed every edit (${N} tabs)`, result.allConfirmed, "ok", confirmNote],
       [`…longest main-thread stall in tab 0 during the edits`, result.stallMaxMs, "ms"],
       [`sync rounds per sibling edit, non-editing tab`, result.roundsPerSiblingEditInNonEditingTab, "n"],
       [`server bytes received per edit per tab`, result.serverBytesPerEditPerTab, "n"],
       [`storage writes (saveBatch) per edit per tab`, result.storageWritesPerEditPerTab, "n"],
       [`worker errors (${N} tabs)`, result.workerErrors, "n"],
     ];
-    for (const [metric, value, unit] of rows) {
-      record({ metric, mode, value, unit });
+    for (const [metric, value, unit, note] of rows) {
+      record({ metric, mode, value, unit, note });
     }
     console.log(`SCALE_RESULT ${JSON.stringify(result)}`);
   });

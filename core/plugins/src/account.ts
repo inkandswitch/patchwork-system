@@ -23,6 +23,9 @@ export type AccountDoc = {
   rootFolderUrl?: AutomergeUrl;
   moduleSettingsUrl?: AutomergeUrl;
   contactUrl?: AutomergeUrl;
+  /** A private doc per tool id, made on first use by the frame's
+      `patchwork:tool-storage` provider. */
+  toolStorage?: Record<string, AutomergeUrl>;
 };
 
 export type AccountCreator<D = AccountDoc> = (

@@ -1,5 +1,111 @@
 # @inkandswitch/patchwork
 
+## 0.11.1
+
+### Patch Changes
+
+- cfa22a0: Theming is part of the host now, not something a package has to provide. `setup()` loads the stylesheet of every registered `patchwork:theme` plugin. It sets the active theme as the `theme` attribute on `<html>` and keeps it in step with the computer's light and dark mode. It also answers `patchwork:current-theme` with the active theme id, so isolated views can follow it.
+
+  The active theme is the account's choice for the current mode: the `light` and `dark` of the doc at `accountDoc.toolStorage["theme-preferences"]`. Without one, it's the site's default from `<html data-theme-light="…" data-theme-dark="…">`, and failing that `lychee` or `gloom`. The host reads that doc and never writes or creates it. The tools that let you pick a theme still write `light` and `dark` into it, as before.
+
+  `@inkandswitch/patchwork-plugins` exports:
+
+  - `ThemeDescription` and `Theme`, the `patchwork:theme` plugin type, now in `RegistryTypeMap`
+  - `getActiveTheme()` and `onActiveThemeChange(listener)`, for the active theme and each mode's theme
+  - `themeDefaults()`, `currentThemeMode()` and `resolveTheme(preferences, mode, defaults)`, for how the choice is made
+  - `followCurrentTheme(element)`, for a view that can't see the host's `<html>`: it applies the theme from `patchwork:current-theme`
+  - `startThemes()`, `followThemePreferences(repo, account)`, `loadThemeStylesheets()` and `serveCurrentTheme(root)`, which `setup()` calls
+  - `CURRENT_THEME_SELECTOR` and `THEME_PREFERENCES_TOOL_ID`
+
+  `AccountDoc` gains `toolStorage?: Record<string, AutomergeUrl>`. `@inkandswitch/patchwork-plugins` now depends on `@inkandswitch/patchwork-providers`.
+
+- Updated dependencies [fef3890]
+- Updated dependencies [cfa22a0]
+  - @inkandswitch/patchwork-filesystem@0.2.21
+  - @inkandswitch/patchwork-bootloader@0.9.9
+  - @inkandswitch/patchwork-plugins@1.2.8
+
+## 0.11.0
+
+### Minor Changes
+
+- 40f3819: The fallback theme lives here now. `@inkandswitch/patchwork/global.css` imports `theme.css` (also exported as `@inkandswitch/patchwork/theme.css`): every `--studio-*`, `--editor-*`, `--text-editor-*` and `--syntax-*` token, following the computer's light or dark mode, in `@layer patchwork` so any theme's `[theme="…"]` rules win over it. The generated `index.html` links `global.css` as a blocking stylesheet, so the tokens are there from the first frame, and the page no longer flashes white in dark mode between a theme setting the `theme` attribute and its stylesheet arriving. The `html:not([theme])` black backdrop in `global.css` is gone, since the theme's own background now covers it. It came from the theming package in pkg-base, which no longer ships it.
+
+## 0.10.4
+
+### Patch Changes
+
+- 3b28106: The vite patches plugin no longer fails the build when it meets an `@automerge/automerge-repo` version it has no patch for. It patches the ARK 0.6 stack's exactly pinned copy and leaves every other copy alone, so a site that installs `@automerge/automerge-repo-keyhive@0.8`, which depends on its own `@automerge/automerge-repo@2.6.0-subduction.49`, builds without a local patch to the plugin.
+
+## 0.10.3
+
+### Patch Changes
+
+- 3600173: The boot status box says "Finding account" during the identity stage, instead of "Opening your identity".
+- 523fe25: The generated `index.html` declares `<meta name="color-scheme" content="light dark">`, so the browser's own canvas is dark in dark mode from the first frame. This covers the gap the dark loading backdrop leaves: once a theme sets the `theme` attribute on `<html>`, the backdrop rule stops matching, but the theme's stylesheet may not have loaded yet.
+- 3600173: The loading pulse no longer flashes white in dark mode. Under `prefers-color-scheme: dark` the page is black until a theme sets the `theme` attribute on `<html>`, so the pulse's low-opacity frames no longer let the browser's white canvas through. The rule ships in `@inkandswitch/patchwork/global.css`, which the generated `index.html` links in `<head>`, so it holds from the first frame; the loading screen's own styles carry it too, for hosts that write their own HTML.
+- Updated dependencies [e472651]
+- Updated dependencies [0f3687e]
+- Updated dependencies [afd6c93]
+  - @inkandswitch/patchwork-bootloader@0.9.8
+  - @inkandswitch/patchwork-filesystem@0.2.20
+
+## 0.10.2
+
+### Patch Changes
+
+- 2710d80: `createRepo` formats the tab's subduction verifying key as hex by hand, not with `Uint8Array.prototype.toHex`. `toHex` arrived in Safari 18.2, so on Safari 18.1 and the iOS versions that ship with it, Patchwork failed to boot at that log line.
+- Updated dependencies [b5e066f]
+- Updated dependencies [e3be145]
+  - @inkandswitch/patchwork-elements@6.2.3
+
+## 0.10.1
+
+### Patch Changes
+
+- 5a3e423: The boot status box in the corner stays up after the first view mounts, while the rest of the packages are still loading, and says how many are in and which loaded last. It goes once every listed package has loaded, or 30s after the view mounted if one never does. Since boot started opening the first view before every package was in, the box went away while packages were still loading behind it. Once the view is up the box no longer counts towards being stuck, and drops its reload button.
+
+## 0.10.0
+
+### Minor Changes
+
+- c39ed0e: Boot says what it's doing. A site that doesn't pass `onProgress` gets a small box in the corner, shown once boot has taken a second, naming the step boot is on, how many packages have loaded, and what the public reader is doing; it goes away when the root view mounts (or, with `routing: false`, when `setup()` resolves). A site that passes `onProgress` draws its own and gets no box.
+
+  `timeout` no longer rejects `setup()`. A boot that passes it, counted from `setup()`, is reported as stuck instead — `BootProgress.stuck` is `true`, and the box says it's still not ready, under the step boot is on, with a reload button — and it carries on. If it gets there after all, the box goes away and `onProgress` hears `stuck: false`, rather than the site's error screen sitting over a working app. `setup()` still rejects for a boot that actually fails.
+
+### Patch Changes
+
+- a7bf755: Boot loads first the packages for what's about to be on screen. Each visit stores in localStorage (`patchwork:load-order:<accountKey>`) which tools and components every settings entry provided, and which ones the mounted `<patchwork-view>`s showed, by depth from the outermost. The next boot loads the packages behind the hash's `frame` and `tool` first, then the root view's, then the views inside it, and so on, one batch at a time, then everything else. It starts loading each of those tools as soon as it registers, and opens the root view once they've all registered, without waiting for the rest of the site's packages. If a package fails, comes back without a tool it was expected to provide, or a batch takes more than 3s, everything still held back loads at once, and the root view waits for all of the site's packages as before. With nothing stored, or a hash naming a tool no package provided last time, boot works as it did.
+
+  `ModuleWatcher` gets `prioritize(batches)`, with the new `LoadBatch` and `PluginRef` types. Call it straight after constructing the watcher. While a plan is running, `addUrl` waits only for the constructor's sources to be read, not for their packages to load, since the plan may want the new source's packages first.
+
+  The tab's title now names a document whose datatype registers after the document opened. Before, it stayed on the site's name.
+
+- 9f5930b: Removing a package from settings now removes its tools and datatypes. They were registered under the heads-pinned url they were loaded from and unregistered by the bare settings entry, so nothing matched until a reload. `unregisterPlugins` now removes everything from the same package at any heads, and `registerPlugins` first removes whatever an earlier version of the same package registered that the new one no longer provides (a renamed or dropped id); ids the new version still provides are replaced in place, so a mounted view reloads once.
+
+  `ModuleWatcher`'s `onUnload` is now called with `(moduleKey, importUrl)`: the settings entry, and the url the module was last loaded from. A package published as a branches doc loads from its default branch, a different document, so unregister by `importUrl`. When the default branch moves to another document, the old branch's plugins are unloaded before the new ones register.
+
+  A package whose first lookup failed (the service worker or automerge worker still booting) is now looked up again on the import retry schedule; it used to stay unloaded until the package changed twice. And a module listed as a service-worker url for a file inside a package (`…/automerge%3A<id>/path/entry.js`) now reloads that same file at the new heads; since September 2025 a reload had imported the package's root entry point instead.
+
+- f0851d4: The tab's title now follows the open document: it updates when the document is renamed, a slow lookup for a document you've already left can no longer overwrite the title of the one you're on, and the previous document's title isn't kept while the next one loads. Going Back to a hash with no document puts the site's title back, and going Back past a `frame=` link puts the home frame back. Older link shapes (`#automerge:<id>` and big-patchwork `<slug>--<id>`) are rewritten in place, so Back steps over them instead of landing on a link that rewrites itself forward again.
+- Updated dependencies [a7bf755]
+- Updated dependencies [c96c4f1]
+- Updated dependencies [8ee14a5]
+- Updated dependencies [9cf7799]
+- Updated dependencies [e7de26b]
+- Updated dependencies [d61277c]
+- Updated dependencies [9f5930b]
+- Updated dependencies [66b30ec]
+- Updated dependencies [a2a7862]
+- Updated dependencies [a8c7202]
+- Updated dependencies [3f93b87]
+- Updated dependencies [594d83b]
+  - @inkandswitch/patchwork-filesystem@0.2.19
+  - @inkandswitch/patchwork-bootloader@0.9.7
+  - @inkandswitch/patchwork-plugins@1.2.7
+  - @inkandswitch/patchwork-providers@0.5.5
+  - @inkandswitch/patchwork-elements@6.2.1
+
 ## 0.9.7
 
 ### Patch Changes

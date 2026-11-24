@@ -48,17 +48,17 @@ minimumReleaseAgeExclude:
 
 catalog:
   "@automerge/automerge": 3.5.0
-  "@automerge/automerge-repo": 2.6.0-subduction.49
+  "@automerge/automerge-repo": npm:@chee/automerge-repo@2.6.0-rabbit.1
   "@automerge/automerge-repo-keyhive": 0.8.0-alpha.1
-  "@automerge/automerge-repo-network-broadcastchannel": 2.6.0-subduction.49
-  "@automerge/automerge-repo-network-messagechannel": 2.6.0-subduction.49
-  "@automerge/automerge-repo-network-websocket": 2.6.0-subduction.49
-  "@automerge/automerge-repo-react-hooks": 2.6.0-subduction.49
-  "@automerge/automerge-repo-storage-indexeddb": 2.6.0-subduction.49
-  "@automerge/automerge-repo-storage-nodefs": 2.6.0-subduction.49
-  "@automerge/automerge-subduction": 0.20.1
+  "@automerge/automerge-repo-network-broadcastchannel": npm:@chee/automerge-repo-network-broadcastchannel@2.6.0-rabbit.1
+  "@automerge/automerge-repo-network-messagechannel": npm:@chee/automerge-repo-network-messagechannel@2.6.0-rabbit.1
+  "@automerge/automerge-repo-network-websocket": npm:@chee/automerge-repo-network-websocket@2.6.0-rabbit.1
+  "@automerge/automerge-repo-react-hooks": npm:@chee/automerge-repo-react-hooks@2.6.0-rabbit.1
+  "@automerge/automerge-repo-storage-indexeddb": npm:@chee/automerge-repo-storage-indexeddb@2.6.0-rabbit.1
+  "@automerge/automerge-repo-storage-nodefs": npm:@chee/automerge-repo-storage-nodefs@2.6.0-rabbit.1
+  "@automerge/automerge-subduction": 0.21.0
   "@automerge/react": 2.6.0-subduction.49
-  "@automerge/vanillajs": 2.6.0-subduction.49
+  "@automerge/vanillajs": npm:@chee/automerge-vanillajs@2.6.0-rabbit.1
   "@codemirror/commands": ^6.10.4
   "@codemirror/language": ^6.12.4
   "@codemirror/state": ^6.7.1
@@ -79,4 +79,3 @@ allowBuilds:
 
 patchedDependencies:
   '@automerge/automerge-repo@2.6.0-subduction.48': patches/@automerge__automerge-repo@2.6.0-subduction.48.patch
-  '@automerge/automerge-repo@2.6.0-subduction.49': patches/@automerge__automerge-repo@2.6.0-subduction.49.patch

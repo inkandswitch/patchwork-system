@@ -2,6 +2,7 @@ import { expect, test } from "@playwright/test";
 import {
   createDoc,
   findDocField,
+  navigate,
   waitForRepoReady,
   waitForServiceWorkerActive,
 } from "./helpers.js";
@@ -14,7 +15,7 @@ import {
 
 test("a doc outlives the tab that created it", async ({ context }) => {
   const tabA = await context.newPage();
-  await tabA.goto("/");
+  await navigate(tabA, "/");
   await waitForServiceWorkerActive(tabA);
   await waitForRepoReady(tabA);
 
@@ -26,7 +27,7 @@ test("a doc outlives the tab that created it", async ({ context }) => {
   // Confirm the doc has left tab A's memory before closing it: a find from a
   // second tab proves it.
   const tabB = await context.newPage();
-  await tabB.goto("/");
+  await navigate(tabB, "/");
   await waitForRepoReady(tabB);
   await expect
     .poll(async () => findDocField<string>(tabB, url, "title"), {
@@ -37,7 +38,7 @@ test("a doc outlives the tab that created it", async ({ context }) => {
   await tabA.close();
 
   const tabC = await context.newPage();
-  await tabC.goto("/");
+  await navigate(tabC, "/");
   await waitForRepoReady(tabC);
 
   const doc = await tabC.evaluate(async (u) => {

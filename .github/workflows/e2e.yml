@@ -20,7 +20,7 @@ env:
 jobs:
   e2e:
     name: e2e (${{ matrix.browser }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # Playwright 1.59 has no ubuntu 26.04 deps; unpin once on Playwright >= 1.65
     strategy:
       fail-fast: false
       matrix:

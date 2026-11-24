@@ -30,6 +30,9 @@ export function buildHtml(options: PatchworkSiteOptions): string {
   const head: string[] = [
     `<meta charset="UTF-8" />`,
     `<meta name="viewport" content="width=device-width, initial-scale=1.0" />`,
+    // The UA canvas follows the OS from the first frame, and keeps following it
+    // between a theme setting the `theme` attribute and its stylesheet arriving.
+    `<meta name="color-scheme" content="light dark" />`,
     `<title>${escapeHtml(title)}</title>`,
     `<link rel="stylesheet" href="@inkandswitch/patchwork/global.css" />`,
   ];

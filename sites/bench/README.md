@@ -66,6 +66,10 @@ keep a phantom peer. `churn.spec` is where that would show.
 
 `?storage=worker` swaps in-thread IndexedDB for the IndexedDB worker adapter in
 the bare per-tab modes; `storage-adapter.spec` compares the two in `pertab`.
+`?storage=memory` drops storage altogether (subduction keeps its blobs in
+memory); the stand-ins for another client — the server probe, `open.spec`'s
+seeder, the stranger — run that way, since WebKit's IndexedDB in a just-made
+context now and then fails and left them unable to push or fetch a doc.
 `?mesh=1` and `?signer=shared` add patchwork's old siblings mesh and its
 origin-wide signer (`@inkandswitch/patchwork-bootloader/signer`) to any bare
 mode, so the shipped topology can be taken apart one piece at a time

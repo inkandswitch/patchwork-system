@@ -27,6 +27,18 @@ export async function waitForRepoReady(page: Page, timeoutMs = 30_000): Promise<
   });
 }
 
+export function navigate(
+  page: Page,
+  url: string,
+  options?: Parameters<Page["goto"]>[1],
+) {
+  return page.goto(url, { waitUntil: "domcontentloaded", ...options });
+}
+
+export function reload(page: Page, options?: Parameters<Page["reload"]>[0]) {
+  return page.reload({ waitUntil: "domcontentloaded", ...options });
+}
+
 export async function waitForServiceWorkerActive(
   page: Page,
   timeoutMs = 30_000,

@@ -36,10 +36,12 @@ import {
   type DatatypeDescription,
   type LoadedDatatype,
   createDocOfDatatype2,
+  followThemePreferences,
   getRegistry,
   pluginImportUrls,
   registerPlugins,
   resolveAccountHandle,
+  startThemes,
   unregisterPlugins,
 } from "@inkandswitch/patchwork-plugins";
 import * as plugins from "@inkandswitch/patchwork-plugins";
@@ -153,7 +155,8 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
   const done = doSetup(options, progress, report, () => {
     // A site's own stuck screen goes on hearing it isn't any more.
     if (progress.stuck) report({ stuck: false });
-    status.done();
+    // The box stays up while the rest of the packages load.
+    status.mounted();
   });
   void done.then(
     () => log("patchwork setup complete"),
@@ -179,6 +182,10 @@ async function doSetup(
   const routing = options.routing ?? "hash";
 
   log("booting", options);
+
+  // The site's default theme for now, and every theme's stylesheet as its
+  // package registers. The account's choice joins once the account is open.
+  startThemes();
 
   if (!options.repo) await initWasm();
 
@@ -345,11 +352,17 @@ async function doSetup(
   })) as DocHandle<AccountDoc>;
   provenanceAccount ??= accountDocHandle;
 
+  followThemePreferences(repo, accountDocHandle);
+
   // Once the account's packages are listed too, the list is whole, and a
   // package that's left it since last visit is forgotten.
-  wireModuleSettings(accountDocHandle, moduleWatcher, () => {
-    if (listed) loadOrder.keepOnly(listed);
-  });
+  const accountPackagesLoaded = wireModuleSettings(
+    accountDocHandle,
+    moduleWatcher,
+    () => {
+      if (listed) loadOrder.keepOnly(listed);
+    }
+  );
 
   const toolsLoaded = moduleWatcher.doneLoading.then(
     () =>
@@ -387,7 +400,10 @@ async function doSetup(
     });
   }
 
-  installReveal(rootElement, router, toolsLoaded, finished);
+  // The site's packages and the account's, each loaded or given up on.
+  const allLoaded = Promise.allSettled([toolsLoaded, accountPackagesLoaded]);
+
+  installReveal(rootElement, router, toolsLoaded, allLoaded, finished);
   // Without routing the site puts its own view on screen, so boot is over
   // once setup is.
   if (!router) finished();
@@ -450,6 +466,7 @@ function installReveal(
   rootElement: HTMLElement,
   router: Router | undefined,
   toolsLoaded: Promise<unknown>,
+  allLoaded: Promise<unknown>,
   onMounted: () => void
 ): void {
   let revealed = false;
@@ -459,8 +476,25 @@ function installReveal(
     rootElement.style.visibility = "visible";
   };
 
+  // A root view with no tool for its doc (the account's frame tool, say)
+  // puts a card up instead. Once every package has loaded, nothing's left to
+  // bring that tool, so the card is the page: show it, and boot is over,
+  // rather than hide it until the reveal timeout and then call boot stuck.
+  let showingCard = false;
+  rootElement.addEventListener("patchwork:no-tool", (event) => {
+    if (event.target !== rootElement) return;
+    showingCard = true;
+    void allLoaded.then(() => {
+      if (!showingCard) return;
+      log("root view has no tool, and every package has loaded");
+      onMounted();
+      reveal();
+    });
+  });
+
   rootElement.addEventListener("patchwork:mounted", (event) => {
     if (event.target !== rootElement) return;
+    showingCard = false;
     log("root element mounted");
     onMounted();
     if (router) {
@@ -527,23 +561,25 @@ function onModuleLoaded(name: string, mod: any): void {
 }
 
 /**
- * Feed the account's module settings document to the ModuleWatcher.
+ * Feed the account's module settings document to the ModuleWatcher. Resolves
+ * once that list's packages have loaded or given up.
  */
 function wireModuleSettings(
   accountDocHandle: DocHandle<AccountDoc>,
   moduleWatcher: ModuleWatcher,
   onLoaded: () => void
-): void {
+): Promise<void> {
+  let wired: Promise<void> | undefined;
   const wire = () => {
     const url = accountDocHandle.doc()?.moduleSettingsUrl;
     if (!url) return;
-    void moduleWatcher.addUrl("user", url).then(onLoaded);
+    wired = moduleWatcher.addUrl("user", url).then(onLoaded);
     accountDocHandle.off("change", wire);
   };
   wire();
-  if (!accountDocHandle.doc()?.moduleSettingsUrl) {
-    accountDocHandle.on("change", wire);
-  }
+  if (!wired) accountDocHandle.on("change", wire);
+  // An account that names no packages yet has none to wait for.
+  return wired ?? Promise.resolve();
 }
 
 // The tab's own Repo hears the server's heads directly, so this is a filter
