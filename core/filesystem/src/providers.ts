@@ -40,10 +40,10 @@ export function asLink(value: unknown): AutomergeUrl | undefined {
   return typeof url === "string" && isValidAutomergeUrl(url) ? url : undefined;
 }
 
+// A map or a list: a list's children are named by index.
 const isObject = (node: unknown): node is Record<string, unknown> =>
   !!node &&
   typeof node === "object" &&
-  !Array.isArray(node) &&
   !(node instanceof Uint8Array) &&
   !isImmutableString(node);
 
