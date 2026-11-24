@@ -5,6 +5,7 @@ import {
   HANDOFF_CHANNEL,
   type AutomergeWorkerMissingMessage,
   type HandoffReplyMessage,
+  type HandoffRelayMessage,
   type HandoffRequestMessage,
   type ResolveAcceptedMessage,
   type ResolveRequestMessage,
@@ -167,6 +168,17 @@ type PendingHandoff = {
 };
 
 const pendingHandoffs = new Map<string, PendingHandoff>();
+
+function resolveHandoffReply(data: HandoffRelayMessage) {
+  const pending = pendingHandoffs.get(data.reply.id);
+  if (!pending) return log(`no pending handoff for id ${data.reply.id}`);
+  pending.resolvers.resolve(data.reply);
+}
+
+self.addEventListener("message", (event) => {
+  const data = event.data as HandoffRelayMessage;
+  if (data?.type === "handoff-reply") resolveHandoffReply(data);
+});
 
 handoffChannel.addEventListener("message", (event) => {
   const data = event.data;

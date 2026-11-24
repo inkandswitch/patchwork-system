@@ -119,6 +119,20 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
   {
     debugging: workerDebugging,
     onMessage(event) {
+      const data = event.data;
+      if (data?.type === "handoff-reply") {
+        const reply = data.reply;
+        const body =
+          reply?.type === "response" &&
+          reply.response.body instanceof Uint8Array
+            ? reply.response.body
+            : undefined;
+        navigator.serviceWorker.controller?.postMessage(
+          data,
+          body ? [body.buffer] : []
+        );
+        return;
+      }
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);
     },
     // A replacement knows nothing of the public reader.

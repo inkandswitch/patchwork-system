@@ -121,6 +121,12 @@ export interface HandoffAbortMessage {
 export type HandoffReplyMessage =
   HandoffCachedMessage | HandoffResponseMessage | HandoffAbortMessage;
 
+/** Automerge worker → tab → service worker: relay a reply with transferable body bytes. */
+export interface HandoffRelayMessage {
+  type: "handoff-reply";
+  reply: HandoffReplyMessage;
+}
+
 /**
  * Service worker → a tab, posted to it with a port to reply on: resolve this
  * request with your own Repo. The same fields as a

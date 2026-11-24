@@ -38,7 +38,15 @@ const syncServer =
     ? __SYNC_SERVER__
     : { url: "wss://subduction.sync.inkandswitch.com" };
 
+const handoffPorts = new Set<MessagePort>();
+
 const control = startWorkerControl("automerge-protocol-handler-worker", {
+  onConnect(port) {
+    handoffPorts.add(port);
+  },
+  onClose(port) {
+    handoffPorts.delete(port);
+  },
   onRestart: drainForRestart,
   // A tab introducing us to the public reader (see setup.ts).
   onMessage(data) {
@@ -301,7 +309,19 @@ async function handleHandoffRequest(message: HandoffRequestMessage) {
       log(`ignoring handoff ${message.id} for a url that isn't automerge:`);
       return;
     }
-    handoffChannel.postMessage(reply);
+    const port = handoffPorts.values().next().value as MessagePort | undefined;
+    if (!port) {
+      log(`no tab available to relay handoff ${message.id}`);
+      return;
+    }
+    const body =
+      reply.type === "response" && reply.response.body instanceof Uint8Array
+        ? reply.response.body
+        : undefined;
+    port.postMessage(
+      { type: "handoff-reply", reply },
+      body ? [body.buffer] : []
+    );
   } finally {
     handoffFinished();
   }
