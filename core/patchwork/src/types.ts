@@ -10,6 +10,7 @@ import type {
 } from "@inkandswitch/patchwork-plugins";
 import type * as pluginsNS from "@inkandswitch/patchwork-plugins";
 import type { PublicReaderStatus } from "@inkandswitch/patchwork-bootloader";
+import type { PatchworkRoute } from "./router.js";
 
 export type PluginsApi = typeof pluginsNS;
 
@@ -102,11 +103,11 @@ export interface PatchworkOptions {
 
   /**
    * How document navigation maps onto the URL. `"hash"` (the default) drives
-   * the root view from `location.hash`, or from `window.patchworkRoute` when
-   * the site has put one there. `false` installs no router — call
+   * the root view from `location.hash`. Pass a {@link PatchworkRoute} to use
+   * the site's own address format instead. `false` installs no router — call
    * `patchwork.open()` directly.
    */
-  routing?: "hash" | false;
+  routing?: "hash" | PatchworkRoute | false;
 
   /**
    * Milliseconds before boot counts as stuck, if it hasn't finished: the root

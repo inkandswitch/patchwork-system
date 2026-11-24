@@ -323,6 +323,7 @@ async function doSetup(
       accountDocHandle,
       siteTitle,
       frameToolId: options.frameToolId,
+      route: routing === "hash" ? undefined : routing,
     });
   }
 
