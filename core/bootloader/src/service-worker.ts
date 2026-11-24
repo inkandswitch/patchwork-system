@@ -539,7 +539,7 @@ const IMMUTABLE_STATUSES = [200, 203, 204];
 function isImmutable(response: Response): boolean {
   return (
     IMMUTABLE_STATUSES.includes(response.status) &&
-    !/(^|,)\s*no-store(\s*,|$)/.test(response.headers.get("cache-control") ?? "")
+    !/(^|,)\s*no-store(\s*,|$)/i.test(response.headers.get("cache-control") ?? "")
   );
 }
 
