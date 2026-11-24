@@ -5,11 +5,12 @@
 
 import type {
   BackendOperation,
-  EphemeralEnvelope,
+  ExtensionEvent,
   RecordBatch,
   SedimentreeEvent,
   SedimentreeId,
 } from "@automerge/automerge-repo/sedimentree";
+import type { EphemeralEnvelope } from "@automerge/automerge-repo-subduction";
 
 export type BackendCall =
   | { op: "create"; records: RecordBatch; documentId?: SedimentreeId }
@@ -52,7 +53,12 @@ export type SerializedError = {
 /** Worker → tab. */
 export type HubMessage =
   | { type: "reply"; call: number; value?: unknown; error?: SerializedError }
-  | { type: "event"; session: number; event: SedimentreeEvent }
+  /** A session's event: the core ones, and extensions' (ephemeral messages). */
+  | {
+      type: "event";
+      session: number;
+      event: SedimentreeEvent | ExtensionEvent;
+    }
   | { type: "end"; session: number; error?: SerializedError }
   /** Whether the worker is connected to the sync server; sent on every change. */
   | { type: "status"; connected: boolean };

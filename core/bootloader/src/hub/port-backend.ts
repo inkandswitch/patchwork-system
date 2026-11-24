@@ -6,13 +6,17 @@
 
 import {
   BackendError,
-  type EphemeralEnvelope,
+  provides,
+  type EventFor,
   type RecordBatch,
   type SedimentreeBackend,
-  type SedimentreeEvent,
   type SedimentreeId,
-  type SedimentreeSession,
+  type SessionFor,
 } from "@automerge/automerge-repo/sedimentree";
+import {
+  ephemeral,
+  type EphemeralEnvelope,
+} from "@automerge/automerge-repo-subduction";
 import { EventQueue } from "./event-queue.js";
 import type {
   BackendCall,
@@ -31,15 +35,24 @@ type Pending = {
   reject(error: unknown): void;
 };
 
+/** What the worker sends on a tab's session. */
+export type PortEvent = EventFor<PortBackend>;
+
 type Session = {
   documentId: SedimentreeId;
-  queue: EventQueue;
+  queue: EventQueue<PortEvent>;
   /** Opened on some worker already, so another one's initial load is old news. */
   opened: boolean;
   ready: boolean;
 };
 
 export class PortBackend implements SedimentreeBackend {
+  /**
+   * Handles get `broadcast()` and `ephemeral-message`, as they would on the
+   * worker's SubductionBackend: publishing goes to the worker, and its
+   * ephemeral events come back on the session like any other.
+   */
+  readonly handleExtensions = provides(ephemeral);
   #port: MessagePort | undefined;
   #nextCall = 0;
   #nextSession = 0;
@@ -148,11 +161,11 @@ export class PortBackend implements SedimentreeBackend {
     return this.call({ op: "deleteLocal", documentId });
   }
 
-  open(documentId: SedimentreeId): SedimentreeSession {
+  open(documentId: SedimentreeId): SessionFor<PortBackend> {
     const session = this.#nextSession++;
     const state: Session = {
       documentId,
-      queue: new EventQueue(),
+      queue: new EventQueue<PortEvent>(),
       opened: false,
       ready: false,
     };
@@ -215,7 +228,9 @@ export class PortBackend implements SedimentreeBackend {
       case "event": {
         const s = this.#sessions.get(message.session);
         if (!s) return;
-        const event = this.#resumeEvent(s, message.event);
+        // The worker's SubductionBackend sends the events ours declares; an
+        // extension kind we don't list is dropped by the Repo.
+        const event = this.#resumeEvent(s, message.event as PortEvent);
         if (event) s.queue.push(event);
         return;
       }
@@ -239,7 +254,7 @@ export class PortBackend implements SedimentreeBackend {
   readonly #loaded = new WeakSet<Session>();
 
   // A replacement's initial load is old news only after the first completed.
-  #resumeEvent(s: Session, event: SedimentreeEvent): SedimentreeEvent | null {
+  #resumeEvent(s: Session, event: PortEvent): PortEvent | null {
     if (event.type === "local-load-complete") {
       const loaded = this.#loaded.has(s);
       this.#loaded.add(s);

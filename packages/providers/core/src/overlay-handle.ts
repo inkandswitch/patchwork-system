@@ -252,8 +252,14 @@ export class OverlayHandle<T> {
 
   // Peers are the document's, so these read no path or heads: a derived
   // handle's are its root's.
+  // `broadcast` is the ephemeral extension's, which a Repo's handles have
+  // only when its backend provides it (Patchwork's do; an in-memory scratch
+  // repo's don't). Without it there is no one to send to.
   broadcast(message: unknown): void {
-    this.#syncHandle().broadcast(message);
+    const sync = this.#syncHandle();
+    if ("broadcast" in sync && typeof sync.broadcast === "function") {
+      sync.broadcast(message);
+    }
   }
 
   getSyncInfo(peerId: PeerId): SyncInfo | undefined {

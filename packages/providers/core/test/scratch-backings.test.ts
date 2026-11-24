@@ -7,6 +7,11 @@ import {
   type DocHandle,
   type PeerId,
 } from "@automerge/automerge-repo";
+import { MemoryBackend, provides } from "@automerge/automerge-repo/sedimentree";
+import {
+  ephemeral,
+  type EphemeralSpec,
+} from "@automerge/automerge-repo-subduction";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -20,13 +25,19 @@ import { backedBy } from "./harness.js";
 
 type Note = { title: string };
 
+// The stored repo stands in for Patchwork's, whose handles have the ephemeral
+// extension (`broadcast`, `ephemeral-message`); the scratch repo's don't.
+class EphemeralMemoryBackend extends MemoryBackend {
+  readonly handleExtensions = provides(ephemeral);
+}
+
 const scratch = getScratchRepo();
 let repo: Repo;
 let note: DocHandle<Note>;
 const teardowns: (() => void)[] = [];
 
 beforeEach(async () => {
-  repo = new Repo();
+  repo = new Repo({ backend: new EphemeralMemoryBackend() });
   note = await repo.create<Note>({ title: "note" });
 });
 
@@ -332,12 +343,15 @@ describe("scratch backings: peer traffic", () => {
     ]);
 
     const sent: string[] = [];
-    vi.spyOn(note, "broadcast").mockImplementation(() => {
+    vi.spyOn(
+      note as DocHandle<Note, EphemeralSpec>,
+      "broadcast"
+    ).mockImplementation(() => {
       sent.push("stored");
     });
-    vi.spyOn(scratchDoc, "broadcast").mockImplementation(() => {
-      sent.push("scratch");
-    });
+    // The scratch repo's handles can't broadcast: sent to it, the messages
+    // would go nowhere, and `sent` would miss them.
+    expect("broadcast" in scratchDoc).toBe(false);
     handle.broadcast({ hello: 1 });
     title.broadcast({ hello: 2 });
     expect(sent).toEqual(["stored", "stored"]);

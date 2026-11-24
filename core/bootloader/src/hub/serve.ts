@@ -6,6 +6,7 @@ import type {
   SedimentreeBackend,
   SedimentreeSession,
 } from "@automerge/automerge-repo/sedimentree";
+import type { EphemeralSession } from "@automerge/automerge-repo-subduction";
 import { serializeError } from "./port-backend.js";
 import type {
   BackendCall,
@@ -88,6 +89,9 @@ export function serveClient(port: MessagePort, options: ServeOptions): void {
       case "publishEphemeral": {
         const session = sessions.get(body.session);
         if (!session) throw new Error(`no session ${body.session}`);
+        if (!publishes(session)) {
+          throw new Error("this worker's backend has no ephemeral messaging");
+        }
         return session.publishEphemeral(body.message);
       }
       case "serverPeers":
@@ -142,4 +146,12 @@ export function serveClient(port: MessagePort, options: ServeOptions): void {
     }
   };
   port.start();
+}
+
+/** Whether `session` is one the ephemeral extension can publish on. */
+function publishes(session: SedimentreeSession): session is EphemeralSession {
+  return (
+    typeof (session as Partial<EphemeralSession>).publishEphemeral ===
+    "function"
+  );
 }

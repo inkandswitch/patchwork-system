@@ -1,8 +1,8 @@
 diff --git a/dist/index.js b/dist/index.js
-index 90e949d..38e55b9 100644
+index b07efaf..67a199a 100644
 --- a/dist/index.js
 +++ b/dist/index.js
-@@ -112,6 +112,8 @@ export class SubductionBackend {
+@@ -115,6 +115,8 @@ export class SubductionBackend {
      #closing;
      #sequence = 0;
      #round = 0;
@@ -11,7 +11,7 @@ index 90e949d..38e55b9 100644
      #deleting = new Map();
      /**
       * Open sessions per tree. Close and deletion end a tree's sessions in the
-@@ -351,7 +353,26 @@ export class SubductionBackend {
+@@ -357,7 +359,26 @@ export class SubductionBackend {
       * checking for peers, so skip it when none qualifies. Native rounds opened
       * by loadAndWatch do not consult `announce`.
       */
@@ -38,7 +38,7 @@ index 90e949d..38e55b9 100644
          const connected = await this.#engine.getConnectedPeerIds();
          const announced = await Promise.all(connected.map(peer => this.#announces(id, peer)));
          const peers = connected.filter((_, i) => announced[i]);
-@@ -631,7 +652,7 @@ export class SubductionBackend {
+@@ -637,7 +658,7 @@ export class SubductionBackend {
                  }
                  // Durability never waits for a peer; a round propagates batches even
                  // without a document session. A failed batch stored nothing to send.
@@ -48,10 +48,10 @@ index 90e949d..38e55b9 100644
              })().catch(cause => {
                  throw error(operation, cause);
 diff --git a/src/index.ts b/src/index.ts
-index f90f3fb..67deabb 100644
+index 9be6191..9fb78bd 100644
 --- a/src/index.ts
 +++ b/src/index.ts
-@@ -211,6 +211,8 @@ export class SubductionBackend implements SedimentreeBackend {
+@@ -234,6 +234,8 @@ export class SubductionBackend implements SedimentreeBackend {
    #closing?: Promise<void>
    #sequence = 0
    #round = 0
@@ -60,7 +60,7 @@ index f90f3fb..67deabb 100644
    readonly #deleting = new Map<SedimentreeId, Promise<void>>()
    /**
     * Open sessions per tree. Close and deletion end a tree's sessions in the
-@@ -480,8 +482,27 @@ export class SubductionBackend implements SedimentreeBackend {
+@@ -506,8 +508,27 @@ export class SubductionBackend implements SedimentreeBackend {
     * checking for peers, so skip it when none qualifies. Native rounds opened
     * by loadAndWatch do not consult `announce`.
     */
@@ -88,7 +88,7 @@ index f90f3fb..67deabb 100644
    ): Promise<[N.PeerId, N.PeerSyncResult][]> {
      const connected = await this.#engine.getConnectedPeerIds()
      const announced = await Promise.all(
-@@ -773,7 +794,7 @@ export class SubductionBackend implements SedimentreeBackend {
+@@ -799,7 +820,7 @@ export class SubductionBackend implements SedimentreeBackend {
          }
          // Durability never waits for a peer; a round propagates batches even
          // without a document session. A failed batch stored nothing to send.

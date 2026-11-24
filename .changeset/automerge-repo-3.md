@@ -11,7 +11,7 @@
 "@inkandswitch/patchwork-e2e": patch
 ---
 
-Patchwork runs on automerge-repo 3.0.0-alpha.2 (`@automerge/automerge-repo-subduction` 3.0.0-alpha.2, `@automerge/subduction` 0.27.0), and no longer uses keyhive.
+Patchwork runs on automerge-repo 3.0.0-experimental.5 (`@automerge/automerge-repo-subduction`, `-subduction-network-websocket`, `-subduction-storage-indexeddb` and `-react-hooks` at 3.0.0-experimental.5, `@automerge/subduction` 0.27.0, `@automerge/automerge` 3.5.0), and no longer uses keyhive.
 
 **One node per origin.** automerge-repo 3 allows one live backend per IndexedDB database, so tabs no longer each run their own node on a shared database. The automerge SharedWorker holds the origin's one `SubductionBackend` (its IndexedDB and its socket to the sync server). Each tab's `Repo` runs on a `PortBackend`, a sedimentree backend that forwards to the worker over a MessagePort and carries on with each replacement worker. Tabs load only automerge's wasm. Documents are stored in new databases (`<prefix>-documents`, `<prefix>-hub`). Nothing is migrated from automerge-repo 2's database: documents come back from the sync server, and edits that never reached it stay in the old database.
 
@@ -31,7 +31,8 @@ The keyhive API is kept, deprecated and inert, so nothing that imports it breaks
 - `window.repo` is an automerge-repo 3 `Repo`. `create()`, `import()` and `clone()` return promises, `handle.change()` resolves once the change is stored, `handle.doc()` may be `undefined` for a sub-handle, and `whenReady()` is gone (handles from `find`/`create` are ready).
 - `watchDocument(source, url, onChange)` takes `{ repo, backend? }`. The new `watchServerHeads(backend, documentId, onHeads)` reports a document's heads at the sync server without loading it. `patchwork.sw.subscribeSyncState` works for documents that aren't open, and its heads are subduction's hex commit ids.
 - bootloader exports `PortBackend` and `connectToAutomergeWorker(backend)`, and `resolveHandoffsWith(repo, connected?)`.
-- The pnpm patch Patchwork applies to sites' bundles now targets `@automerge/automerge-repo-subduction` 3.0.0-alpha.2. It starts a catch-up sync round when a single change is stored while a round for its document is in flight. Without that, a change made right after `create()` never reached the server. The worker reads its connected peers through the backend's `subduction` getter, which automerge-repo-subduction now has upstream.
+- `handle.broadcast()` and the `ephemeral-message` event come from automerge-repo-subduction's `ephemeral` handle extension, no longer from automerge-repo's `DocHandle`. `PortBackend` lists that extension (`handleExtensions`), so every handle in a tab still has both, and the worker's ephemeral events reach the tab as `extension` events. A hub `event` message's `event` is now a `SedimentreeEvent | ExtensionEvent`. Handles of a Repo whose backend lacks the extension, such as the providers' in-memory scratch repo, have no `broadcast`: an overlay handle's `broadcast()` does nothing there.
+- The pnpm patch Patchwork applies to sites' bundles now targets `@automerge/automerge-repo-subduction` 3.0.0-experimental.5. It starts a catch-up sync round when a single change is stored while a round for its document is in flight. Without that, a change made right after `create()` never reached the server. The worker reads its connected peers through the backend's `subduction` getter, which automerge-repo-subduction now has upstream.
 
 **Providers.** Overlay repos and handles follow automerge-repo 3:
 

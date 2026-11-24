@@ -3,8 +3,17 @@
 // when the worker is replaced.
 import "@automerge/automerge";
 import { Repo } from "@automerge/automerge-repo/slim";
-import { MemoryBackend } from "@automerge/automerge-repo/sedimentree";
+import {
+  MemoryBackend,
+  type SedimentreeId,
+  type SedimentreeSession,
+} from "@automerge/automerge-repo/sedimentree";
+import type {
+  EphemeralEnvelope,
+  EphemeralSession,
+} from "@automerge/automerge-repo-subduction";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { EventQueue } from "../src/hub/event-queue.js";
 import { PortBackend } from "../src/hub/port-backend.js";
 import { serveClient } from "../src/hub/serve.js";
 
@@ -44,6 +53,47 @@ function connect(backend: PortBackend, worker: MemoryBackend) {
     port1.close();
     port2.close();
   });
+}
+
+/**
+ * A worker backend that relays ephemerals, as subduction does: a message
+ * published on one session of a document reaches every session of it,
+ * the publisher's included, as an `ephemeral` extension event.
+ */
+class RelayBackend extends MemoryBackend {
+  readonly #queues = new Map<SedimentreeId, Set<EventQueue<unknown>>>();
+
+  override open(id: SedimentreeId): EphemeralSession {
+    const inner: SedimentreeSession = super.open(id);
+    const queue = new EventQueue<unknown>();
+    const queues = this.#queues.get(id) ?? new Set();
+    this.#queues.set(id, queues.add(queue));
+    void (async () => {
+      for await (const event of inner.events) queue.push(event);
+    })();
+    let sequence = 0;
+    return {
+      events: queue as EphemeralSession["events"],
+      markReady: () => inner.markReady(),
+      close: async () => {
+        queues.delete(queue);
+        queue.end();
+        await inner.close();
+      },
+      publishEphemeral: async (message: EphemeralEnvelope) => {
+        for (const q of queues)
+          q.push({
+            type: "extension",
+            kind: "ephemeral",
+            sequence: sequence++,
+            payload: {
+              message,
+              sender: { kind: "peer", id: "worker", path: [] },
+            },
+          });
+      },
+    };
+  }
 }
 
 const until = (f: () => boolean) =>
@@ -97,5 +147,32 @@ describe("PortBackend", () => {
     await until(() => found.doc()?.n === 5);
     // the reopened session's initial load didn't count as a second load
     expect(found.doc()).toEqual({ n: 5 });
+  });
+
+  it("carries ephemeral messages between tabs", async () => {
+    const worker = new RelayBackend();
+    const [a, b] = await Promise.all([tab(), tab()]);
+    connect(a.backend, worker);
+    connect(b.backend, worker);
+    const handle = await a.repo.create<Doc>({ n: 1 });
+    const found = await b.repo.find<Doc>(handle.url);
+
+    const heard: [string, unknown, string][] = [];
+    handle.on("ephemeral-message", ({ message, originId }) =>
+      heard.push(["a", message, originId])
+    );
+    found.on("ephemeral-message", ({ message, originId }) =>
+      heard.push(["b", message, originId])
+    );
+    handle.broadcast({ hello: "from a" });
+    await until(() => heard.length > 0);
+    found.broadcast({ hello: "from b" });
+    await until(() => heard.length > 1);
+    // Neither hears its own: the relay echoes every message back to the tab
+    // that sent it, ahead of the other's reply, and the extension drops it.
+    expect(heard).toEqual([
+      ["b", { hello: "from a" }, a.repo.id],
+      ["a", { hello: "from b" }, b.repo.id],
+    ]);
   });
 });
