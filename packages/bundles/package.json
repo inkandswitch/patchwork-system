@@ -1,0 +1,81 @@
+{
+  "name": "@inkandswitch/patchwork-bundles",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inkandswitch/patchwork-system.git",
+    "directory": "packages/bundles"
+  },
+  "version": "0.0.0",
+  "author": "chee",
+  "license": "MIT",
+  "type": "module",
+  "description": "Builds a Patchwork package from its package.json, with esbuild, vite or rollup: each export's `source` becomes the file at its `import`.",
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc -w --preserveWatchOutput",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./esbuild": {
+      "import": "./dist/esbuild.js",
+      "types": "./dist/esbuild.d.ts"
+    },
+    "./esbuild/solid1": {
+      "import": "./dist/esbuild-solid1.js",
+      "types": "./dist/esbuild-solid1.d.ts"
+    },
+    "./esbuild/solid2": {
+      "import": "./dist/esbuild-solid2.js",
+      "types": "./dist/esbuild-solid2.d.ts"
+    },
+    "./vite": {
+      "import": "./dist/vite.js",
+      "types": "./dist/vite.d.ts"
+    },
+    "./rollup": {
+      "import": "./dist/rollup.js",
+      "types": "./dist/rollup.d.ts"
+    }
+  },
+  "dependencies": {
+    "@babel/core": "^7.28.4",
+    "@babel/parser": "^7.28.4",
+    "@inkandswitch/patchwork-bootloader": "workspace:^",
+    "@solidjs/compiler": "^2.0.2",
+    "babel-preset-solid": "^1.9.9",
+    "unplugin": "^3.7.0"
+  },
+  "peerDependencies": {
+    "esbuild": ">=0.23",
+    "rollup": ">=4",
+    "vite": ">=6"
+  },
+  "devDependencies": {
+    "@types/babel__core": "^7.20.5",
+    "@types/node": "catalog:",
+    "esbuild": "^0.23.1",
+    "rollup": "^4.62.2",
+    "typescript": "catalog:",
+    "vite": "^7.3.6",
+    "vitest": "^3.2.6"
+  },
+  "peerDependenciesMeta": {
+    "rollup": {
+      "optional": true
+    },
+    "vite": {
+      "optional": true
+    }
+  }
+}
