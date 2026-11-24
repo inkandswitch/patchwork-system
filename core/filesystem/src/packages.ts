@@ -232,9 +232,13 @@ export function hasPluginManifest(pkgJson: Record<string, any>): boolean {
  * ```
  *
  * Each entry's other fields are its description. Its `export` is resolved
- * through the package's `exports` with `conditions` up front, and this throws
- * if it matches nothing. `load()` imports it and returns its default export,
- * or the whole module if it has none. An entry with no `export` loads nothing.
+ * through the package's `exports` with `conditions` up front. `load()` imports
+ * it and returns its default export, or the whole module if it has none. An
+ * entry with no `export` loads nothing.
+ *
+ * An `export` that matches nothing breaks only that plugin: it's still listed,
+ * a warning says why, and its `load()` rejects. The package's other plugins
+ * are unaffected.
  */
 export function pluginsFromManifest(
   pkgJson: Record<string, any>,
@@ -256,11 +260,19 @@ export function pluginsFromManifest(
           if (typeof subpath !== "string") throw new Error("not a string");
           entryPoint = resolvePackageExport(pkgJson, subpath, conditions);
         } catch {
-          throw new Error(
+          const error = new Error(
             `Plugin "${type}:${id}" in ${base}package.json has "export" ${
               JSON.stringify(subpath)
             }, which matches nothing in its "exports"`,
           );
+          console.warn(error.message);
+          plugins.push({
+            ...description,
+            type,
+            id,
+            load: () => Promise.reject(error),
+          });
+          continue;
         }
         load = async () => {
           const url = new URL(entryPoint, base).href;

@@ -101,18 +101,29 @@ describe("patchwork.plugins in package.json", () => {
     await expect(noExport.load()).resolves.toBeUndefined();
   });
 
-  it("throws when an export matches nothing in exports", () => {
+  it("fails only the plugin whose export matches nothing in exports", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const broken = {
       ...manifest,
       patchwork: {
         plugins: {
-          "patchwork:tool": { missing: { export: "./tools/missing" } },
+          "patchwork:tool": {
+            missing: { name: "Missing", export: "./tools/missing" },
+            "some-id": { name: "hehe", export: "./tools/whatever" },
+          },
         },
       },
     };
-    expect(() => pluginsFromManifest(broken, fixtureBase)).toThrow(
-      /"\.\/tools\/missing", which matches nothing in its "exports"/
-    );
+    const plugins = pluginsFromManifest(broken, fixtureBase);
+    expect(plugins.map((p) => p.id)).toEqual(["missing", "some-id"]);
+    const matchesNothing =
+      /"\.\/tools\/missing", which matches nothing in its "exports"/;
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(matchesNothing));
+
+    const [missing, fine] = plugins;
+    await expect(missing.load()).rejects.toThrow(matchesNothing);
+    await expect(fine.load()).resolves.toBeDefined();
+    warn.mockRestore();
   });
 
   it("resolves an export from a string exports field", async () => {
