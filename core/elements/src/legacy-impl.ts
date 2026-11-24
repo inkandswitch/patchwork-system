@@ -1,4 +1,6 @@
 import {
+  isValidAutomergeUrl,
+  parseAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
   type DocHandleChangePayload,
@@ -8,7 +10,9 @@ import {
   getSuggestedImportUrl,
   getType,
   importPackage,
+  trackPackagesInRepo,
   type HasPatchworkMetadata,
+  type PackageTracker,
 } from "@inkandswitch/patchwork-filesystem";
 import {
   getFallbackTool,
@@ -19,6 +23,7 @@ import {
   type LoadedTool,
   type ToolDescription,
   type ToolElement,
+  type ToolRender,
 } from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
@@ -51,7 +56,7 @@ const log = debug("patchwork:elements:legacy");
  * raw viewer, not a tool built for that datatype.
  */
 function isWildcardOnlyMatch(
-  tool: ToolDescription,
+  tool: Pick<Partial<ToolDescription>, "supportedDatatypes">,
   type: string | undefined
 ): boolean {
   const datatypes = tool.supportedDatatypes;
@@ -116,7 +121,96 @@ type State = (typeof State)[keyof typeof State];
 const ATTRS = {
   docUrl: "doc-url",
   toolId: "tool-id",
+  packageUrl: "package-url",
 } as const;
+
+// A package's module, by the url it's imported from: one import shared by
+// every view. An `automerge:` one is pinned to heads, so what's behind it
+// can't change. A failed import is forgotten, so asking again tries again.
+const packageImports = new Map<string, Promise<unknown>>();
+
+function importPackageOnce(url: string): Promise<unknown> {
+  let load = packageImports.get(url);
+  if (!load) {
+    load = importPackage(url);
+    load.catch(() => packageImports.delete(url));
+    packageImports.set(url, load);
+  }
+  return load;
+}
+
+// One pushwork sync is a burst of changes to a package's doc, so wait for its
+// heads to stop moving this long before importing the new version, as the
+// ModuleWatcher does.
+const PACKAGE_SETTLE_MS = 250;
+
+type PackageTool = {
+  /** The url the package was imported from, pinned to heads. */
+  pinned: string;
+  id: string;
+  render: ToolRender;
+};
+
+// A plugin as a package exports it, not yet through the registry.
+type PackagePlugin = Partial<ToolDescription> & {
+  module?: unknown;
+  load?: () => Promise<unknown>;
+  import?: string;
+};
+
+const supports = (tool: Partial<ToolDescription>, type: string) => {
+  const supported = tool.supportedDatatypes;
+  return supported === "*" || !!supported?.includes(type);
+};
+
+/**
+ * The tool `toolId` names in the package at `pinned`, or with no `toolId`,
+ * the package's tool for `type` (one made for it ahead of one for anything).
+ * Taken from the package's own `plugins`, not the registry.
+ */
+async function loadPackageTool(
+  pinned: string,
+  toolId: string | null,
+  type: string | undefined
+): Promise<PackageTool> {
+  const mod = (await importPackageOnce(pinned)) as { plugins?: unknown };
+  if (!Array.isArray(mod?.plugins)) {
+    throw new Error("it doesn't export any plugins");
+  }
+  const tools = (mod.plugins as PackagePlugin[]).filter(
+    (plugin) => plugin?.type === "patchwork:tool"
+  );
+  const tool = toolId
+    ? tools.find((t) => t.id === toolId)
+    : type
+      ? (tools.find((t) => supports(t, type) && !isWildcardOnlyMatch(t, type)) ??
+        tools.find((t) => supports(t, type)))
+      : undefined;
+  if (!tool?.id) {
+    throw new Error(
+      toolId
+        ? `it doesn't have the ${toolId} tool`
+        : `it doesn't have a tool for ${type ?? "a doc with no type"}`
+    );
+  }
+  // as the registry loads a plugin
+  const render =
+    tool.module ??
+    (typeof tool.load === "function"
+      ? await tool.load()
+      : typeof tool.import === "string"
+        ? await import(/* @vite-ignore */ tool.import)
+        : undefined);
+  if (typeof render !== "function") {
+    throw new Error(`its ${tool.id} tool has no render function`);
+  }
+  return { pinned, id: tool.id, render: render as ToolRender };
+}
+
+/** An `automerge:` url that doesn't name heads: one that can move on. */
+function isUnpinnedAutomergeUrl(url: string): url is AutomergeUrl {
+  return isValidAutomergeUrl(url) && !parseAutomergeUrl(url).heads;
+}
 
 export type LegacyImplParams = {
   /**
@@ -125,8 +219,9 @@ export type LegacyImplParams = {
    */
   repo: Repo;
   /**
-   * The realm's repo, for reading a suggested package's folder doc, which no
-   * remapper should have a say in. Defaults to `repo`.
+   * The realm's repo, for reading package docs (a suggested package's, or
+   * `package-url`'s), which no remapper should have a say in. Defaults to
+   * `repo`.
    */
   baseRepo?: Repo;
   hive?: AutomergeRepoKeyhive;
@@ -266,12 +361,21 @@ export class LegacyImpl {
   #disposed = false;
   #docUrl: AutomergeUrl | null = null;
   #toolId: string | null = null;
+  // The package the tool comes from, in place of the registry: its tool for
+  // `tool-id`, or for the doc's type.
+  #packageUrl: string | null = null;
+  // That tool, once loaded for this mount.
+  #packageTool: PackageTool | null = null;
+  // Finds a package doc's latest heads, and says when they may have moved.
+  #packages: PackageTracker;
   // A tool that opens anything, which the reader picked from a card to look
   // at the doc with. Kept across restarts, dropped when the doc's type, the
   // doc, or the asked-for tool changes.
   #peekToolId: string | null = null;
   #handle: DocHandle<HasPatchworkMetadata> | null = null;
   #tool: LoadedTool | null = null;
+  // The id the mount events gave the mounted tool.
+  #mountedToolId: string | null = null;
   #state: State = State.none;
   #requestedToolImports = new Set<string>();
   // Why the last import of a suggested package didn't bring a tool, by url.
@@ -307,6 +411,7 @@ export class LegacyImpl {
     this.#baseRepo = params.baseRepo ?? params.repo;
     this.#hive = params.hive;
     this.#element.hive = params.hive;
+    this.#packages = trackPackagesInRepo(this.#baseRepo);
 
     // Fills the host, so tools that measure their root element see the host's
     // box.
@@ -324,6 +429,7 @@ export class LegacyImpl {
       ATTRS.docUrl
     ) as AutomergeUrl | null;
     this.#toolId = this.#element.getAttribute(ATTRS.toolId);
+    this.#packageUrl = this.#element.getAttribute(ATTRS.packageUrl);
     void this.#init();
   }
 
@@ -345,6 +451,11 @@ export class LegacyImpl {
     if (old === val) return;
     if (name === ATTRS.toolId) {
       this.#toolId = val;
+      this.#peekToolId = null;
+      void this.#restart();
+    }
+    if (name === ATTRS.packageUrl) {
+      this.#packageUrl = val;
       this.#peekToolId = null;
       void this.#restart();
     }
@@ -406,6 +517,8 @@ export class LegacyImpl {
     const removeAddedListener = toolRegistry.on(
       "registered",
       async (addedTool) => {
+        // the registry has no say over a package's tool
+        if (this.#packageUrl) return;
         const toolId = addedTool.id;
         const isChosenTool = toolId == this.#chosenToolId();
         // getFallbackTool scans the whole registry: calling it on every
@@ -432,6 +545,7 @@ export class LegacyImpl {
     const removeLoadedListener = toolRegistry.on(
       "loaded",
       async (loadedTool) => {
+        if (this.#packageUrl) return;
         const toolId = loadedTool.id;
         const isChosenTool = toolId == this.#chosenToolId();
         const isFallbackTool = toolId == this.#fallbackId;
@@ -460,6 +574,8 @@ export class LegacyImpl {
     const repo = this.#repo;
     this.#element.repo = repo;
     this.#content.repo = repo;
+
+    if (this.#packageUrl) this.#watchPackage(this.#packageUrl, epoch);
 
     this.#showCard("finding", () => findingCard("finding this doc…"), false);
 
@@ -602,7 +718,7 @@ export class LegacyImpl {
     const wasMounted =
       this.#state == State.rendered || this.#state == State.fallback;
     const mountedUrl = this.#handle?.url;
-    const mountedToolId = this.#tool?.id;
+    const mountedToolId = this.#mountedToolId;
 
     this.#initEpoch++;
     this.#pendingRetryEpoch = null;
@@ -614,6 +730,8 @@ export class LegacyImpl {
     this.#retryAttempt = 0;
     this.#handle = null;
     this.#tool = null;
+    this.#mountedToolId = null;
+    this.#packageTool = null;
     this.#toolLoadError = null;
     this.#retryingToolId = null;
     this.#requestedToolImports.clear();
@@ -655,6 +773,11 @@ export class LegacyImpl {
     if (this.#state != "rendering") return;
     if (!this.#docUrl || !this.#handle) {
       this.#state = "unable";
+      return;
+    }
+
+    if (this.#packageUrl) {
+      this.#renderPackageTool(this.#packageUrl);
       return;
     }
 
@@ -700,19 +823,93 @@ export class LegacyImpl {
       return;
     }
 
+    this.#mountTool(toolId, this.#tool.module, fallingBack);
+  }
+
+  // The package's tool, once it's in; until then a loading dot, or a card
+  // saying why it didn't load.
+  #renderPackageTool(url: string): void {
+    const loaded = this.#packageTool;
+    if (loaded) {
+      this.#mountTool(loaded.id, loaded.render, false);
+      return;
+    }
+    this.#state = State.unable;
+    const epoch = this.#initEpoch;
+    const toolId = this.#toolId;
+    const type = this.#handle ? getType(this.#handle.doc()) : undefined;
+    const load = this.#loadCode(url, toolId ?? url, async () =>
+      loadPackageTool(await this.#pinPackageUrl(url), toolId, type)
+    );
+    load?.then(
+      (tool) => {
+        if (this.#disposed || epoch !== this.#initEpoch) return;
+        this.#packageTool = tool;
+        if (this.#state === State.unable) this.#queueRender();
+      },
+      () => {}
+    );
+  }
+
+  /**
+   * The url to import the package from: an `automerge:` url without heads at
+   * its latest ones, so a view keeps the version it mounted until it moves on.
+   */
+  async #pinPackageUrl(url: string): Promise<string> {
+    if (isUnpinnedAutomergeUrl(url)) return this.#packages.findLatest(url);
+    if (isValidAutomergeUrl(url)) return url;
+    return new URL(url, document.baseURI).href;
+  }
+
+  // An `automerge:` package without heads follows the doc: new heads mount the
+  // tool from the new version. One with heads, or an http(s) one, stays put.
+  #watchPackage(url: string, epoch: number): void {
+    if (!isUnpinnedAutomergeUrl(url)) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unwatch = this.#packages.watch(url, () => {
+      clearTimeout(timer);
+      timer = setTimeout(
+        () => void this.#updatePackage(url, epoch),
+        PACKAGE_SETTLE_MS
+      );
+    });
+    this.#teardowns.add(() => {
+      unwatch();
+      clearTimeout(timer);
+    });
+  }
+
+  // Loads the new version before taking the old one down, so the swap is
+  // quick, and leaves the old one up if the new one doesn't load.
+  async #updatePackage(url: AutomergeUrl, epoch: number): Promise<void> {
+    const current = this.#packageTool;
+    if (!current || epoch !== this.#initEpoch) return;
+    try {
+      const pinned = await this.#packages.findLatest(url);
+      if (pinned === current.pinned || epoch !== this.#initEpoch) return;
+      const type = this.#handle ? getType(this.#handle.doc()) : undefined;
+      await loadPackageTool(pinned, this.#toolId, type);
+    } catch (error) {
+      console.warn(`couldn't load the new version of ${url}`, error);
+      return;
+    }
+    if (epoch !== this.#initEpoch || this.#disposed) return;
+    void this.#restart();
+  }
+
+  #mountTool(toolId: string, render: ToolRender, fallingBack: boolean): void {
+    if (!this.#docUrl || !this.#handle) return;
     this.#resetDisplay();
     try {
       // `#init` set the content's `repo` before `#queueRender`, so it is a
       // `ToolElement`.
-      const cleanup = this.#tool.module(
-        this.#handle,
-        this.#content as ToolElement
-      );
+      const cleanup = render(this.#handle, this.#content as ToolElement);
       if (typeof cleanup === "function") {
         this.#teardowns.add(cleanup);
       } else {
         console.warn(`return a cleanup function from ${toolId}`);
       }
+      this.#mountedToolId = toolId;
       this.#state = fallingBack ? "fallback" : "rendered";
       this.#element.dispatchEvent(
         new MountedEvent({ url: this.#docUrl, toolId })
@@ -728,31 +925,40 @@ export class LegacyImpl {
   // Loads a registered tool's code, behind a loading dot; when it fails, a
   // card says so, where the view would otherwise sit on the dot for good.
   #loadTool(tool: LoadedTool): void {
+    this.#loadCode(tool.id, tool.name ?? tool.id, () =>
+      getRegistry("patchwork:tool").load(tool.id)
+    );
+  }
+
+  // The loading dot and the load, or the card for a load of `id` that failed.
+  #loadCode<T>(
+    id: string,
+    name: string,
+    load: () => Promise<T>
+  ): Promise<T> | undefined {
     const failed = this.#toolLoadError;
-    if (failed?.id === tool.id) {
-      this.#showCard(`tool-failed:${tool.id}:${failed.message}`, () =>
+    if (failed?.id === id) {
+      this.#showCard(`tool-failed:${id}:${failed.message}`, () =>
         toolFailedCard({
-          name: tool.name ?? tool.id,
+          name,
           error: failed.message,
           onRetry: () => {
-            // the registry forgets a failed load, so this asks again
+            // the failed load was forgotten, so this asks again
             this.#toolLoadError = null;
-            this.#retryingToolId = tool.id;
+            this.#retryingToolId = id;
             if (this.#state === State.unable) this.#queueRender();
           },
         })
       );
-      return;
+      return undefined;
     }
-    log(`loading ${tool.id}`);
-    this.#showCard(`loading:${tool.id}`, () => findingCard(), false);
-    const retrying = this.#retryingToolId === tool.id;
+    log(`loading ${id}`);
+    this.#showCard(`loading:${id}`, () => findingCard(), false);
+    const retrying = this.#retryingToolId === id;
     this.#retryingToolId = null;
-    this.#watchLoad(
-      tool.id,
-      getRegistry("patchwork:tool").load(tool.id),
-      retrying
-    );
+    const loading = load();
+    this.#watchLoad(id, loading, retrying);
+    return loading;
   }
 
   // A load of the chosen or fallback tool that fails puts its card up; one

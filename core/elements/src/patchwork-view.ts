@@ -66,6 +66,7 @@ const ATTRS = {
   url: "url",
   docUrl: "doc-url",
   toolId: "tool-id",
+  packageUrl: "package-url",
 } as const;
 
 export type RegisterPatchworkViewElementParams = {
@@ -87,6 +88,14 @@ export type PatchworkViewElementBase = HTMLElement & {
   repo: Repo;
   docUrl?: AutomergeUrl | null;
   toolId?: string | null;
+  /**
+   * A package to take the tool from, in place of the registry: its
+   * `patchwork:tool` with the id `tool-id`, or with no `tool-id`, its tool
+   * for the doc's type. An `automerge:` url without heads follows the
+   * package doc, mounting the new version when its heads move; one with
+   * heads, or an http(s) url, stays put.
+   */
+  packageUrl?: string | null;
 };
 
 export type PatchworkViewElement = PatchworkViewElementBase & {
@@ -186,8 +195,24 @@ export function registerPatchworkViewElement(
         else this.removeAttribute(ATTRS.toolId);
       }
 
+      get packageUrl(): string | null {
+        return this.getAttribute(ATTRS.packageUrl);
+      }
+
+      set packageUrl(url: string | null) {
+        if (this.packageUrl === url) return;
+        if (url) this.setAttribute(ATTRS.packageUrl, url);
+        else this.removeAttribute(ATTRS.packageUrl);
+      }
+
       static get observedAttributes() {
-        return [ATTRS.component, ATTRS.url, ATTRS.docUrl, ATTRS.toolId];
+        return [
+          ATTRS.component,
+          ATTRS.url,
+          ATTRS.docUrl,
+          ATTRS.toolId,
+          ATTRS.packageUrl,
+        ];
       }
 
       connectedCallback() {
@@ -239,14 +264,18 @@ export function registerPatchworkViewElement(
         else if (attrName === ATTRS.url) this.#url = val as AutomergeUrl | null;
 
         if (this.#legacyImpl && !this.#wantsComponent()) {
-          if (attrName === ATTRS.docUrl || attrName === ATTRS.toolId) {
+          if (
+            attrName === ATTRS.docUrl ||
+            attrName === ATTRS.toolId ||
+            attrName === ATTRS.packageUrl
+          ) {
             this.#legacyImpl.attributeChangedCallback(attrName, old, val);
           }
           return;
         }
 
-        // While a `component` attribute is set, doc-url and tool-id are
-        // ignored.
+        // While a `component` attribute is set, doc-url, tool-id and
+        // package-url are ignored.
         if (this.#state !== State.none && this.#wantsComponent()) {
           if (attrName !== ATTRS.component && attrName !== ATTRS.url) return;
         }
@@ -270,7 +299,9 @@ export function registerPatchworkViewElement(
       #wantsLegacy() {
         return (
           !this.hasAttribute(ATTRS.component) &&
-          (this.hasAttribute(ATTRS.docUrl) || this.hasAttribute(ATTRS.toolId))
+          (this.hasAttribute(ATTRS.docUrl) ||
+            this.hasAttribute(ATTRS.toolId) ||
+            this.hasAttribute(ATTRS.packageUrl))
         );
       }
 

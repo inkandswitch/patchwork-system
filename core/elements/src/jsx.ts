@@ -1,10 +1,11 @@
 // Discriminated on `component`: absent → legacy mode, present →
 // component mode. `url` is forbidden in legacy mode (meaningless
-// without `component`); `doc-url` / `tool-id` are allowed in component
+// without `component`); `doc-url` / `tool-id` / `package-url` are allowed in component
 // mode as passthrough data for the inner component to read.
 type LegacyPatchworkViewAttrs = {
   "doc-url"?: string;
   "tool-id"?: string | null;
+  "package-url"?: string | null;
   component?: never;
   url?: never;
 };
@@ -14,6 +15,7 @@ type PatchworkViewComponentAttrs = {
   url?: string;
   "doc-url"?: string;
   "tool-id"?: string | null;
+  "package-url"?: string | null;
 };
 
 /** The attributes `<patchwork-view>` accepts, for JSX intrinsic typings. */

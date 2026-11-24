@@ -456,24 +456,28 @@ export function notSharedCard(props: { contactCard?: string }): Card {
 export function toolFailedCard(props: {
   name: string;
   error: string;
-  onRetry: () => void;
+  /** left out when asking again can't help: a `tool-url` that isn't a url */
+  onRetry?: () => void;
 }): Card {
-  const retry = button(
-    "try again",
-    () => {
-      retry.disabled = true;
-      retry.textContent = "trying…";
-      props.onRetry();
-    },
-    true
-  );
+  const onRetry = props.onRetry;
+  const retry =
+    onRetry &&
+    button(
+      "try again",
+      () => {
+        retry!.disabled = true;
+        retry!.textContent = "trying…";
+        onRetry();
+      },
+      true
+    );
   return {
     element: sheet(
       "tool-failed",
       `can't load ${props.name}`,
       h("p", null, "the doc is here, but the tool that shows it didn't load."),
       h("p", { class: "pw-card__notice" }, props.error),
-      h("div", { class: "pw-card__actions" }, retry)
+      retry && h("div", { class: "pw-card__actions" }, retry)
     ),
     dispose: nothing,
   };

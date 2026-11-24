@@ -439,6 +439,148 @@ describe("patchwork-view (legacy mode)", () => {
     expect(view.querySelectorAll(".patchwork-view-content")).toHaveLength(1);
   });
 
+  describe("package-url", () => {
+    type Mounts = { url: string; toolId: string; cleanedUp: boolean }[];
+    let mounts: Mounts;
+
+    // Each import of a package gives tools that note which url they came
+    // from, so a test can see which version is mounted.
+    function servePackage(toolIds: Record<string, string[] | "*">) {
+      vi.mocked(importPackage).mockImplementation(async (url: string) => ({
+        plugins: Object.entries(toolIds).map(([id, supportedDatatypes]) => ({
+          id,
+          type: "patchwork:tool",
+          name: id,
+          supportedDatatypes,
+          load: async () => (_handle: unknown, element: HTMLElement) => {
+            const mount = { url, toolId: id, cleanedUp: false };
+            mounts.push(mount);
+            element.textContent = `${id} from ${url}`;
+            return () => {
+              mount.cleanedUp = true;
+            };
+          },
+        })),
+      }));
+    }
+
+    const live = () => mounts.filter((m) => !m.cleanedUp);
+
+    beforeEach(() => {
+      mounts = [];
+    });
+
+    afterEach(() => {
+      vi.mocked(importPackage).mockReset();
+    });
+
+    function mountWith(doc: unknown, attrs: Record<string, string>) {
+      const handle = repo.create(doc);
+      const provider = document.createElement("repo-provider");
+      const view = document.createElement("patchwork-view-legacy");
+      view.setAttribute("doc-url", handle.url);
+      for (const [name, value] of Object.entries(attrs)) {
+        view.setAttribute(name, value);
+      }
+      provider.append(view);
+      document.body.append(provider);
+      return view;
+    }
+
+    it("shows the doc with the package's tool for tool-id, not the registry's", async () => {
+      const registered = registerTool(["pkg-type"]);
+      servePackage({ [registered.id]: ["pkg-type"], other: ["pkg-type"] });
+      const mounted = vi.fn();
+      document.addEventListener("patchwork:mounted", mounted);
+      const view = mountWith(
+        { "@patchwork": { type: "pkg-type" } },
+        {
+          "tool-id": registered.id,
+          "package-url": "http://example.invalid/tool-id-pkg/",
+        }
+      );
+      await vi.waitFor(() => expect(live()).toHaveLength(1));
+      document.removeEventListener("patchwork:mounted", mounted);
+
+      expect(registered.mounts).toBe(0);
+      expect(live()[0].toolId).toBe(registered.id);
+      expect(mounted.mock.calls.at(-1)![0].detail).toEqual({
+        url: view.getAttribute("doc-url"),
+        toolId: registered.id,
+      });
+
+      view.remove();
+      await settle();
+      expect(live()).toHaveLength(0);
+    });
+
+    it("picks the package's tool for the doc's type without a tool-id", async () => {
+      servePackage({ anything: "*", made: ["made-type"], else: ["else-type"] });
+      mountWith(
+        { "@patchwork": { type: "made-type" } },
+        { "package-url": "http://example.invalid/by-type-pkg/" }
+      );
+      await vi.waitFor(() => expect(live()).toHaveLength(1));
+      expect(live()[0].toolId).toBe("made");
+    });
+
+    it("says so when the package has no such tool", async () => {
+      servePackage({ other: ["pkg-type"] });
+      const view = mountWith(
+        { "@patchwork": { type: "pkg-type" } },
+        {
+          "tool-id": "missing",
+          "package-url": "http://example.invalid/missing-pkg/",
+        }
+      );
+      await vi.waitFor(() =>
+        expect(card(view, "tool-failed")?.textContent).toContain(
+          "it doesn't have the missing tool"
+        )
+      );
+    });
+
+    it("follows an automerge package without heads to its new heads", async () => {
+      servePackage({ followed: ["pkg-type"] });
+      const pkg = repo.create<{ version: number }>({ version: 1 });
+      mountWith(
+        { "@patchwork": { type: "pkg-type" } },
+        { "tool-id": "followed", "package-url": pkg.url }
+      );
+      await vi.waitFor(() => expect(live()).toHaveLength(1));
+      const first = live()[0].url;
+      // imported pinned to the heads it had
+      expect(first).toBe(pkg.view(pkg.heads()).url);
+
+      pkg.change((d) => {
+        d.version = 2;
+      });
+      await vi.waitFor(() =>
+        expect(live().map((m) => m.url)).toEqual([pkg.view(pkg.heads()).url])
+      );
+      expect(mounts).toHaveLength(2);
+      expect(mounts[0].cleanedUp).toBe(true);
+    });
+
+    it("stays on the version an automerge package's heads name", async () => {
+      servePackage({ pinned: ["pkg-type"] });
+      const pkg = repo.create<{ version: number }>({ version: 1 });
+      const pinned = pkg.view(pkg.heads()).url;
+      mountWith(
+        { "@patchwork": { type: "pkg-type" } },
+        { "tool-id": "pinned", "package-url": pinned }
+      );
+      await vi.waitFor(() => expect(live()).toHaveLength(1));
+
+      pkg.change((d) => {
+        d.version = 2;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      expect(mounts).toHaveLength(1);
+      expect(live()[0].url).toBe(pinned);
+    });
+  });
+
   it("offers the package again after its import fails", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(importPackage).mockRejectedValueOnce(new Error("offline"));
