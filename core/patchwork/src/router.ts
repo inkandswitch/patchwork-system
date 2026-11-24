@@ -50,7 +50,9 @@ function serializeHashParams(params: URLSearchParams): string {
  * Coerce a `doc=` hash param to a full automerge URL. Accepts a full URL
  * (`automerge:<id>[#heads]`) or a bare document id, for older links.
  */
-export function docParamToUrl(docParam: string | null): AutomergeUrl | undefined {
+export function docParamToUrl(
+  docParam: string | null
+): AutomergeUrl | undefined {
   if (!docParam) return undefined;
   if (isValidAutomergeUrl(docParam as AutomergeUrl)) {
     return docParam as AutomergeUrl;
@@ -60,16 +62,30 @@ export function docParamToUrl(docParam: string | null): AutomergeUrl | undefined
   return stringifyAutomergeUrl({ documentId: documentId as DocumentId });
 }
 
+/**
+ * Where the site is, for a site that says so some other way than the hash (by
+ * path, say). A site passes one as `routing` to `setup()`, and
+ * the router reads and writes the address only through it. It still announces
+ * a move with a `hashchange` on `window`, as a change of hash would.
+ */
+export type PatchworkRoute = {
+  /** What's open: the params a hash would have (`doc`, `tool`, `frame`, …). */
+  params(): URLSearchParams;
+  /** Go to `params`, a step Back can return from. */
+  go(params: URLSearchParams): void;
+};
+
 export interface RouterParams {
   rootElement: HTMLElement;
   repo: Repo;
   accountDocHandle: DocHandle<AccountDoc>;
   siteTitle: string;
   frameToolId?: string;
+  route?: PatchworkRoute;
 }
 
 export interface Router {
-  /** Apply `location.hash` to the view. */
+  /** Apply the address (the site's route, or else the hash) to the view. */
   route(): Promise<void>;
 }
 
@@ -85,8 +101,11 @@ export function createRouter({
   accountDocHandle,
   siteTitle,
   frameToolId,
+  route: siteRoute,
 }: RouterParams): Router {
   const tabTitle = createTitle(repo, siteTitle);
+  const routeParams = () =>
+    siteRoute?.params() ?? new URLSearchParams(window.location.hash.slice(1));
   // The frame the root shows when the hash names none, picked at the first
   // route, so going Back past a `frame=` link puts it back.
   let homeFrameToolId: string | undefined;
@@ -103,7 +122,7 @@ export function createRouter({
       return;
     }
 
-    const params = new URLSearchParams(hash);
+    const params = routeParams();
     const docUrl = docParamToUrl(params.get("doc"));
     const frame = params.get("frame");
 
@@ -157,7 +176,7 @@ export function createRouter({
       title?: string;
     };
 
-    const params = new URLSearchParams(window.location.hash.slice(1));
+    const params = routeParams();
     // `doc` is the full automerge URL, so heads live inside it and the separate
     // `heads=` param is gone.
     params.delete("heads");
@@ -167,7 +186,8 @@ export function createRouter({
     const prevDoc = docParamToUrl(params.get("doc"));
     if (
       prevDoc &&
-      parseAutomergeUrl(prevDoc).documentId !== parseAutomergeUrl(url).documentId
+      parseAutomergeUrl(prevDoc).documentId !==
+        parseAutomergeUrl(url).documentId
     ) {
       params.delete("draft");
     }
@@ -180,7 +200,14 @@ export function createRouter({
       if (value) params.set(key, value);
       else params.delete(key);
     }
-    window.location.hash = serializeHashParams(params);
+    const next = serializeHashParams(params);
+    if (!siteRoute) window.location.hash = next;
+    // Setting the hash to what it already is announces nothing; a route is
+    // held to the same, or the open-document its announcement causes would
+    // go there again without end.
+    else if (next !== serializeHashParams(routeParams())) {
+      siteRoute.go(params);
+    }
     void tabTitle.follow(url, type);
   });
 

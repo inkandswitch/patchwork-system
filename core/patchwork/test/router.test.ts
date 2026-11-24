@@ -5,7 +5,8 @@ import { Repo, type AutomergeUrl } from "@automerge/automerge-repo";
 import { getRegistry } from "@inkandswitch/patchwork-plugins";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createRouter } from "../src/router.js";
+import { createRouter, type PatchworkRoute } from "../src/router.js";
+import type { PatchworkOptions } from "../src/types.js";
 
 const SITE = "Site";
 type Note = { "@patchwork": { type: string }; title: string };
@@ -53,7 +54,7 @@ function hold(url: AutomergeUrl): () => void {
   return release;
 }
 
-function start() {
+function start(route?: PatchworkRoute) {
   const lookups = {
     async find(url: AutomergeUrl) {
       await held.get(url);
@@ -66,6 +67,7 @@ function start() {
     accountDocHandle: { url: account, doc: () => ({}) } as any,
     siteTitle: SITE,
     frameToolId: "home-frame",
+    route,
   });
   // The frame has mounted: from here on the router opens the hash's document.
   void router.route();
@@ -214,5 +216,88 @@ describe("the root view", () => {
     await go(apples);
     await vi.waitFor(() => expect(location.hash).toBe(`#doc=${apples}`));
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
+  });
+});
+
+describe("a site that says where it is", () => {
+  // A route that keeps its params to itself and announces a move the way a
+  // change of hash would.
+  function makeRoute(params = new URLSearchParams()) {
+    const went: string[] = [];
+    const routing: PatchworkOptions["routing"] = {
+      params: () => new URLSearchParams(params),
+      go(next) {
+        params = new URLSearchParams(next);
+        went.push(next.toString());
+        window.dispatchEvent(new Event("hashchange"));
+      },
+    };
+    return {
+      routing,
+      went,
+      params: () => params,
+      async move(next: Record<string, string>) {
+        params = new URLSearchParams(next);
+        window.dispatchEvent(new Event("hashchange"));
+        await ticks();
+      },
+    };
+  }
+
+  it("opens the route's document, not the hash's", async () => {
+    const apples = note("Apples");
+    const pears = note("Pears");
+    await go(`doc=${pears}`);
+    const route = makeRoute(
+      new URLSearchParams({ doc: apples, tool: "outline" })
+    );
+    const opened: any[] = [];
+    root.addEventListener("patchwork:open-document", (event) =>
+      opened.push((event as CustomEvent).detail)
+    );
+    start(route.routing);
+    await ticks();
+    expect(opened.at(-1)).toMatchObject({ url: apples, toolId: "outline" });
+    // already there, so there's nowhere to go
+    expect(route.went).toEqual([]);
+    await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
+  });
+
+  it("goes through the route, leaving the hash alone", async () => {
+    const route = makeRoute();
+    start(route.routing);
+    const apples = note("Apples");
+    open(apples);
+    await ticks();
+    expect(route.went).toHaveLength(1);
+    expect(route.params().get("doc")).toBe(apples);
+    expect(location.hash).toBe("");
+    await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
+  });
+
+  it("uses the hash by default even if a window route exists", async () => {
+    const route = makeRoute();
+    Reflect.set(window, "patchworkRoute", route.routing);
+    try {
+      start();
+      const apples = note("Apples");
+      open(apples);
+      await ticks();
+      expect(location.hash).toBe(`#doc=${apples}`);
+      expect(route.went).toEqual([]);
+    } finally {
+      Reflect.deleteProperty(window, "patchworkRoute");
+    }
+  });
+
+  it("takes the frame from the route", async () => {
+    const pears = note("Pears");
+    const route = makeRoute();
+    start(route.routing);
+    await route.move({ frame: "other-frame", doc: pears });
+    expect(root.getAttribute("tool-id")).toBe("other-frame");
+    expect(root.getAttribute("doc-url")).toBe(pears);
+    await route.move({ doc: pears });
+    expect(root.getAttribute("tool-id")).toBe("home-frame");
   });
 });
