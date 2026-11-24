@@ -143,6 +143,8 @@ export function noToolCard(props: {
   anything?: Anything;
   onLoad: (url: string) => void;
   onPeek: (toolId: string) => void;
+  /** when it asked for a missing tool, the others that open the doc */
+  tools: () => Anything[];
   /** the realm's repo, to read a suggested package's folder history from */
   repo: Repo;
   readClaims: (url: string) => Promise<PackageClaims | undefined>;
@@ -165,6 +167,10 @@ export function noToolCard(props: {
   const suggestion = props.suggestion;
   if (!suggestion) {
     body.push(h("p", null, "it'll open here if a package adds a tool for it."));
+    if (props.missingToolId) {
+      const picker = toolPicker(props.tools, props.onPeek);
+      body.push(h("div", { class: "pw-card__actions" }, picker.toggle), picker.panel);
+    }
   } else {
     const named = h("span", null, "a package.");
     const claims = claimsFor(suggestion.url, props.readClaims);

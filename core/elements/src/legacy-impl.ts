@@ -72,11 +72,27 @@ function anythingTool(): Anything | undefined {
 }
 
 /**
- * The tools a reader could open a `type` doc with instead of `except`: the
- * datatype's own first, then ones that open anything.
+ * The kind of tool `toolId` is (a frame, a sidebar), by its tags. One that
+ * isn't registered has no tags to go by, but an account that names it as its
+ * frame says it's a frame.
  */
-function otherTools(type: string | undefined, except: string): Anything[] {
-  const tools = getRegistry<ToolDescription>("patchwork:tool").filter(
+function toolKinds(toolId: string, doc: HasPatchworkMetadata | undefined): string[] {
+  const tags = getRegistry<ToolDescription>("patchwork:tool").get(toolId)?.tags;
+  if (tags?.length) return tags;
+  const frameToolId = (doc as { frameToolId?: unknown } | undefined)?.frameToolId;
+  const type = doc ? getType(doc) : undefined;
+  return type === "account" && frameToolId === toolId ? ["frame-tool"] : [];
+}
+
+/**
+ * The tools a reader could open the doc with instead of `except`. Of the kind
+ * `except` is, when there are any of those (another frame for a frame);
+ * otherwise the datatype's own first, then ones that open anything.
+ */
+function otherTools(doc: HasPatchworkMetadata | undefined, except: string): Anything[] {
+  const type = doc ? getType(doc) : undefined;
+  const kinds = toolKinds(except, doc);
+  let tools = getRegistry<ToolDescription>("patchwork:tool").filter(
     (tool) =>
       !tool.unlisted &&
       !tool.forTitleBar &&
@@ -84,6 +100,8 @@ function otherTools(type: string | undefined, except: string): Anything[] {
       (isWildcardOnlyMatch(tool, undefined) ||
         (!!type && !!tool.supportedDatatypes?.includes(type)))
   );
+  const sameKind = tools.filter((tool) => tool.tags?.some((tag) => kinds.includes(tag)));
+  if (sameKind.length) tools = sameKind;
   tools.sort(
     (a, b) =>
       Number(isWildcardOnlyMatch(a, type)) - Number(isWildcardOnlyMatch(b, type))
@@ -761,11 +779,7 @@ export class LegacyImpl {
             this.#retryingToolId = tool.id;
             if (this.#state === State.unable) this.#queueRender();
           },
-          tools: () =>
-            otherTools(
-              this.#handle ? getType(this.#handle.doc()) : undefined,
-              tool.id
-            ),
+          tools: () => otherTools(this.#handle?.doc(), tool.id),
           onOpenWith: (id) => this.#peek(id),
         })
       );
@@ -842,6 +856,7 @@ export class LegacyImpl {
           anything,
           onLoad: (url) => this.#loadSuggestedImport(url),
           onPeek: (id) => this.#peek(id),
+          tools: () => otherTools(this.#handle?.doc(), missingToolId!),
           repo: this.#baseRepo,
           readClaims,
         })

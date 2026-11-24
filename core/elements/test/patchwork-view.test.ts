@@ -454,6 +454,28 @@ describe("patchwork-view (legacy mode)", () => {
     expect(other.mounts).toBe(0);
   });
 
+  it("offers the other frames when an account's frame tool isn't there", async () => {
+    const frame = registerTool(["account"]);
+    toolRegistry.get(frame.id)!.tags = ["frame-tool"];
+    const sidebar = registerTool(["account"]);
+    const missing = `missing-frame-${++seq}`;
+
+    const view = mount({ "@patchwork": { type: "account" }, frameToolId: missing });
+    view.setAttribute("tool-id", missing);
+    await vi.waitFor(() => expect(card(view, "no-tool")).toBeTruthy());
+
+    buttonLabelled(view, "open with…").click();
+    const offered = [...view.querySelectorAll(".pw-card__tool")].map(
+      (b) => b.textContent
+    );
+    expect(offered).toEqual([frame.id]);
+    expect(offered).not.toContain(sidebar.id);
+
+    (view.querySelector(".pw-card__tool") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(frame.mounts).toBe(1));
+    expect(card(view, "no-tool")).toBeNull();
+  });
+
   it("doesn't mount a tool-id change on a view removed in the same task", async () => {
     const first = registerTool(["lifecycle-type"]);
     const second = registerTool(["unrelated-type"]);
