@@ -1,4 +1,5 @@
 import {
+  type AutomergeUrl,
   type DocHandle,
   type Repo,
   isImmutableString,
@@ -51,14 +52,38 @@ async function resolveIn(
   const rest = parts.slice(consumed);
   if ("value" in child) return resolveIn(repo, provider, child.value, rest, walk);
 
+  if ("link" in child) return follow(repo, child.link, rest, walk);
+
+  // A union is read through the first binding that has the next name, the way plan9 reads a
+  // union directory. With no names left, the union stands for its first binding.
+  for (const url of child.union) {
+    if (rest.length === 0) return follow(repo, url, rest, walk);
+    let doc: unknown;
+    try {
+      doc = (await repo.find(url)).doc();
+    } catch {
+      continue;
+    }
+    if (providerFor(doc)?.lookup(doc, rest)) return follow(repo, url, rest, walk);
+  }
+  return undefined;
+}
+
+/** Carry on with `rest` in the document `link` names. */
+async function follow(
+  repo: Repo,
+  link: AutomergeUrl,
+  rest: string[],
+  walk: Walk
+): Promise<Resolved | undefined> {
   // A step that consumes no parts can revisit the same url with the same remaining parts: a
   // cycle.
-  const key = `${child.link}|${rest.join("/")}`;
+  const key = `${link}|${rest.join("/")}`;
   if (walk.visited.has(key)) return undefined;
   walk.visited.add(key);
   // Following a bare link means everything below this point is current, not fixed.
-  walk.pinned &&= hasHeads(child.link);
-  const next = await repo.find(child.link);
+  walk.pinned &&= hasHeads(link);
+  const next = await repo.find(link);
   return resolvePathInternal(repo, next, rest, walk);
 }
 
