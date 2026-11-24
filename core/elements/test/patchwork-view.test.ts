@@ -456,7 +456,7 @@ describe("patchwork-view (legacy mode)", () => {
 
   it("offers the other frames when an account's frame tool isn't there", async () => {
     const frame = registerTool(["account"]);
-    toolRegistry.get(frame.id)!.tags = ["frame-tool"];
+    (toolRegistry.get(frame.id) as { tags?: string[] }).tags = ["frame-tool"];
     const sidebar = registerTool(["account"]);
     const missing = `missing-frame-${++seq}`;
 
