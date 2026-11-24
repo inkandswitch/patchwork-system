@@ -457,6 +457,9 @@ export function toolFailedCard(props: {
   name: string;
   error: string;
   onRetry: () => void;
+  /** the other tools that open this doc, read when the picker opens */
+  tools: () => Anything[];
+  onOpenWith: (toolId: string) => void;
 }): Card {
   const retry = button(
     "try again",
@@ -467,16 +470,146 @@ export function toolFailedCard(props: {
     },
     true
   );
+  const picker = toolPicker(props.tools, props.onOpenWith);
   return {
     element: sheet(
       "tool-failed",
       `can't load ${props.name}`,
       h("p", null, "the doc is here, but the tool that shows it didn't load."),
       h("p", { class: "pw-card__notice" }, props.error),
-      h("div", { class: "pw-card__actions" }, retry)
+      h("div", { class: "pw-card__actions" }, retry, picker.toggle),
+      picker.panel
     ),
     dispose: nothing,
   };
+}
+
+/**
+ * An "open with…" button and the box it unfolds: a search over `tools`, and,
+ * when what's typed isn't one of them, the text itself as a tool id, so any
+ * tool can be asked for. The list is read each time the box opens, so tools
+ * that arrive while the card is up are in it.
+ */
+function toolPicker(
+  tools: () => Anything[],
+  onPick: (toolId: string) => void
+): { toggle: HTMLButtonElement; panel: HTMLElement } {
+  type Option = { id: string; label: string; direct?: boolean };
+  let listed: Anything[] = [];
+  let options: Option[] = [];
+  let active = 0;
+
+  const listId = `pw-card-tools-${++seq}`;
+  const input = h("input", {
+    class: "pw-card__input pw-card__search",
+    type: "text",
+    placeholder: "find a tool, or type a tool id",
+    autocomplete: "off",
+    spellcheck: "false",
+    role: "combobox",
+    "aria-label": "tool",
+    "aria-controls": listId,
+    "aria-expanded": "true",
+  });
+  const list = h("div", { class: "pw-card__tools", id: listId, role: "listbox" });
+  const panel = h("div", { class: "pw-card__open-with", hidden: "" }, input, list);
+
+  const pick = (option: Option | undefined) => {
+    if (option) onPick(option.id);
+  };
+
+  const draw = () => {
+    const q = input.value.trim();
+    const needle = q.toLowerCase();
+    options = listed
+      .filter(
+        (t) =>
+          !needle ||
+          t.name.toLowerCase().includes(needle) ||
+          t.id.toLowerCase().includes(needle)
+      )
+      .map((t) => ({ id: t.id, label: t.name }));
+    if (q && !/[\s/\]]/.test(q) && !listed.some((t) => t.id === q)) {
+      options.push({ id: q, label: q, direct: true });
+    }
+    active = Math.min(active, Math.max(options.length - 1, 0));
+    list.replaceChildren(
+      ...(options.length
+        ? options.map((option, i) => {
+            const item = h(
+              "button",
+              {
+                type: "button",
+                class: "pw-card__tool",
+                role: "option",
+                tabindex: "-1",
+                "data-active": i === active ? "" : undefined,
+                "aria-selected": String(i === active),
+              },
+              option.direct && h("span", { class: "pw-card__tool-hint" }, "use tool id "),
+              option.label
+            );
+            item.addEventListener("pointermove", () => mark(i));
+            item.addEventListener("click", () => pick(option));
+            return item;
+          })
+        : [h("p", { class: "pw-card__aside" }, "no matching tools")])
+    );
+  };
+
+  // moves the highlight without redrawing, so the item under the pointer
+  // stays the one it's over
+  const mark = (i: number) => {
+    active = i;
+    list.querySelectorAll(".pw-card__tool").forEach((item, j) => {
+      item.toggleAttribute("data-active", j === i);
+      item.setAttribute("aria-selected", String(j === i));
+    });
+  };
+
+  const move = (by: number) => {
+    if (!options.length) return;
+    mark((active + by + options.length) % options.length);
+    list.querySelector("[data-active]")?.scrollIntoView({ block: "nearest" });
+  };
+
+  input.addEventListener("input", () => {
+    active = 0;
+    draw();
+  });
+  input.addEventListener("keydown", (event) => {
+    // keep the host (an editor, a canvas) from acting on keys typed here
+    event.stopPropagation();
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      move(1);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      move(-1);
+    } else if (event.key === "Enter") {
+      event.preventDefault();
+      pick(options[active]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setOpen(false);
+      toggle.focus({ preventScroll: true });
+    }
+  });
+
+  const setOpen = (open: boolean) => {
+    panel.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    if (!open) return;
+    listed = tools();
+    input.value = "";
+    active = 0;
+    draw();
+    input.focus({ preventScroll: true });
+  };
+  const toggle = button("open with…", () => setOpen(panel.hidden));
+  toggle.setAttribute("aria-expanded", "false");
+
+  return { toggle, panel };
 }
 
 /**
@@ -757,6 +890,56 @@ const CARD_CSS = /* css */ `
 /* the set-type box, unfolded under its button */
 .pw-card__set-type[hidden] {
   display: none;
+}
+/* the open-with box: a search, and the tools under it */
+.pw-card__open-with[hidden] {
+  display: none;
+}
+.pw-card__open-with {
+  margin: 0 auto 12px;
+  max-width: 18em;
+  border: 1px solid var(--pw-card-line);
+  border-radius: 2px;
+  text-align: left;
+}
+.pw-card__open-with .pw-card__search {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--pw-card-line);
+  border-radius: 0;
+}
+.pw-card__tools {
+  max-height: 12em;
+  overflow-y: auto;
+  padding: 3px;
+}
+.pw-card__tools .pw-card__aside {
+  margin: 0;
+  padding: 2px 6px;
+}
+.pw-card__tool {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 2px 6px;
+  border: none;
+  border-radius: var(--pw-card-radius);
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pw-card__tool[data-active] {
+  background: var(--pw-card-highlighter);
+}
+.pw-card__tool-hint {
+  color: var(--pw-card-muted);
 }
 .pw-card__field {
   display: flex;

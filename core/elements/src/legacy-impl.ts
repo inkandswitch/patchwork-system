@@ -71,6 +71,26 @@ function anythingTool(): Anything | undefined {
   return tool && { id: tool.id, name: tool.name };
 }
 
+/**
+ * The tools a reader could open a `type` doc with instead of `except`: the
+ * datatype's own first, then ones that open anything.
+ */
+function otherTools(type: string | undefined, except: string): Anything[] {
+  const tools = getRegistry<ToolDescription>("patchwork:tool").filter(
+    (tool) =>
+      !tool.unlisted &&
+      !tool.forTitleBar &&
+      tool.id !== except &&
+      (isWildcardOnlyMatch(tool, undefined) ||
+        (!!type && !!tool.supportedDatatypes?.includes(type)))
+  );
+  tools.sort(
+    (a, b) =>
+      Number(isWildcardOnlyMatch(a, type)) - Number(isWildcardOnlyMatch(b, type))
+  );
+  return tools.map((tool) => ({ id: tool.id, name: tool.name ?? tool.id }));
+}
+
 /** The types something here opens, to suggest when giving a doc a type. */
 function knownTypes(): { id: string; name?: string }[] {
   const names = new Map<string, string | undefined>();
@@ -266,9 +286,10 @@ export class LegacyImpl {
   #disposed = false;
   #docUrl: AutomergeUrl | null = null;
   #toolId: string | null = null;
-  // A tool that opens anything, which the reader picked from a card to look
-  // at the doc with. Kept across restarts, dropped when the doc's type, the
-  // doc, or the asked-for tool changes.
+  // A tool the reader picked from a card to open the doc with: one that opens
+  // anything, or another when the asked-for one didn't load. Wins over
+  // `tool-id`. Kept across restarts, dropped when the doc's type, the doc, or
+  // the asked-for tool changes.
   #peekToolId: string | null = null;
   #handle: DocHandle<HasPatchworkMetadata> | null = null;
   #tool: LoadedTool | null = null;
@@ -366,9 +387,9 @@ export class LegacyImpl {
     }
   };
 
-  /** The tool asked for: by `tool-id`, or picked from a card. */
+  /** The tool asked for: picked from a card, or by `tool-id`. */
   #chosenToolId(): string | null {
-    return this.#toolId || this.#peekToolId;
+    return this.#peekToolId || this.#toolId;
   }
 
   // Every remount goes through `#init`, which a disposed impl refuses, so one
@@ -740,6 +761,12 @@ export class LegacyImpl {
             this.#retryingToolId = tool.id;
             if (this.#state === State.unable) this.#queueRender();
           },
+          tools: () =>
+            otherTools(
+              this.#handle ? getType(this.#handle.doc()) : undefined,
+              tool.id
+            ),
+          onOpenWith: (id) => this.#peek(id),
         })
       );
       return;
