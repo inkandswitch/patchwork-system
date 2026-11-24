@@ -74,7 +74,7 @@ import {
 const log = debug("patchwork:setup");
 
 // How long the account's packages wait on its folders before loading anyway.
-const FOLDER_TREE_TIMEOUT_MS = 3_000;
+const FOLDER_TREE_TIMEOUT_MS = 20_000;
 
 declare const __SITE_TITLE__: string;
 
