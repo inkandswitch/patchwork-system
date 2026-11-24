@@ -212,6 +212,9 @@ describe("walkPath's pinned form", () => {
     const handle = await resolveLivePath(repo, `${share}/notes`, {
       accounts: new Map(),
     });
-    expect(handle?.url).toBe(notes.url);
+    // a share link is pinned all the way, so this is a view, not the live handle
+    expect(handle?.documentId).toBe(notes.documentId);
+    expect(handle?.heads()).toEqual(notes.heads());
+    expect(text(handle)).toBe("hi");
   });
 });
