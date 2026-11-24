@@ -160,7 +160,11 @@ type PackagePlugin = Partial<ToolDescription> & {
 
 const supports = (tool: Partial<ToolDescription>, type: string) => {
   const supported = tool.supportedDatatypes;
-  return supported === "*" || !!supported?.includes(type);
+  return (
+    supported === "*" ||
+    !!supported?.includes(type) ||
+    !!supported?.includes("*")
+  );
 };
 
 /**
