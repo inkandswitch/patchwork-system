@@ -2,6 +2,7 @@
 // a doc that only the server has, opened in tab after tab of one context.
 import { test } from "@playwright/test";
 import {
+  ELSEWHERE,
   MODES,
   createDoc,
   online,
@@ -20,7 +21,7 @@ for (const mode of MODES) {
     await probeServerPeer(browser);
     // Somewhere else puts the doc on the server.
     const seeder = await browser.newContext();
-    const seed = await openTab(seeder, "pertab");
+    const seed = await openTab(seeder, "pertab", { storage: ELSEWHERE });
     await online(seed);
     const url = await createDoc(seed, { title: "open", text: "x".repeat(10_000) });
     await serverConfirmed(seed, url, 30_000);

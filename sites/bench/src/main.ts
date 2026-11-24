@@ -30,7 +30,10 @@ type Mode =
   | "pertab-heads"
   | "tab-worker"
   | "shared-worker";
-type Storage = "worker" | "direct";
+// `memory`: no IndexedDB at all; subduction keeps what it holds in memory. For
+// the bench's stand-ins for another client (the stranger, the seeder, the
+// server probe), whose own storage isn't what's measured.
+type Storage = "worker" | "direct" | "memory";
 
 const params = new URLSearchParams(location.search);
 const mode = (params.get("mode") ?? "patchwork") as Mode;
@@ -91,6 +94,7 @@ function sameHeads(a: string[], b: string[]): boolean {
 }
 
 function storageAdapter() {
+  if (storage === "memory") return undefined;
   const adapter =
     storage === "direct"
       ? new IndexedDBStorageAdapter()
@@ -152,8 +156,11 @@ async function buildTabNode(): Promise<Repo> {
     }
   } else {
     const storage = storageAdapter();
+    if (sharedSigner && !storage) {
+      throw new Error("?signer=shared needs storage to keep the signer in");
+    }
     const signer = sharedSigner
-      ? await loadOrCreateSigner(storage)
+      ? await loadOrCreateSigner(storage!)
       : new MemorySigner();
     ownPeerId = signer.peerId().toString();
     const config: RepoConfig = {
