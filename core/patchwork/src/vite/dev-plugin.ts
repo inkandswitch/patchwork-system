@@ -11,16 +11,21 @@ import { arkStack } from "./ark-plugin.js";
 
 const PATCHWORK_CSS = "/@inkandswitch/patchwork/global.css";
 const BOOTLOADER_CSS = "/@inkandswitch/patchwork-bootloader/global.css";
+// global.css imports it relatively, so the browser asks for it next to that.
+const THEME_CSS = "/@inkandswitch/patchwork/theme.css";
 
 // The generated index.html links the stylesheet by bare specifier, which the
-// build resolves and the dev server does not. Serving the two files under
-// these paths, and pointing the link at the first one, covers the gap.
+// build resolves and the dev server does not. Serving the files under these
+// paths, and pointing the link at the first one, covers the gap.
 const stylesheets: Record<string, string> = {
   [PATCHWORK_CSS]: fileURLToPath(
     import.meta.resolve("@inkandswitch/patchwork/global.css")
   ),
   [BOOTLOADER_CSS]: fileURLToPath(
     import.meta.resolve("@inkandswitch/patchwork-bootloader/global.css")
+  ),
+  [THEME_CSS]: fileURLToPath(
+    import.meta.resolve("@inkandswitch/patchwork/theme.css")
   ),
 };
 

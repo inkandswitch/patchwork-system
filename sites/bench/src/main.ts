@@ -1,41 +1,4 @@
-// A page that builds one Repo in one of five topologies and exposes enough
-// for the playwright specs in ../tests to time it. No UI, no account, no
-// package list: the shell is out of scope here.
-//
-//   ?mode=patchwork      what patchwork does: createRepo() — the tab's own
-//                        subduction node with this origin's IndexedDB, its own
-//                        server socket and `headsChannel` — plus
-//                        the automerge worker that resolves URLs for the
-//                        service worker
-//   ?mode=pertab         the bare node: storage + socket, no siblings channel,
-//                        no workers, so tabs only meet through the server (or
-//                        the database)
-//   ?mode=pertab-bc      pertab plus classic automerge sync between tabs over a
-//                        BroadcastChannel
-//   ?mode=pertab-mesh    pertab plus patchwork's old siblings mesh (subduction over
-//                        a BroadcastChannel), but each tab signing as itself:
-//                        the old topology minus the shared signer, the
-//                        service worker and the automerge worker
-//   ?mode=pertab-heads   pertab with the origin-wide signer, so every tab is
-//                        the same subduction peer on its own socket, and the
-//                        Repo's `headsChannel`: a tab announces the heads it
-//                        just persisted on a BroadcastChannel and the others
-//                        reload the doc from the shared IndexedDB. No mesh,
-//                        no classic network
-//   ?mode=tab-worker     the node in a dedicated Worker the tab spawns: storage,
-//                        socket and a mesh to the other tabs' workers live
-//                        there; the tab is a storageless Repo on a MessagePort
-//   ?mode=shared-worker  one node in a SharedWorker for every tab; each tab is a
-//                        storageless Repo on a MessagePort to it
-//
-// `?server=none` runs everything but patchwork with no socket, so tabs can only
-// meet through storage (and whatever local channel the mode has).
-// `?storage=worker` swaps in-thread IndexedDB for the IndexedDB worker adapter
-// in the bare per-tab modes; `?mesh=1` gives them patchwork's old siblings mesh
-// (subduction over a BroadcastChannel) and `?signer=shared` patchwork's
-// origin-wide signer, so the shipped topology can be taken apart one piece at
-// a time. `?serverPeer=` names the sync server's subduction peer id; without
-// it the server is whichever peer isn't this tab.
+// The modes and query params are in ../README.md.
 import {
   parseAutomergeUrl,
   Repo,
@@ -67,7 +30,10 @@ type Mode =
   | "pertab-heads"
   | "tab-worker"
   | "shared-worker";
-type Storage = "worker" | "direct";
+// `memory`: no IndexedDB at all; subduction keeps what it holds in memory. For
+// the bench's stand-ins for another client (the stranger, the seeder, the
+// server probe), whose own storage isn't what's measured.
+type Storage = "worker" | "direct" | "memory";
 
 const params = new URLSearchParams(location.search);
 const mode = (params.get("mode") ?? "patchwork") as Mode;
@@ -83,14 +49,17 @@ const mark = (name: string) => (marks[name] ??= performance.now());
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const serverHeads = new Map<string, string[]>();
-// When the server was first seen holding each document's current heads, as
-// epoch ms, so serverConfirmed reports the event rather than when it polled.
-const serverHeadsAt = new Map<string, number>();
+// When the server was first seen listing each head of each document, as epoch
+// ms, so serverConfirmed reports the event rather than when it polled.
+const serverHeadSeenAt = new Map<string, Map<string, number>>();
 function noteServerHeads(documentId: string, heads: string[]) {
   const previous = serverHeads.get(documentId);
   if (previous && sameHeads(previous, heads)) return;
   serverHeads.set(documentId, heads);
-  serverHeadsAt.set(documentId, performance.timeOrigin + performance.now());
+  const now = performance.timeOrigin + performance.now();
+  let seenAt = serverHeadSeenAt.get(documentId);
+  if (!seenAt) serverHeadSeenAt.set(documentId, (seenAt = new Map()));
+  for (const head of heads) if (!seenAt.has(head)) seenAt.set(head, now);
 }
 let serverPeerIds = new Set<string>();
 const online = Promise.withResolvers<number>();
@@ -125,6 +94,7 @@ function sameHeads(a: string[], b: string[]): boolean {
 }
 
 function storageAdapter() {
+  if (storage === "memory") return undefined;
   const adapter =
     storage === "direct"
       ? new IndexedDBStorageAdapter()
@@ -152,8 +122,6 @@ function countingEndpoint(url: string): WebSocketEndpointInterface {
     },
   };
 }
-
-// ── Tab modes: the node is this Repo ────────────────────────────────────
 
 async function buildTabNode(): Promise<Repo> {
   let repo: Repo;
@@ -188,8 +156,11 @@ async function buildTabNode(): Promise<Repo> {
     }
   } else {
     const storage = storageAdapter();
+    if (sharedSigner && !storage) {
+      throw new Error("?signer=shared needs storage to keep the signer in");
+    }
     const signer = sharedSigner
-      ? await loadOrCreateSigner(storage)
+      ? await loadOrCreateSigner(storage!)
       : new MemorySigner();
     ownPeerId = signer.peerId().toString();
     const config: RepoConfig = {
@@ -265,8 +236,6 @@ async function buildTabNode(): Promise<Repo> {
   }
   return repo;
 }
-
-// ── Worker modes: the node is in a worker, this Repo is storageless ─────
 
 const PORT_TIMEOUT_MS = 10_000;
 
@@ -457,21 +426,43 @@ window.bench = {
   serverBytes: () => (bareTabMode && serverUrl !== "none" ? serverBytes : null),
   storageWrites: () => (bareTabMode ? storageWrites : null),
   syncRounds: () => syncRounds,
-  // Resolves with the epoch time the server was seen holding exactly the heads
-  // the document has right now: when its heads event arrived (noteServerHeads),
-  // even if that was before this was called. Polled only to wait for it.
+  // Resolves with the epoch time the server was seen listing every head the
+  // document has right now: when the heads event carrying the last of them
+  // arrived (noteServerHeads), even if that was before this was called.
+  // Polled only to wait for it.
+  //
+  // Every one of ours among the server's heads, not the two sets equal: once
+  // a document's history reaches a fragment boundary (a commit id with a
+  // leading zero byte, about one commit in 256), subduction's server goes on
+  // listing the commit before the boundary as a head beside the real one,
+  // for good. It holds everything; the extra head is one of ours from
+  // further back, which the failure message below calls "n back".
   async serverConfirmed(url, timeoutMs = 30_000) {
     const { handle } = await find(url);
-    const target = [...handle.heads()];
+    const target: string[] = [...handle.heads()];
     const deadline = performance.now() + timeoutMs;
     for (;;) {
       const seen = serverHeads.get(handle.documentId);
-      if (seen && sameHeads(seen, target)) {
-        return serverHeadsAt.get(handle.documentId)!;
+      if (seen && target.every((head) => seen.includes(head))) {
+        const seenAt = serverHeadSeenAt.get(handle.documentId)!;
+        return Math.max(...target.map((head) => seenAt.get(head)!));
       }
       if (performance.now() > deadline) {
+        // Each server head the tab didn't ask about, placed in the tab's own
+        // history: n back from its newest change, or a change it never got.
+        const history: string[] = handle.history().map(([head]) => head);
+        const placed = (seen ?? [])
+          .filter((head) => !target.includes(head))
+          .map((head) => {
+            const at = history.indexOf(head);
+            return at < 0
+              ? `${head} unknown to the tab`
+              : `${head} the tab's change ${history.length - 1 - at} back`;
+          });
         throw new Error(
-          `server never confirmed ${url}: it holds heads ${seen ?? "none"}, the tab ${target}`
+          `server never confirmed ${url}: it holds heads ${seen ?? "none"}, the tab ${target}` +
+            (placed.length ? ` (${placed.join("; ")})` : "") +
+            `; the tab now ${handle.heads()}`
         );
       }
       await sleep(10);

@@ -15,14 +15,12 @@ import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import { isKeyhiveDoc } from "./keyhive.js";
 
-// Datatype implementation interface
 export type DatatypeImplementation<D = unknown> = {
   init(doc: D, repo: Repo): void;
   getTitle(doc: D): string;
   setTitle?(doc: D, title: string): void;
 };
 
-// The Datatype description extends the base PluginDescription
 export interface DatatypeDescription extends PluginDescription {
   type: "patchwork:datatype";
   icon: string;
@@ -57,13 +55,11 @@ export function getSupertypes(type: string): string[] {
   return queue.slice(1);
 }
 
-// Loadable Datatype description using the generic LoadablePlugin
 export type Datatype<D = unknown> = LoadablePlugin<
   DatatypeDescription,
   DatatypeImplementation<D>
 >;
 
-// The complete loaded Datatype using the generic Plugin
 export type LoadedDatatype<D = unknown> = LoadedPlugin<
   DatatypeDescription,
   DatatypeImplementation<D>
@@ -79,7 +75,6 @@ const splitImportUrl = (
   return { url: stringifyAutomergeUrl({ documentId }), frozen: importUrl };
 };
 
-/** Creates a new document initialized with the given datatype using create2 */
 export const createDocOfDatatype2 = async <D>(
   datatype: LoadedDatatype<D>,
   repo: Repo,
@@ -87,7 +82,6 @@ export const createDocOfDatatype2 = async <D>(
   hive?: AutomergeRepoKeyhive
 ): Promise<DocHandle<D & HasPatchworkMetadata>> => {
   const handle = await repo.create2<D & HasPatchworkMetadata>();
-  // Add sync server with relay access
   if (hive && isKeyhiveDoc(handle.url)) {
     await hive.addSyncServerRelayToDoc(handle.url);
   }

@@ -1,12 +1,6 @@
-/**
- * The bundler-agnostic parts of building a Patchwork site's static assets —
- * icon rendering, and the index.html/manifest.webmanifest/Netlify _headers
- * content builders. No `vite` import anywhere in this directory: a
- * different bundler adapter (esbuild, webpack, or a plain pre-build script)
- * can reuse these directly. `../vite/*` is the vite-specific adapter that
- * wires these into vite's plugin hooks (dev middleware, emitFile, virtual
- * modules, config()).
- */
+// The parts of building a site's files with no bundler in them: icons, and the
+// index.html, manifest and Netlify _headers builders, for any bundler.
+// `../vite/*` wires them into vite.
 export type {
   PatchworkSiteOptions,
   PatchworkIconsOptions,

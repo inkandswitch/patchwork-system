@@ -1,6 +1,6 @@
 /**
- * Integration tests hitting the real Subduction server.
- * Verifies all 26 tool folder docs are retrievable.
+ * Against the real Subduction server, only with PATCHWORK_NETWORK_TESTS set:
+ * the module folder docs the settings doc lists can be found.
  */
 
 import { describe, it, expect, afterEach } from "vitest";
@@ -47,8 +47,6 @@ afterEach(async () => {
   await Promise.all(repos.map((r) => r.shutdown().catch(() => {})));
   repos.length = 0;
 });
-
-// ── Tests ──────────────────────────────────────────────────────────────
 
 describe.skipIf(!process.env.PATCHWORK_NETWORK_TESTS)(
   "subduction server sync",

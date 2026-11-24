@@ -1,14 +1,16 @@
-// Main-thread client for the module-loader worker (see module-loader-worker.ts).
+// The main thread's side of module-loader-worker.ts. The ModuleWatcher uses
+// `importAutomergePackageViaWorker` in place of importing a package here: the
+// worker says which plugins it exports, and each plugin's `load()` imports
+// the package on this thread (at the same heads) and runs the real loader.
 //
-// `importAutomergePackageViaWorker` is wired into the ModuleWatcher in place of
-// its default (direct, main-thread) package import. It asks the worker to
-// import the package entry point and report which plugins it exports, then
-// returns the same `{ plugins }` shape the watcher already feeds to
-// `registerPlugins` — except each plugin's `load()` re-imports the package
-// (pinned to the same heads) on this thread and runs the real plugin loader.
+// A package that lists its plugins in package.json (`patchwork.plugins`)
+// doesn't need the worker: reading that runs none of its code, so it's read
+// here, and each plugin's `load()` imports only its own export.
 
-import { importPluginFromFolderDocUrl } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
+import {
+  importPluginFromPackage,
+  readPluginManifest,
+} from "@inkandswitch/patchwork-filesystem";
 import { MODULE_LOADER_WORKER } from "./emitted.js";
 
 type Descriptor = Record<string, unknown> & { id?: string; type?: string };
@@ -17,52 +19,102 @@ type WorkerReply =
   | { type: "descriptors"; id: number; descriptors: Descriptor[] }
   | { type: "error"; id: number; error: string };
 
+// Importing a package can sync its documents first, which on a slow
+// connection takes a while; a minute is well past that, so a request that's
+// still waiting then is never going to be answered.
+const REQUEST_TIMEOUT_MS = 60_000;
+
 let worker: Worker | undefined;
 let nextRequestId = 1;
 const pending = new Map<
   number,
-  { resolve: (d: Descriptor[]) => void; reject: (e: Error) => void }
+  {
+    worker: Worker;
+    timer: ReturnType<typeof setTimeout>;
+    resolve: (d: Descriptor[]) => void;
+    reject: (e: Error) => void;
+  }
 >();
+
+function settle(id: number) {
+  const entry = pending.get(id);
+  if (!entry) return undefined;
+  pending.delete(id);
+  clearTimeout(entry.timer);
+  return entry;
+}
+
+// A worker that errored may have lost every request sent to it, and can't be
+// trusted with the next, so drop it and fail what was waiting on it. The next
+// request spawns a fresh one.
+function dropWorker(dead: Worker, error: Error) {
+  if (worker === dead) worker = undefined;
+  dead.terminate();
+  for (const [id, entry] of [...pending]) {
+    if (entry.worker === dead) settle(id)?.reject(error);
+  }
+}
 
 function getWorker(): Worker {
   if (worker) return worker;
-  worker = new Worker(MODULE_LOADER_WORKER, {
+  const spawned = new Worker(MODULE_LOADER_WORKER, {
     type: "module",
     name: "patchwork-module-loader",
   });
-  worker.addEventListener("message", (event: MessageEvent<WorkerReply>) => {
+  worker = spawned;
+  spawned.addEventListener("message", (event: MessageEvent<WorkerReply>) => {
     const data = event.data;
     if (!data || (data.type !== "descriptors" && data.type !== "error")) return;
-    const entry = pending.get(data.id);
+    const entry = settle(data.id);
     if (!entry) return;
-    pending.delete(data.id);
     if (data.type === "descriptors") entry.resolve(data.descriptors);
     else entry.reject(new Error(data.error));
   });
-  worker.addEventListener("error", (event) => {
-    // An uncaught worker error can't be tied to a single request — fail every
-    // outstanding one so callers don't hang.
-    const error = new Error(
-      `module-loader worker error: ${event.message ?? "unknown"}`
+  // An uncaught worker error can't be tied to a single request, so every
+  // request outstanding on it fails and callers don't hang.
+  spawned.addEventListener("error", (event) => {
+    dropWorker(
+      spawned,
+      new Error(`module-loader worker error: ${event.message ?? "unknown"}`)
     );
-    for (const [, entry] of pending) entry.reject(error);
-    pending.clear();
   });
-  return worker;
+  spawned.addEventListener("messageerror", () => {
+    dropWorker(
+      spawned,
+      new Error("module-loader worker sent an unreadable reply")
+    );
+  });
+  return spawned;
 }
 
-function discoverDescriptors(urlAtHeads: AutomergeUrl): Promise<Descriptor[]> {
+function discoverDescriptors(urlAtHeads: string): Promise<Descriptor[]> {
   const id = nextRequestId++;
   return new Promise<Descriptor[]>((resolve, reject) => {
-    pending.set(id, { resolve, reject });
-    getWorker().postMessage({ type: "discover", id, url: urlAtHeads });
+    const target = getWorker();
+    const timer = setTimeout(() => {
+      settle(id)?.reject(
+        new Error(
+          `module-loader worker timed out after ${REQUEST_TIMEOUT_MS / 1000}s on ${urlAtHeads}`
+        )
+      );
+    }, REQUEST_TIMEOUT_MS);
+    pending.set(id, { worker: target, timer, resolve, reject });
+    try {
+      target.postMessage({ type: "discover", id, url: urlAtHeads });
+    } catch (error) {
+      dropWorker(
+        target,
+        error instanceof Error ? error : new Error(String(error))
+      );
+    }
   });
 }
 
 export async function importAutomergePackageViaWorker(
-  urlAtHeads: string
+  url: string
 ): Promise<{ plugins: Descriptor[] }> {
-  const url = urlAtHeads as AutomergeUrl;
+  const fromManifest = await readPluginManifest(url);
+  if (fromManifest) return fromManifest;
   const descriptors = await discoverDescriptors(url);
   const plugins = descriptors.map((descriptor) => {
     const { id, type } = descriptor;
@@ -71,7 +123,7 @@ export async function importAutomergePackageViaWorker(
     if (typeof id !== "string" || typeof type !== "string") return descriptor;
     return {
       ...descriptor,
-      load: () => importPluginFromFolderDocUrl(url, type, id),
+      load: () => importPluginFromPackage(url, type, id),
     };
   });
   return { plugins };

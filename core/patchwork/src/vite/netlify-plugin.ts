@@ -4,11 +4,10 @@ import { buildHeaders, buildRedirects } from "../site-kit/netlify.js";
 import { hashedFiles } from "./hashed-plugin.js";
 
 /**
- * Netlify's _headers/_redirects are only meaningful on an actual Netlify
- * deploy, so this only runs for the production build — no dev middleware.
- * The Link header shares its sync-server/wasm-asset lists with html-plugin
- * so the two never drift out of sync with each other. Both are written once
- * the hashed file names are known, which they name.
+ * Netlify's _headers and _redirects, for the production build only: they mean
+ * nothing anywhere else. The Link header takes its sync-server and wasm lists
+ * from the same place html-plugin does, so the two agree. Both files name the
+ * hashed files, so they're written once those names are known.
  */
 export function netlify(
   options: PatchworkVitePluginOptions = {}

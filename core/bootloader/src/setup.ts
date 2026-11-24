@@ -71,7 +71,6 @@ function installServiceWorkerLogForwarding(): void {
   navigator.serviceWorker.startMessages();
 }
 
-// ── New builds ─────────────────────────────────────────────────────────
 // After a deploy, open tabs are on the old build. The default response is to
 // say so and offer a reload, rather than reload out from under someone
 // mid-edit; an old page sharing IndexedDB with the new automerge worker is
@@ -102,7 +101,6 @@ function serviceWorkerBuild(sw: ServiceWorker): Promise<number | undefined> {
   }).finally(() => port1.close());
 }
 
-// ── The automerge worker ───────────────────────────────────────────────
 // A SharedWorker holding a Repo that resolves `automerge:` URLs for the
 // service worker when no tab can. Tabs don't sync through it — each tab is its
 // own node — but only a page can start a SharedWorker, so each tab keeps it
@@ -155,7 +153,6 @@ export function restartAutomergeProtocolHandlerWorker(
   automergeProtocolHandlerWorker.restart(reason);
 }
 
-// ── The public reader ──────────────────────────────────────────────────
 // A SharedWorker reading documents made public to Patchwork (see
 // public-reader.ts), which this tab's Repo and the resolver's connect to.
 // Only a page can start a SharedWorker, and one can't start another, so the
@@ -284,8 +281,6 @@ export function connectPublicReader(
   });
 }
 
-// ── Boot ───────────────────────────────────────────────────────────────
-
 function waitForActive(reg: ServiceWorkerRegistration): Promise<ServiceWorker> {
   if (reg.active) return Promise.resolve(reg.active);
   const worker = reg.installing || reg.waiting;
@@ -301,6 +296,45 @@ function waitForActive(reg: ServiceWorkerRegistration): Promise<ServiceWorker> {
       }
     });
   });
+}
+
+// How long the active worker gets to claim this page before it's reloaded.
+const CLAIM_TIMEOUT_MS = 3_000;
+// When this tab last reloaded to come under the worker, so a worker that never
+// takes control fails boot instead of reloading the page forever.
+const CONTROL_RELOAD_KEY = "patchwork:reloaded-for-service-worker";
+const CONTROL_RELOAD_WINDOW_MS = 30_000;
+
+/**
+ * Bring this page under the service worker. A first install's worker claims
+ * the page as it activates, but a hard reload loads the page past a worker
+ * that's already active and won't activate again, so nothing would ever take
+ * control. Ask it to claim the page; if it doesn't (a worker from a build that
+ * doesn't know `claim`), reload once, normally, which it does control.
+ */
+async function takeControl(active: ServiceWorker | null): Promise<void> {
+  const controlled = new Promise<boolean>((resolve) => {
+    navigator.serviceWorker.addEventListener(
+      "controllerchange",
+      () => resolve(true),
+      { once: true }
+    );
+    setTimeout(() => resolve(false), CLAIM_TIMEOUT_MS);
+  });
+  active?.postMessage({ type: "claim" });
+  if ((await controlled) || navigator.serviceWorker.controller) return;
+
+  const lastReload = Number(sessionStorage.getItem(CONTROL_RELOAD_KEY));
+  if (Date.now() - lastReload < CONTROL_RELOAD_WINDOW_MS) {
+    throw new Error(
+      "the service worker didn't take control of this page, even after a reload"
+    );
+  }
+  console.warn("service worker didn't claim this page; reloading once");
+  sessionStorage.setItem(CONTROL_RELOAD_KEY, String(Date.now()));
+  location.reload();
+  // The reload replaces this page; nothing after it should run.
+  await new Promise<never>(() => {});
 }
 
 export default async function setupServiceWorker(
@@ -336,17 +370,9 @@ export default async function setupServiceWorker(
   configureServiceWorker(active);
 
   // No controller means the page loaded without a service worker — a first-time
-  // install or a hard reload. Wait for it so the app boots with the worker in
-  // control of generated fetches.
-  if (!navigator.serviceWorker.controller) {
-    await new Promise<void>((resolve) => {
-      navigator.serviceWorker.addEventListener(
-        "controllerchange",
-        () => resolve(),
-        { once: true }
-      );
-    });
-  }
+  // install or a hard reload. The app needs the worker in control of generated
+  // fetches before it boots.
+  if (!navigator.serviceWorker.controller) await takeControl(active);
 
   // A replacement worker boots with the default cache name, so reconfigure
   // whenever a new one takes control. A new one taking control is also how a

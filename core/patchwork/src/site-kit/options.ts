@@ -1,13 +1,8 @@
 import type { ArkVersion } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 
-/**
- * The bundler-agnostic option shape for a Patchwork site's generated
- * static assets (icons, index.html, manifest.webmanifest, Netlify config).
- * `../vite/patchwork-plugin.ts` extends this with vite-only config
- * (importmap, server/preview/worker/build) — a different bundler adapter
- * can reuse this same shape and the pure builders in this directory without
- * pulling in anything vite-specific.
- */
+// Options for a site's generated files (icons, index.html, the manifest,
+// Netlify config), with nothing vite-specific in them, so another bundler can
+// use them too. `../vite/patchwork-plugin.ts` adds the vite parts.
 
 export interface PatchworkIconsOptions {
   /** Path (relative to the site root) to a source svg or raster image. Every icon size is rendered from it via sharp. */

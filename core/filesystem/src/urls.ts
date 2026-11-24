@@ -3,13 +3,11 @@ import {
   type DocHandle,
 } from "@automerge/automerge-repo/slim";
 
-// The origin to resolve service-worker module URLs against. `location.origin`
-// is the string "null" inside a srcdoc/sandboxed frame — an invalid URL base —
-// whereas `document.baseURI` is the document's proper base URL (the embedder's
-// URL for a srcdoc frame, and the page URL for a normal document), so its origin
-// is valid in both cases. Reached via `globalThis` so this also works inside a
-// worker (where `document`/`window` are undefined but `self.location` is the
-// site origin the service worker serves module URLs from).
+// The origin service-worker module URLs resolve against. `location.origin` is
+// "null" in a srcdoc or sandboxed frame, an invalid base, but
+// `document.baseURI`'s origin is valid there too (the embedder's). In a worker
+// there's no `document`, so it's `location`: the origin the service worker
+// serves module URLs from.
 export function documentBaseOrigin(): string {
   try {
     return new URL(globalThis.document.baseURI).origin;
@@ -29,9 +27,8 @@ export function getImportableUrlFromAutomergeUrl(
 }
 
 /**
- * Build a service-worker-resolvable URL from a DocHandle, pinning to the
- * handle's latest heads by default. This ensures the caching system can
- * key on an exact version of the folder document.
+ * A service-worker URL for a DocHandle, pinned to its latest heads by default,
+ * so caches key on an exact version of the folder doc.
  */
 export function getImportableUrlFromDocHandle(
   handle: DocHandle<any>,

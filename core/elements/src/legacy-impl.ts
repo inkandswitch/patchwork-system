@@ -1,9 +1,7 @@
 import {
-  parseAutomergeUrl,
   type AutomergeUrl,
   type DocHandle,
   type DocHandleChangePayload,
-  type DocumentId,
   type Repo,
 } from "@automerge/automerge-repo/slim";
 import {
@@ -16,7 +14,6 @@ import {
   getFallbackTool,
   getRegistry,
   getSupertypes,
-  isKeyhiveDoc,
   isLoadablePlugin,
   registerPlugins,
   type DatatypeDescription,
@@ -26,9 +23,22 @@ import {
 } from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { gateOnAccess } from "./keyhive-access.js";
-import { MountedEvent, UnmountedEvent } from "./events.js";
+import {
+  findingCard,
+  invalidUrlCard,
+  missingTypeCard,
+  noToolCard,
+  notSharedCard,
+  toolFailedCard,
+  unavailableCard,
+  type Anything,
+  type Card,
+} from "./cards.js";
+import { contactCardText, gateOnAccess } from "./keyhive-access.js";
+import { MountedEvent, NoToolEvent, UnmountedEvent } from "./events.js";
+import { loadRetryDelay, resyncBeforeRetry } from "./load-retry.js";
 import { importSource, presentableImportUrl } from "./import-url.js";
+import { readClaims } from "./package-info.js";
 import {
   dispatchFromNearestConnected,
   Serialized,
@@ -44,14 +54,77 @@ const log = debug("patchwork:elements:legacy");
  * datatype.
  */
 function isWildcardOnlyMatch(
-  tool: LoadedTool,
+  tool: ToolDescription,
   type: string | undefined
 ): boolean {
   const datatypes = tool.supportedDatatypes;
-  const list = datatypes === "*" ? ["*"] : datatypes;
+  const list = datatypes === "*" ? ["*"] : (datatypes ?? []);
   if (!list.includes("*")) return false;
   if (type === undefined) return true;
   return ![type, ...getSupertypes(type)].some((t) => list.includes(t));
+}
+
+/**
+ * A tool that opens anything, to offer for a look at a doc's insides: `raw`
+ * when there is one, else the first listed `*` tool.
+ */
+function anythingTool(): Anything | undefined {
+  const wildcards = getRegistry<ToolDescription>("patchwork:tool").filter(
+    (tool) => !tool.unlisted && isWildcardOnlyMatch(tool, undefined)
+  );
+  const tool = wildcards.find((t) => t.id === "raw") ?? wildcards[0];
+  return tool && { id: tool.id, name: tool.name };
+}
+
+/**
+ * The tools a reader could open a `type` doc with instead of `except`: the
+ * datatype's own first, then ones that open anything.
+ */
+function otherTools(type: string | undefined, except: string): Anything[] {
+  const tools = getRegistry<ToolDescription>("patchwork:tool").filter(
+    (tool) =>
+      !tool.unlisted &&
+      !tool.forTitleBar &&
+      tool.id !== except &&
+      (isWildcardOnlyMatch(tool, undefined) ||
+        (!!type && !!tool.supportedDatatypes?.includes(type)))
+  );
+  tools.sort(
+    (a, b) =>
+      Number(isWildcardOnlyMatch(a, type)) -
+      Number(isWildcardOnlyMatch(b, type))
+  );
+  return tools.map((tool) => ({ id: tool.id, name: tool.name ?? tool.id }));
+}
+
+/** The types something here opens, to suggest when giving a doc a type. */
+function knownTypes(): { id: string; name?: string }[] {
+  const names = new Map<string, string | undefined>();
+  for (const tool of getRegistry<ToolDescription>("patchwork:tool").all()) {
+    const supported = tool.supportedDatatypes;
+    if (!supported || supported === "*") continue;
+    for (const type of supported) if (type !== "*") names.set(type, undefined);
+  }
+  for (const datatype of getRegistry<DatatypeDescription>(
+    "patchwork:datatype"
+  ).all()) {
+    if (datatype.unlisted) continue;
+    names.set(datatype.id, datatype.name);
+  }
+  return [...names]
+    .map(([id, name]) => ({ id, name }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+}
+
+// The repo says so when it can't parse a url: "Invalid AutomergeUrl: …" from
+// interpretAsDocumentId, "Invalid document URL: …" from parseAutomergeUrl.
+// We go by what the repo says rather than checking the url ourselves, so a
+// form the host's repo accepts is never turned away here.
+function isInvalidUrlError(error: unknown): boolean {
+  const message = (error as Error)?.message ?? String(error);
+  return /invalid (automergeurl|document url|documentid|document id)/i.test(
+    message
+  );
 }
 
 const State = {
@@ -73,12 +146,15 @@ const ATTRS = {
 
 export type LegacyImplParams = {
   /**
-   * Repo used to resolve the primary doc handle. This is the
-   * `<patchwork-view>`'s overlay shim, so the handle the tool receives is
-   * remapped (e.g. to a draft clone) when a remapper answers
-   * `repo:handle-descriptor`.
+   * Finds the primary doc. It's the view's overlay repo, so a remapper (a
+   * draft, say) decides which document the tool gets.
    */
   repo: Repo;
+  /**
+   * The realm's repo, for reading a suggested package's folder doc, which no
+   * remapper should have a say in. Defaults to `repo`.
+   */
+  baseRepo?: Repo;
   hive?: AutomergeRepoKeyhive;
 };
 
@@ -87,23 +163,14 @@ type HostElement = HTMLElement & {
   hive?: AutomergeRepoKeyhive;
 };
 
-// How long a failed load waits before trying again, attempt by attempt. A
-// grant can land seconds before the doc it grants is fetchable, and the op
-// that carried it may be the last one for a while, so a keyhive op alone
-// can't be relied on to bring the view back. After ~30s it settles on the
-// last delay, and keeps asking for as long as the view is up: a sender's
-// device can take minutes to push a doc it just shared.
-const LOAD_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000, 30000];
-
 const ERROR_STYLE_ID = "patchwork-view-error-style";
 
 // Distinct ids so each view's `:(` can point its `popovertarget` at its own
 // flyout.
 let errorFlyoutSeq = 0;
 
-// One shared stylesheet for every view's error UI. Colours/fonts/radii come
-// from ../base/theming (the `--studio-*` custom properties) with plain
-// fallbacks so the error still reads sensibly outside a themed context.
+// One stylesheet for every view's error UI, from the `--studio-*` properties,
+// with fallbacks for when nothing is themed.
 function ensureErrorStyles() {
   if (document.getElementById(ERROR_STYLE_ID)) return;
   const style = document.createElement("style");
@@ -140,48 +207,6 @@ function ensureErrorStyles() {
       border-color: color-mix(in oklch, var(--studio-danger-text, #c2415f), transparent 40%);
     }
     .pw-error__face[aria-expanded="true"] { transform: rotate(90deg); }
-
-    .pw-error--offer {
-      flex-direction: column;
-      gap: 0.9rem;
-      justify-content: center;
-    }
-    .pw-error__message {
-      margin: 0;
-      max-width: 34em;
-      text-align: center;
-      overflow-wrap: anywhere;
-      font-family: var(--studio-family, system-ui, sans-serif);
-      font-size: 0.85rem;
-      line-height: 1.5;
-      color: var(--studio-line, #1a1a1a);
-    }
-    .pw-error__actions {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    /* Offer to run the package the document names. Deliberately quiet — it
-       executes third-party JavaScript, so it shouldn't read as the happy path. */
-    .pw-error__load {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35em;
-      font-family: var(--studio-family, system-ui, sans-serif);
-      font-size: 0.8rem;
-      line-height: 1;
-      color: var(--studio-line, #1a1a1a);
-      background: var(--studio-fill, white);
-      border: 1px solid var(--studio-fill-offset-30, rgba(0, 0, 0, 0.12));
-      border-radius: var(--studio-radius-md, 8px);
-      padding: 0.5em 0.7em;
-      cursor: pointer;
-      transition: background 0.12s ease, border-color 0.12s ease;
-    }
-    .pw-error__load:hover {
-      background: var(--studio-fill-offset-10, rgba(0, 0, 0, 0.04));
-      border-color: var(--studio-fill-offset-30, rgba(0, 0, 0, 0.24));
-    }
 
     /* Flyout: a Popover-API callout (top layer, so it escapes any overflow
        clipping) positioned under the button in JS, with a caret + shadow. */
@@ -246,25 +271,44 @@ function ensureErrorStyles() {
 }
 
 /**
- * `doc-url`/`tool-id`-driven legacy view behavior for `<patchwork-view>`. The
- * tool renders into an inner `.patchwork-view-content` element (the only thing
- * wiped on re-render); the host stays the identity/event node, leaving safe
- * sibling space for augmentations a tool's re-render can't trample.
+ * The `doc-url`/`tool-id` behaviour of `<patchwork-view>`. The tool renders
+ * into an inner `.patchwork-view-content`, the only thing a re-render wipes, so
+ * the host keeps its identity and events, with room beside the content for
+ * things a re-render mustn't trample.
+ *
+ * When it can't show the doc, it says why in a card (see `cards.ts`) in place
+ * of the tool: still finding it, couldn't get it, not shared, a broken link,
+ * no type, no tool for the type, or a tool that didn't load. Only a tool that
+ * throws while rendering gets the bare `:(`, with its error under it.
  */
 export class LegacyImpl {
   #element: HostElement;
   #content: HostElement;
   #repo: Repo;
+  #baseRepo: Repo;
   #hive: AutomergeRepoKeyhive | undefined;
   // Set on disconnect. The host makes a fresh impl for each connection, so a
   // disposed impl never mounts again, whatever async work is still in flight.
   #disposed = false;
   #docUrl: AutomergeUrl | null = null;
   #toolId: string | null = null;
+  // A tool the reader picked from a card to open the doc with: one that opens
+  // anything, or another when the asked-for one didn't load. Wins over
+  // `tool-id`. Kept across restarts, dropped when the doc's type, the doc, or
+  // the asked-for tool changes.
+  #peekToolId: string | null = null;
   #handle: DocHandle<HasPatchworkMetadata> | null = null;
   #tool: LoadedTool | null = null;
   #state: State = State.none;
   #requestedToolImports = new Set<string>();
+  // Why the last import of a suggested package didn't bring a tool, by url.
+  #importFailures = new Map<string, string>();
+  // A tool whose code failed to load, and why; its card offers to try again.
+  #toolLoadError: { id: string; message: string } | null = null;
+  // The tool the reader just asked to try again. If that load fails too, a
+  // fresh import won't fix it (the browser holds on to the failed module), so
+  // the page reloads instead.
+  #retryingToolId: string | null = null;
   #initEpoch = 0;
   #capturedParent: Element | null = null;
   #fallbackId: string | undefined;
@@ -272,28 +316,27 @@ export class LegacyImpl {
   #teardown = new Serialized(() => this.#runTeardown());
   // `unable` because the identity has no access yet; a grant mounts the view.
   #unableNoAccess = false;
-  // `unable` because the doc failed to load; a keyhive op retries the load,
-  // and so does a timer, backing off through LOAD_RETRY_DELAYS_MS.
+  // `unable` because the doc failed to load; a keyhive op or the timer retries.
   #loadFailed = false;
   #retryingLoad = false;
   #pendingRetryEpoch: number | null = null;
   #retryAttempt = 0;
   #retryTimer: ReturnType<typeof setTimeout> | null = null;
-  #toast: HTMLElement | null = null;
-  #toastTimer: ReturnType<typeof setTimeout> | null = null;
-  #toastPositioned = false;
-  #toastEscape: ((event: KeyboardEvent) => void) | null = null;
   #errorReposition: (() => void) | null = null;
+  // The card on screen, and what it was drawn from, so a render that would
+  // draw the same one leaves it be (and its fade-in doesn't replay).
+  #card: Card | null = null;
+  #cardKey: string | null = null;
 
   constructor(element: HTMLElement, params: LegacyImplParams) {
     this.#element = element as HostElement;
     this.#repo = params.repo;
+    this.#baseRepo = params.baseRepo ?? params.repo;
     this.#hive = params.hive;
     this.#element.hive = params.hive;
 
-    // `height: 100%` makes the wrapper fill the host so tools that size/measure
-    // their root element see the host's box (the wrapper carries the
-    // `repo`/`hive` surface tools read off the element they're handed).
+    // Fills the host, so tools that measure their root element see the host's
+    // box.
     this.#content = document.createElement("div") as HostElement;
     this.#content.className = "patchwork-view-content";
     this.#content.style.width = "100%";
@@ -329,21 +372,34 @@ export class LegacyImpl {
     if (old === val) return;
     if (name === ATTRS.toolId) {
       this.#toolId = val;
+      this.#peekToolId = null;
       void this.#restart();
     }
     if (name === ATTRS.docUrl) {
       this.#docUrl = val as AutomergeUrl;
+      this.#peekToolId = null;
+      this.#importFailures.clear();
       void this.#restart();
     }
   }
 
+  // A new type means a new tool, if there's one for it: a doc given a type
+  // (from its card, or in the raw view) opens with that type's tool.
   #onDocChange = (payload: DocHandleChangePayload<HasPatchworkMetadata>) => {
     const { before, after } = payload.patchInfo;
-    if (getType(before) != getType(after)) void this.#restart();
+    if (getType(before) != getType(after)) {
+      this.#peekToolId = null;
+      void this.#restart();
+    }
   };
 
-  // Tear down and mount again. Every remount goes through `#init`, which a
-  // disposed impl refuses, so one disconnected mid-teardown stays down.
+  /** The tool asked for: picked from a card, or by `tool-id`. */
+  #chosenToolId(): string | null {
+    return this.#peekToolId || this.#toolId;
+  }
+
+  // Every remount goes through `#init`, which a disposed impl refuses, so one
+  // disconnected mid-teardown stays down.
   async #restart(): Promise<void> {
     await this.#teardown.run();
     await this.#init();
@@ -368,6 +424,9 @@ export class LegacyImpl {
     if (!hasAccess) {
       this.#state = State.unable;
       this.#unableNoAccess = true;
+      this.#showCard("not-shared", () =>
+        notSharedCard({ contactCard: contactCardText(this.#hive) })
+      );
       return;
     }
 
@@ -375,19 +434,24 @@ export class LegacyImpl {
       "registered",
       async (addedTool) => {
         const toolId = addedTool.id;
-        const isChosenTool = toolId == this.#toolId;
-        // `getFallbackTool` scans the whole registry, so recomputing it on
-        // every registration is O(N²) across a load burst. A registration can
-        // only change the outcome when no fallback is known yet or the new
-        // tool supports this doc's type.
+        const isChosenTool = toolId == this.#chosenToolId();
+        // getFallbackTool scans the whole registry: calling it on every
+        // registration is O(N²) across a load burst.
         if (this.#handle && this.#couldChangeFallback(addedTool)) {
           this.#fallbackId = getFallbackTool(this.#handle.doc())?.id;
         }
         const isFallbackTool = toolId == this.#fallbackId;
         if (isChosenTool || isFallbackTool) {
           if (isLoadablePlugin(addedTool)) {
-            toolRegistry.load(addedTool.id);
+            this.#watchLoad(toolId, toolRegistry.load(addedTool.id));
           }
+        } else if (
+          this.#state === State.unable &&
+          this.#handle &&
+          isWildcardOnlyMatch(addedTool, undefined)
+        ) {
+          // a card that could offer a look with it now
+          this.#queueRender();
         }
       }
     );
@@ -396,7 +460,7 @@ export class LegacyImpl {
       "loaded",
       async (loadedTool) => {
         const toolId = loadedTool.id;
-        const isChosenTool = toolId == this.#toolId;
+        const isChosenTool = toolId == this.#chosenToolId();
         const isFallbackTool = toolId == this.#fallbackId;
         if (isChosenTool || isFallbackTool) {
           if (this.#state == "unable" || this.#state == "initializing") {
@@ -453,20 +517,36 @@ export class LegacyImpl {
     this.#element.repo = repo;
     this.#content.repo = repo;
 
+    this.#showCard("finding", () => findingCard("finding this doc…"), false);
+
     let handle: DocHandle<HasPatchworkMetadata>;
     try {
       handle = await repo.find<HasPatchworkMetadata>(this.#docUrl);
     } catch (err) {
       if (epoch !== this.#initEpoch) return;
-      // Every caller voids `#init`'s promise, so rethrowing would only
-      // produce an unhandled rejection and wedge `#state` in `initializing`.
-      // Show the error and park in `unable`: the usual reason a find fails
-      // is that the doc hasn't synced yet, and a keyhive op retries it.
+      // Callers void `#init`'s promise, so a rethrow would only wedge `#state`
+      // in `initializing`.
       console.error(`failed to load ${this.#docUrl}`, err);
       this.#state = State.unable;
+      // A url the repo can't even parse won't turn up however long we wait.
+      if (isInvalidUrlError(err)) {
+        const url = this.#docUrl;
+        this.#showCard("invalid-url", () => invalidUrlCard({ url }));
+        return;
+      }
+      // Usually the doc just hasn't synced yet, and a keyhive op, the timer
+      // or the sync server coming back retries.
       this.#loadFailed = true;
-      const e = err as Error;
-      this.#displayError(e?.message ?? String(err), e?.stack, err);
+      this.#showCard("unavailable", () =>
+        unavailableCard({
+          repo: this.#repo,
+          onReconnect: () => {
+            if (!this.#loadFailed) return;
+            this.#retryAttempt = 0;
+            void this.#retryLoad();
+          },
+        })
+      );
       this.#scheduleRetry();
       return;
     }
@@ -482,11 +562,9 @@ export class LegacyImpl {
     this.#queueRender();
   }
 
-  // Load the doc again after a failed find, leaving the error up while it
-  // runs: a teardown would blank the view and fade the error back in on every
-  // keyhive op, which arrive far faster than the fade. Overlapping retries
-  // collapse into the one in flight, with one follow-up for an op received
-  // while it runs.
+  // Leaves the card up while it runs: a teardown would blank the view and fade
+  // the card back in on every keyhive op, and they come far faster than the
+  // fade. Retries asked for during one collapse into a single follow-up.
   async #retryLoad(): Promise<void> {
     if (!this.#docUrl) return;
     if (this.#retryingLoad) {
@@ -503,8 +581,6 @@ export class LegacyImpl {
       this.#retryAttempt = 0;
       this.#mountHandle(handle);
     } catch (err) {
-      // Still unavailable. The error stays up; the next op, or the timer,
-      // tries again.
       log("retry of %s failed: %o", this.#docUrl, err);
       if (epoch === this.#initEpoch && this.#loadFailed) this.#scheduleRetry();
     } finally {
@@ -521,41 +597,15 @@ export class LegacyImpl {
     }
   }
 
-  // Have the repo ask the sync server for the doc again. Once a doc's query
-  // has settled on "unavailable", `find` answers from that verdict without
-  // asking anyone: the subduction source only re-arms when data is pushed, a
-  // connection changes, or a key arrives. So a timed re-find on its own finds
-  // nothing new. `resyncSubduction` marks the doc never-synced, and the round
-  // it opens starts a macrotask later, so it's asked for when a retry is
-  // scheduled: by the time the retry's `find` runs, the query is loading or
-  // has a fresh answer. A repo without a subduction source has no
-  // `resyncSubduction`, and a doc that isn't attached to it is a no-op.
-  //
-  // It goes by the url the view was given. Under a remapping provider the doc
-  // actually fetched may be another (a draft's clone), which this doesn't
-  // reach; that's no worse than before, when no retry re-armed anything.
-  #askAgain(url: AutomergeUrl): void {
-    const repo = this.#repo as Repo & {
-      resyncSubduction?: (documentId: DocumentId) => void;
-    };
-    if (typeof repo.resyncSubduction !== "function") return;
-    try {
-      repo.resyncSubduction(parseAutomergeUrl(url).documentId);
-    } catch (err) {
-      log("resync of %s failed: %o", url, err);
-    }
-  }
-
-  // Try a failed load again after the next delay in LOAD_RETRY_DELAYS_MS,
-  // staying on the last one once they've all been used.
   #scheduleRetry(): void {
     if (this.#disposed || this.#retryTimer) return;
-    const delay =
-      LOAD_RETRY_DELAYS_MS[
-        Math.min(this.#retryAttempt, LOAD_RETRY_DELAYS_MS.length - 1)
-      ];
+    const delay = loadRetryDelay(this.#retryAttempt);
     this.#retryAttempt++;
-    if (this.#docUrl) this.#askAgain(this.#docUrl);
+    if (this.#docUrl) {
+      resyncBeforeRetry(this.#repo, this.#docUrl, (err) =>
+        log("resync of %s failed: %o", this.#docUrl, err)
+      );
+    }
     this.#retryTimer = setTimeout(() => {
       this.#retryTimer = null;
       void this.#retryLoad();
@@ -605,11 +655,8 @@ export class LegacyImpl {
   async #runTeardown(): Promise<void> {
     if (this.#state == State.none) return;
 
-    // Capture the mount-event payload (if any) before clearing state,
-    // so the unmount echoes the same {url, toolId} we dispatched at
-    // mount. `rendered`/`fallback` are exactly the states in which
-    // `#render` dispatched a MountedEvent (it sets `#tool` only after
-    // the tool's module call succeeds).
+    // Read before clearing, so the unmount names the same {url, toolId} the
+    // mount did; `#render` sends a MountedEvent only in these two states.
     const wasMounted =
       this.#state == State.rendered || this.#state == State.fallback;
     const mountedUrl = this.#handle?.url;
@@ -619,16 +666,16 @@ export class LegacyImpl {
     this.#pendingRetryEpoch = null;
     await this.#teardowns.run();
 
-    this.#dismissToast(true);
-    this.#removeErrorListeners();
     this.#unableNoAccess = false;
     this.#loadFailed = false;
     this.#cancelRetry();
     this.#retryAttempt = 0;
     this.#handle = null;
     this.#tool = null;
+    this.#toolLoadError = null;
+    this.#retryingToolId = null;
     this.#requestedToolImports.clear();
-    this.#content.textContent = "";
+    this.#resetDisplay();
     this.#state = State.none;
 
     if (wasMounted && mountedUrl && mountedToolId) {
@@ -650,11 +697,10 @@ export class LegacyImpl {
     });
   }
 
-  // A render queued before a teardown began must not land while it runs: the
-  // tool's cleanup would join a set the teardown has already drained, and
-  // nothing would ever call it. Teardown bumps the epoch first thing, but
-  // registry listeners can queue a fresh render (with the new epoch) until
-  // their own cleanup runs, hence the in-flight check too.
+  // A render mustn't land during a teardown: the tool's cleanup would join a
+  // set the teardown already drained, and never run. The epoch bumps first
+  // thing, but registry listeners can queue a render (with the new epoch)
+  // until their own cleanup runs, hence the in-flight check.
   #mayRender(epoch: number): boolean {
     return (
       !this.#disposed && epoch === this.#initEpoch && !this.#teardown.pending
@@ -668,107 +714,52 @@ export class LegacyImpl {
       return;
     }
 
-    this.#resetDisplay();
-
     const doc = this.#handle.doc();
+    const type = getType(doc);
     const fallbackTool = getFallbackTool(doc);
     this.#fallbackId = fallbackTool?.id;
-    const fallingBack = !this.#toolId;
-    const toolId = this.#toolId || this.#fallbackId;
-
-    // A wildcard fallback tool (`supportedDatatypes: ["*"]`) supports this doc
-    // only generically, not because it's built for the doc's datatype — it's a
-    // stopgap, so it gives way to anything the doc suggests we load instead.
-    const mountingWildcardStopgap =
-      fallingBack &&
-      !!fallbackTool &&
-      isWildcardOnlyMatch(fallbackTool, getType(doc));
-
-    if (fallingBack) {
-      console.warn(`falling back to default tool for ${this.#docUrl}`);
-      // A wildcard stopgap is a raw viewer, not this datatype's editor. When the
-      // doc names a package that would bring the real thing, offer that instead
-      // of mounting the stopgap: raw JSON isn't what was asked for, and it would
-      // only be swapped out from under the reader once the import lands. Parking
-      // in `unable` is what lets the registry listeners re-render then — the
-      // loaded tool sorts ahead of the wildcard as the new fallback.
-      if (mountingWildcardStopgap) {
-        const suggestion = this.#suggestedImport();
-        if (suggestion) {
-          this.#state = State.unable;
-          // While the import is in flight `#loadSuggestedImport`'s progress
-          // toast is already up, and `#resetDisplay` leaves it alone.
-          if (!suggestion.loading) {
-            this.#showToast(
-              "This document suggests a package",
-              suggestion.url,
-              () => this.#loadSuggestedImport(suggestion.url)
-            );
-          }
-          return;
-        }
-      }
-    }
+    const chosen = this.#chosenToolId();
+    const fallingBack = !chosen;
+    let toolId = chosen;
 
     if (!toolId) {
-      this.#state = "unable";
-      // The doc's datatype has no registered tool and no explicit tool was
-      // requested. If the doc points at a module to import, offer it — the
-      // registry listeners re-render once an accepted import registers a
-      // supporting tool. Otherwise there's genuinely nothing to open.
-      const suggestion = this.#suggestedImport();
-      if (suggestion) {
-        if (suggestion.loading) this.#displayLoading("");
-        else this.#displaySuggestion(suggestion.url);
+      // Nothing says what this doc is, so nothing can say how to open it.
+      if (!type) {
+        console.warn(`${this.#docUrl} has no @patchwork type`);
+        this.#state = State.unable;
+        this.#showMissingType(doc);
         return;
       }
-      const hasPatchworkMetadata = doc && "@patchwork" in doc;
-      if (!hasPatchworkMetadata) {
-        console.warn(`Document ${this.#docUrl} is missing @patchwork metadata`);
-        this.#displayError(
-          `This document is missing @patchwork metadata and cannot be opened.`
-        );
-      } else {
+      // A tool that opens anything (raw, an inspector) isn't this datatype's
+      // tool: offer it rather than open the doc's insides unasked.
+      if (!fallbackTool || isWildcardOnlyMatch(fallbackTool, type)) {
         console.warn(`no tool for ${this.#docUrl}`);
-        this.#displayError(`I couldn't find a tool to open ${this.#docUrl}.`);
+        this.#state = State.unable;
+        this.#showNoTool(type, fallbackTool);
+        return;
       }
-      return;
+      console.warn(`falling back to default tool for ${this.#docUrl}`);
+      toolId = fallbackTool.id;
     }
 
     this.#tool = getRegistry<LoadedTool>("patchwork:tool").get(toolId) ?? null;
 
     if (!this.#tool) {
-      this.#state = "unable";
-      // The requested tool isn't loaded. If the doc suggests a module to import
-      // it from, offer that; otherwise there's nothing more to try.
-      const suggestion = this.#suggestedImport();
-      if (!suggestion) {
-        this.#displayError(`I couldn't find the tool with id ${toolId}.`);
-      } else if (suggestion.loading) {
-        this.#displayLoading(toolId);
-      } else {
-        this.#displaySuggestion(suggestion.url);
-      }
+      this.#state = State.unable;
+      this.#showNoTool(type ?? "doc with no type", undefined, toolId);
       return;
     }
 
     if (!this.#tool.module) {
-      const toolRegistry = getRegistry("patchwork:tool");
-      toolRegistry.load(this.#tool.id);
-      if (toolRegistry.isLoading(this.#tool.id)) {
-        this.#state = "unable";
-        log(`loading ${toolId}`);
-        this.#displayLoading(toolId);
-      } else {
-        this.#state = "unable";
-        this.#displayError(`I couldn't load the tool with id ${toolId}.`);
-      }
+      this.#state = State.unable;
+      this.#loadTool(this.#tool);
       return;
     }
 
+    this.#resetDisplay();
     try {
-      // `#init` set the content element's `repo` before reaching `#queueRender`,
-      // so it satisfies `ToolElement`'s non-optional `repo`.
+      // `#init` set the content's `repo` before `#queueRender`, so it is a
+      // `ToolElement`.
       const cleanup = this.#tool.module(
         this.#handle,
         this.#content as ToolElement
@@ -778,10 +769,6 @@ export class LegacyImpl {
       } else {
         console.warn(`return a cleanup function from ${toolId}`);
       }
-      // Something mounted, so retire any "loading suggested import" toast. A
-      // wildcard stopgap only gets this far when the doc suggests nothing, so
-      // there's no offer left standing either way.
-      this.#dismissToast();
       this.#state = fallingBack ? "fallback" : "rendered";
       this.#element.dispatchEvent(
         new MountedEvent({ url: this.#docUrl, toolId })
@@ -794,51 +781,135 @@ export class LegacyImpl {
     }
   }
 
-  #displayLoading = (_toolId: string) => {
-    const div = document.createElement("div");
-    div.className = "pw-loading";
-    div.style.display = "flex";
-    div.style.alignItems = "center";
-    div.style.justifyContent = "center";
-    div.style.height = "100%";
-    div.style.opacity = "0";
-    div.style.transition = "opacity 0.8s ease-in";
-    div.innerHTML = /* html */ `
-      <style>
-        @keyframes pw-loading-pulse {
-          0%, 100% { opacity: 0; transform: scale(0); }
-          50% { opacity: 1; transform: scale(1); }
-        }
-      </style>
-      <div style="
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #888;
-        animation: pw-loading-pulse 2s ease-in-out infinite;
-      "></div>
-    `;
-    this.#content.append(div);
-    const timer = setTimeout(() => {
-      div.style.opacity = "1";
-    }, 2000);
-    this.#teardowns.add(() => clearTimeout(timer));
-  };
+  // Loads a registered tool's code, behind a loading dot; when it fails, a
+  // card says so, where the view would otherwise sit on the dot for good.
+  #loadTool(tool: LoadedTool): void {
+    const failed = this.#toolLoadError;
+    if (failed?.id === tool.id) {
+      this.#showCard(`tool-failed:${tool.id}:${failed.message}`, () =>
+        toolFailedCard({
+          name: tool.name ?? tool.id,
+          error: failed.message,
+          onRetry: () => {
+            // the registry forgets a failed load, so this asks again
+            this.#toolLoadError = null;
+            this.#retryingToolId = tool.id;
+            if (this.#state === State.unable) this.#queueRender();
+          },
+          tools: () =>
+            otherTools(
+              this.#handle ? getType(this.#handle.doc()) : undefined,
+              tool.id
+            ),
+          onOpenWith: (id) => this.#peek(id),
+        })
+      );
+      return;
+    }
+    log(`loading ${tool.id}`);
+    this.#showCard(`loading:${tool.id}`, () => findingCard(), false);
+    const retrying = this.#retryingToolId === tool.id;
+    this.#retryingToolId = null;
+    this.#watchLoad(
+      tool.id,
+      getRegistry("patchwork:tool").load(tool.id),
+      retrying
+    );
+  }
 
-  // A lone `:(` that fades in instead of a bare details triangle. Clicking it
-  // rotates it 90° and pops the full error (message + stack) as a caret flyout
-  // under the button; `original` is what gets re-logged when it opens so it's
-  // easy to grab from the console again.
-  #displayError = (
-    summary: string,
-    detail?: string,
-    original?: unknown,
-    action?: { label: string; run: () => void }
-  ) => {
+  // A load of the chosen or fallback tool that fails puts its card up; one
+  // that works is the registry's "loaded" listener's to mount.
+  // One the reader asked to try again that fails again reloads the page.
+  #watchLoad(id: string, load: Promise<unknown>, retrying = false): void {
+    const epoch = this.#initEpoch;
+    load.catch((error) => {
+      if (this.#disposed || epoch !== this.#initEpoch) return;
+      if (retrying) {
+        location.reload();
+        return;
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      this.#toolLoadError = { id, message };
+      if (this.#state === State.unable) this.#queueRender();
+    });
+  }
+
+  #showMissingType(doc: HasPatchworkMetadata): void {
+    const handle = this.#handle!;
+    const hasMetadata = !!doc && "@patchwork" in doc;
+    const anything = anythingTool();
+    this.#showCard(`missing-type:${hasMetadata}:${anything?.id ?? ""}`, () =>
+      missingTypeCard({
+        hasMetadata,
+        anything,
+        onPeek: (id) => this.#peek(id),
+        knownTypes: knownTypes(),
+        // the change listener sees the new type and opens it with its tool
+        onSetType: (type) =>
+          handle.change((d) => {
+            const meta = (d as Partial<HasPatchworkMetadata>)["@patchwork"];
+            if (meta && typeof meta === "object") meta.type = type;
+            else d["@patchwork"] = { type };
+          }),
+      })
+    );
+  }
+
+  #showNoTool(
+    type: string,
+    fallbackTool: LoadedTool | undefined,
+    missingToolId?: string
+  ): void {
+    const suggestion = this.#suggestedImport();
+    const anything =
+      !missingToolId && fallbackTool && isWildcardOnlyMatch(fallbackTool, type)
+        ? { id: fallbackTool.id, name: fallbackTool.name }
+        : undefined;
+    this.#showCard(
+      JSON.stringify(["no-tool", type, missingToolId, suggestion, anything]),
+      () =>
+        noToolCard({
+          type,
+          missingToolId,
+          suggestion,
+          anything,
+          onLoad: (url) => this.#loadSuggestedImport(url),
+          onPeek: (id) => this.#peek(id),
+          repo: this.#baseRepo,
+          readClaims,
+        })
+    );
+  }
+
+  // Opens the doc with a tool the reader picked from a card.
+  #peek(toolId: string): void {
+    this.#peekToolId = toolId;
+    if (this.#state === State.unable) this.#queueRender();
+  }
+
+  /**
+   * Puts a card up in place of the tool, unless the same one is up already.
+   * `settled` says the view has given up on mounting a tool for now, which it
+   * tells whoever's waiting with a `patchwork:no-tool`; a loading dot hasn't.
+   */
+  #showCard(key: string, build: () => Card, settled = true): void {
+    if (this.#cardKey === key && this.#card?.element.isConnected) return;
+    this.#resetDisplay();
+    const card = build();
+    this.#card = card;
+    this.#cardKey = key;
+    this.#content.append(card.element);
+    if (settled && this.#docUrl) {
+      this.#element.dispatchEvent(new NoToolEvent({ url: this.#docUrl }));
+    }
+  }
+
+  // A lone `:(` that fades in; clicking it pops the full error under it.
+  // `original` is logged again on open, so it's easy to grab from the console.
+  #displayError = (summary: string, detail?: string, original?: unknown) => {
     ensureErrorStyles();
 
-    // Stacks usually begin with the message already; only prepend the summary
-    // as a headline when the detail doesn't lead with it.
+    // Stacks usually start with the message already.
     const full =
       detail && !detail.startsWith(summary)
         ? `${summary}\n\n${detail}`
@@ -864,7 +935,6 @@ export class LegacyImpl {
     const wrap = document.createElement("div");
     wrap.className = "pw-error";
     wrap.style.opacity = "0";
-    // Stay invisible for 0.5s, then fade in over 1s.
     wrap.style.transition = "opacity 1s ease 0.5s";
 
     const face = document.createElement("button");
@@ -874,13 +944,11 @@ export class LegacyImpl {
     face.title = summary;
     face.setAttribute("aria-label", "see error");
     face.setAttribute("aria-expanded", "false");
-    // Let the browser own the open/close (toggle + light-dismiss on click-out
-    // or Esc); we just react to it below.
+    // The browser opens, closes and light-dismisses it.
     face.setAttribute("popovertarget", flyoutId);
 
-    // Place the flyout under the button, centred on it, flipping above when
-    // there isn't room below and clamping to the viewport. The caret always
-    // points back at the button's centre.
+    // Under the button and centred on it, flipped above when there's no room
+    // below, kept in the viewport; the caret points at the button's centre.
     const GAP = 9;
     const MARGIN = 8;
     const position = () => {
@@ -930,28 +998,7 @@ export class LegacyImpl {
     window.addEventListener("resize", reposition);
     this.#errorReposition = reposition;
 
-    const actions = document.createElement("div");
-    actions.className = "pw-error__actions";
-    actions.append(face, flyout);
-
-    if (action) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "pw-error__load";
-      button.textContent = `⚡ ${action.label}`;
-      button.addEventListener("click", action.run);
-      actions.append(button);
-
-      // An unexplained button is worse than no button, so the summary reads out
-      // in the open here rather than hiding behind the `:(`.
-      const message = document.createElement("p");
-      message.className = "pw-error__message";
-      message.textContent = summary;
-      wrap.classList.add("pw-error--offer");
-      wrap.append(message);
-    }
-
-    wrap.append(actions);
+    wrap.append(face, flyout);
     this.#content.append(wrap);
     requestAnimationFrame(() => {
       wrap.style.opacity = "1";
@@ -967,42 +1014,32 @@ export class LegacyImpl {
   }
 
   /**
-   * The module the current doc suggests importing (its `suggestedImportUrl`,
-   * in the form {@link presentableImportUrl} makes safe to show and import),
-   * if there is one we haven't already been refused. `loading` means it's been
-   * accepted and the import is in flight, so callers show a spinner instead of
-   * offering it again.
+   * The package the doc suggests (as {@link presentableImportUrl} makes its
+   * url), with how loading it stands: `loading` means it was accepted and is
+   * in flight, `failed` why the last try didn't bring a tool.
    */
-  #suggestedImport(): { url: string; loading: boolean } | null {
-    if (!this.#docUrl || !this.#handle) return null;
-    const url = presentableImportUrl(getSuggestedImportUrl(this.#handle.doc()));
-    if (!url) return null;
-    return { url, loading: this.#requestedToolImports.has(url) };
-  }
-
-  /**
-   * Say that the doc names a package and offer to run it. We never import on
-   * our own: the module is arbitrary JavaScript named by the document, so it
-   * takes a click and then a confirm naming the URL before anything is fetched.
-   */
-  #displaySuggestion(url: string): void {
-    this.#displayError(
-      `No tool was found for this document, but it suggests a package at ${url}.`,
-      undefined,
-      undefined,
-      {
-        label: "Load suggested package",
-        run: () => this.#loadSuggestedImport(url),
+  #suggestedImport():
+    | {
+        url: string;
+        loading: boolean;
+        failed?: string;
       }
-    );
+    | undefined {
+    if (!this.#docUrl || !this.#handle) return undefined;
+    const url = presentableImportUrl(getSuggestedImportUrl(this.#handle.doc()));
+    if (!url) return undefined;
+    return {
+      url,
+      loading: this.#requestedToolImports.has(url),
+      failed: this.#importFailures.get(url),
+    };
   }
 
   /**
-   * Confirm, then import. The import runs in this element's own realm rather
-   * than being delegated to a single top-level handler, so a `<patchwork-view>`
-   * nested in an embedded context (e.g. an iframe an event couldn't bubble out
-   * of) still resolves its own tool. Once registered, the tool registry gains a
-   * supporting tool and this view's registry listeners re-render.
+   * Confirm, then import, in this element's own realm, so a view inside an
+   * iframe (which an event couldn't bubble out of) still gets its tool. Never
+   * on our own: it's arbitrary JavaScript named by the document, so it takes
+   * a click, then a confirm naming the URL.
    */
   #loadSuggestedImport(url: string): void {
     const ok = window.confirm(
@@ -1013,176 +1050,10 @@ export class LegacyImpl {
     );
     if (!ok) return;
     this.#requestedToolImports.add(url);
-    this.#dismissToast(true);
-    this.#showToast("Loading tool", url);
+    this.#importFailures.delete(url);
+    // the card again, with its button saying it's on its way
     if (this.#state === State.unable) this.#queueRender();
     void this.#importSuggestedModule(url);
-  }
-
-  /**
-   * A small o-message-style toast, floated over the view, announcing that we're
-   * fetching the doc's suggested import because no built-in editor matched. It's
-   * appended to the host element (never `#content`, which a tool's re-render
-   * wipes) and retired by `#dismissToast` once a real tool mounts or on
-   * teardown; a timer clears it if the import never resolves.
-   */
-  #showToast(title: string, body: string, action?: () => void): void {
-    this.#dismissToast(true);
-
-    // Give the absolutely-positioned toast a containing block without
-    // clobbering an inline position the host author may have set.
-    if (getComputedStyle(this.#element).position === "static") {
-      this.#element.style.position = "relative";
-      this.#toastPositioned = true;
-    }
-
-    const toast = document.createElement("div");
-    toast.setAttribute("role", "status");
-    Object.assign(toast.style, {
-      position: "absolute",
-      top: "16px",
-      left: "50%",
-      transform: "translateX(-50%)",
-      zIndex: "2147483000",
-      maxWidth: "min(360px, calc(100% - 32px))",
-      boxSizing: "border-box",
-      display: "flex",
-      gap: "10px",
-      padding: "12px 14px",
-      borderRadius: "var(--studio-radius, 6px)",
-      // Themed surface, faintly tinted by the accent: a hardcoded light card
-      // would hold a dark-themed button (they share `--studio-*`) and read as
-      // black-on-black in a dark theme.
-      background:
-        "color-mix(in oklch, var(--studio-fill, #eaf1fb), var(--studio-primary, #1e5fbf) 8%)",
-      color: "var(--studio-line, #1a1a1a)",
-      borderLeft: "4px solid var(--studio-primary, #1e5fbf)",
-      boxShadow: "var(--studio-shadow-lg, 0 6px 20px rgba(0, 0, 0, 0.18))",
-      font: "13px/1.4 var(--studio-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif)",
-      opacity: "0",
-      transition: "opacity 0.25s ease",
-      pointerEvents: action ? "auto" : "none",
-    } as Partial<CSSStyleDeclaration>);
-
-    const dot = document.createElement("div");
-    Object.assign(dot.style, {
-      flex: "0 0 auto",
-      width: "8px",
-      height: "8px",
-      marginTop: "4px",
-      borderRadius: "50%",
-      background: "var(--studio-primary, #1e5fbf)",
-    });
-    if (!action) {
-      dot.animate(
-        [
-          { opacity: "0.3", transform: "scale(0.6)" },
-          { opacity: "1", transform: "scale(1)" },
-          { opacity: "0.3", transform: "scale(0.6)" },
-        ],
-        { duration: 1400, iterations: Infinity, easing: "ease-in-out" }
-      );
-    }
-
-    const inner = document.createElement("div");
-    inner.style.minWidth = "0";
-
-    const titleEl = document.createElement("div");
-    titleEl.textContent = title;
-    titleEl.style.fontWeight = "600";
-
-    const bodyEl = document.createElement("div");
-    bodyEl.textContent = body;
-    Object.assign(bodyEl.style, {
-      marginTop: "2px",
-      opacity: "0.75",
-      overflowWrap: "anywhere",
-    } as Partial<CSSStyleDeclaration>);
-
-    inner.append(titleEl, bodyEl);
-
-    if (action) {
-      ensureErrorStyles();
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "pw-error__load";
-      button.textContent = "⚡ Load suggested package";
-      button.style.marginTop = "8px";
-      button.addEventListener("click", action);
-      inner.append(button);
-    }
-
-    toast.append(dot, inner);
-
-    // Only the offer is dismissable — the progress toast retires itself, and a
-    // × on it would suggest it cancels the import, which it doesn't.
-    if (action) {
-      const close = document.createElement("button");
-      close.type = "button";
-      close.textContent = "×";
-      close.setAttribute("aria-label", "dismiss");
-      Object.assign(close.style, {
-        flex: "0 0 auto",
-        marginLeft: "auto",
-        alignSelf: "flex-start",
-        padding: "0 2px",
-        border: "none",
-        background: "none",
-        color: "inherit",
-        opacity: "0.5",
-        font: "16px/1 inherit",
-        cursor: "pointer",
-      } as Partial<CSSStyleDeclaration>);
-      close.addEventListener("click", () => this.#dismissToast());
-      toast.append(close);
-
-      const escape = (event: KeyboardEvent) => {
-        if (event.key === "Escape") this.#dismissToast();
-      };
-      window.addEventListener("keydown", escape);
-      this.#toastEscape = escape;
-    }
-    this.#element.append(toast);
-    this.#toast = toast;
-
-    requestAnimationFrame(() => {
-      toast.style.opacity = "1";
-    });
-
-    // An offer waits for the user; only the progress toast times itself out.
-    if (!action) {
-      this.#toastTimer = setTimeout(() => this.#dismissToast(), 8000);
-    }
-  }
-
-  #dismissToast(immediate = false): void {
-    if (this.#toastTimer) {
-      clearTimeout(this.#toastTimer);
-      this.#toastTimer = null;
-    }
-    if (this.#toastEscape) {
-      window.removeEventListener("keydown", this.#toastEscape);
-      this.#toastEscape = null;
-    }
-    const toast = this.#toast;
-    if (!toast) return;
-    this.#toast = null;
-    if (immediate) {
-      toast.remove();
-      this.#restoreToastPosition();
-      return;
-    }
-    toast.style.opacity = "0";
-    setTimeout(() => {
-      toast.remove();
-      this.#restoreToastPosition();
-    }, 300);
-  }
-
-  #restoreToastPosition(): void {
-    if (!this.#toastPositioned || this.#toast) return;
-    this.#toastPositioned = false;
-    this.#element.style.position = "";
   }
 
   async #importSuggestedModule(url: string): Promise<void> {
@@ -1192,47 +1063,62 @@ export class LegacyImpl {
       // A `suggestedImportUrl` can be an `automerge:` folder doc served through
       // the service worker as well as a plain HTTP(S) module bundle.
       const mod = await importPackage(url);
-      if (Array.isArray(mod?.plugins)) {
-        registerPlugins(mod.plugins, url);
-      } else {
+      if (!Array.isArray(mod?.plugins)) {
         console.warn(`suggested module ${url} has no plugins array`);
-        this.#reportImportFailed(epoch, url);
+        this.#reportImportFailed(epoch, url, "it doesn't export any plugins");
+        return;
+      }
+      registerPlugins(mod.plugins, url);
+      // Once its tool registers, the registry listeners swap the card for it.
+      // A package that brings none would leave the card saying "loading…".
+      if (!this.#bringsTool(mod.plugins)) {
+        this.#reportImportFailed(epoch, url, this.#noToolReason());
       }
     } catch (error) {
       console.error(`Failed to import suggested module ${url}`, error);
-      this.#reportImportFailed(epoch, url, error);
+      const message = (error as Error)?.message ?? String(error);
+      this.#reportImportFailed(epoch, url, message);
     }
   }
 
+  // Whether `plugins` has a tool this view would open the doc with.
+  #bringsTool(plugins: unknown[]): boolean {
+    const chosen = this.#chosenToolId();
+    const type = this.#handle ? getType(this.#handle.doc()) : undefined;
+    return plugins.some((plugin) => {
+      const p = plugin as Partial<ToolDescription> | null;
+      if (p?.type !== "patchwork:tool") return false;
+      if (chosen) return p.id === chosen;
+      const supported = p.supportedDatatypes;
+      return (
+        !!type && !!supported && supported !== "*" && supported.includes(type)
+      );
+    });
+  }
+
+  #noToolReason(): string {
+    const chosen = this.#chosenToolId();
+    if (chosen) return `it doesn't have the ${chosen} tool`;
+    const type = this.#handle ? getType(this.#handle.doc()) : undefined;
+    return `it doesn't have a tool for ${type ?? "this"}`;
+  }
+
   /**
-   * The import registered nothing, so the view it was going to fill has nothing
-   * coming: say so, and offer to try again, rather than sit empty once the
-   * progress toast times out.
-   * Only called where nothing could have been registered, so no render is in
-   * flight, and only acts while this view still has nothing mounted.
+   * The import didn't bring a tool: say why on the card, and offer to try
+   * again, rather than leave it saying "loading…".
    */
-  #reportImportFailed(epoch: number, url: string, error?: unknown): void {
-    // No longer in flight, so the doc's suggestion can be offered again
-    // rather than every later render showing a spinner for an import that's
-    // over.
+  #reportImportFailed(epoch: number, url: string, why: string): void {
     if (epoch !== this.#initEpoch) return;
     this.#requestedToolImports.delete(url);
-    if (this.#state !== State.unable) return;
-    this.#dismissToast(true);
-    // Replace whatever was standing in while the import ran (the loading
-    // pulse) rather than stacking the error under it.
-    this.#resetDisplay();
-    const err = error as Error | undefined;
-    this.#displayError(
-      `I couldn't load the package at ${url}.`,
-      err?.stack ?? err?.message,
-      error,
-      { label: "Try again", run: () => this.#loadSuggestedImport(url) }
-    );
+    this.#importFailures.set(url, why);
+    if (this.#state === State.unable) this.#queueRender();
   }
 
   #resetDisplay = () => {
     this.#removeErrorListeners();
+    this.#card?.dispose();
+    this.#card = null;
+    this.#cardKey = null;
     this.#content.replaceChildren();
   };
 }

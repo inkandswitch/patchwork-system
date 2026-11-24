@@ -2,6 +2,7 @@
 // a doc that only the server has, opened in tab after tab of one context.
 import { test } from "@playwright/test";
 import {
+  ELSEWHERE,
   MODES,
   createDoc,
   online,
@@ -20,13 +21,14 @@ for (const mode of MODES) {
     await probeServerPeer(browser);
     // Somewhere else puts the doc on the server.
     const seeder = await browser.newContext();
-    const seed = await openTab(seeder, "pertab");
+    const seed = await openTab(seeder, "pertab", { storage: ELSEWHERE });
     await online(seed);
     const url = await createDoc(seed, { title: "open", text: "x".repeat(10_000) });
     await serverConfirmed(seed, url, 30_000);
     await seeder.close();
 
     const docMs: Array<number | null> = [];
+    const readyMs: Array<number | null> = [];
     for (let i = 0; i < TABS; i++) {
       const page = await openTab(context, mode, { open: url });
       const marks = await page
@@ -36,6 +38,7 @@ for (const mode of MODES) {
         .then((handle) => handle.jsonValue() as Promise<Record<string, number>>)
         .catch(() => null);
       docMs.push(marks ? marks.doc : null);
+      readyMs.push(marks ? marks.ready : null);
     }
     const metric = (tab: number) => ({
       metric: `boot → doc open, tab ${tab}`,
@@ -46,6 +49,11 @@ for (const mode of MODES) {
     record(metric(1));
     record(metric(2));
     record(metric(TABS));
-    console.log(`OPEN ${mode} ${JSON.stringify(docMs.map((ms) => ms && Math.round(ms)))}`);
+    // Per tab, boot → doc and, under it, boot → repo: whether a slow open was
+    // a slow boot or a slow find.
+    const rounded = (values: Array<number | null>) =>
+      JSON.stringify(values.map((ms) => ms && Math.round(ms)));
+    console.log(`OPEN ${mode} ${rounded(docMs)}`);
+    console.log(`OPEN ${mode} ready ${rounded(readyMs)}`);
   });
 }

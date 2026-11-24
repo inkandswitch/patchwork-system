@@ -5,7 +5,7 @@
     "url": "git+https://github.com/inkandswitch/patchwork-system.git",
     "directory": "core/patchwork"
   },
-  "version": "0.9.7",
+  "version": "0.11.1",
   "author": "Ink & Switch",
   "type": "module",
   "license": "MIT",
@@ -73,7 +73,8 @@
     "./client": {
       "types": "./dist/client.d.ts"
     },
-    "./global.css": "./dist/global.css"
+    "./global.css": "./dist/global.css",
+    "./theme.css": "./dist/theme.css"
   },
   "dependencies": {
     "@ark-0.6/automerge-repo": "npm:@automerge/automerge-repo@2.6.0-subduction.48",
@@ -108,7 +109,7 @@
     "vite": "^7.3.5"
   },
   "scripts": {
-    "build": "tsc && node build-head.js && cp src/global.css dist/global.css && cp src/client.d.ts dist/client.d.ts && rm -rf dist/patches && mkdir -p dist/patches && cp ../../patches/@automerge__automerge-repo@*.patch dist/patches/",
+    "build": "tsc && node build-head.js && cp src/global.css dist/global.css && cp src/theme.css dist/theme.css && cp src/client.d.ts dist/client.d.ts && rm -rf dist/patches && mkdir -p dist/patches && cp ../../patches/@automerge__automerge-repo@*.patch dist/patches/",
     "dev": "tsc -w --preserveWatchOutput",
     "test": "vitest run"
   }

@@ -1,5 +1,3 @@
-// Initialize the WASM modules that automerge-repo@subduction depends on
-// before any test runs. Importing the fat entry points auto-calls
-// initSync / UseApi().
+// Importing the full entry points initialises their wasm before any test runs.
 import "@automerge/automerge";
 import "@automerge/automerge-subduction";

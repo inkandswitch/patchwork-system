@@ -26,9 +26,8 @@ function resolveElement(source: ElementSource): HTMLElement | undefined {
 }
 
 /**
- * Generic reactive request. Resolves the first value a provider emits for
- * `selector` (via the one-shot `request` helper) and returns an accessor that
- * reads `undefined` until then. `T` is the response type.
+ * The first value a provider sends for `selector`, as an accessor that reads
+ * `undefined` until it arrives.
  */
 export function request<T extends JSONValue>(
   element: ElementSource,
@@ -47,13 +46,9 @@ export function request<T extends JSONValue>(
 }
 
 /**
- * Generic reactive subscription. Opens a `patchwork:subscribe` for `selector`
- * on mount and returns an accessor that updates as the provider pushes new
- * values. The subscription is torn down on cleanup.
- *
- * Pass `initialValue` to seed the accessor so it reads that value (rather than
- * `undefined`) until the first emission. If no provider answers, the accessor
- * simply stays at the initial value.
+ * A `patchwork:subscribe` for `selector`, opened on mount and closed on
+ * cleanup, as an accessor holding the latest value. It reads `initialValue`
+ * (or `undefined`) until the first one, and for good if no provider answers.
  */
 export function subscribe<T extends JSONValue>(
   element: ElementSource,
@@ -81,13 +76,10 @@ export function subscribe<T extends JSONValue>(
 }
 
 /**
- * Store-backed subscription. Use this when a consumer wants Solid's
- * fine-grained nested reactivity for incoming JSON object or array snapshots.
- * Requires an initial object/array so the store has a stable root.
- *
- * `reconcile` preserves stable object/array identity where possible, so this
- * helper is not a good fit when the top-level value is used as an identity key
- * for resources or memos.
+ * A subscription into a store, for Solid's fine-grained reactivity over JSON
+ * object or array snapshots. Needs an initial object or array as the store's
+ * root. `reconcile` keeps object identity where it can, so don't use the
+ * top-level value as an identity key for resources or memos.
  */
 export function subscribeReconciled<T extends JSONArray | JSONObject>(
   element: ElementSource,
@@ -107,12 +99,10 @@ export function subscribeReconciled<T extends JSONArray | JSONObject>(
 }
 
 /**
- * Handle-specialized subscription. Use when the answering provider emits an
- * `AutomergeUrl`. The handle is recovered locally from the global repo
- * (`window.repo`), so it stays fully live — reads project reactively and writes go
- * straight back to the same repo. Returns `[doc, handle]` matching the shape
- * of `solid-automerge`'s `useDocument`; both read `undefined` until the first
- * url arrives. `T` is the doc shape inside the handle.
+ * A subscription whose provider sends an `AutomergeUrl`. The handle is found
+ * in the global repo (`window.repo`), so it's fully live: reads are reactive
+ * and writes go straight back. Returns `[doc, handle]`, like
+ * `solid-automerge`'s `useDocument`; both read `undefined` until the first url.
  */
 export function subscribeDoc<T extends object>(
   element: ElementSource,
@@ -142,19 +132,10 @@ export function subscribeDoc<T extends object>(
     });
   });
 
-  // Mirror the doc into a store by `reconcile`-ing against the *materialized*
-  // snapshot (`handle.doc()`) on every change, rather than replaying the
-  // change's incremental patches (as `solid-automerge`'s `createDocumentProjection`
-  // / `autoproduce` does).
-  //
-  // A whole-value write such as `doc.list = [...]` is lowered by Automerge to
-  // `putObjectFromHydrate`, whose patch stream is a `put` that materializes the
-  // new container *plus* per-element `insert` patches. Replaying that delta with
-  // `applyPatches` double-applies the contents — the `put` seeds `[a, b]`, then
-  // the inserts splice `a, b` in again, yielding `[a, b, a, b]` — even though the
-  // document itself is correct. The materialized snapshot is always
-  // authoritative, so reconciling against it is robust to any valid change,
-  // whole-array reassignment included.
+  // Reconciled against `handle.doc()` on every change, not by replaying
+  // patches (as solid-automerge's `autoproduce` does): Automerge lowers a
+  // whole-value write like `doc.list = [...]` to a `put` of the new list plus
+  // an `insert` per element, and replaying both gives `[a, b, a, b]`.
   const [store, setStore] = createStore<T>({} as T);
   const [ready, setReady] = createSignal(false);
   createEffect(() => {

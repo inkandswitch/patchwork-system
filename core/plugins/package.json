@@ -6,14 +6,14 @@
     "directory": "core/plugins"
   },
   "type": "module",
-  "version": "1.2.6",
+  "version": "1.2.9",
   "author": "Ink & Switch",
   "description": "",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "dev": "tsc -w --preserveWatchOutput",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "vitest run"
   },
   "keywords": [],
   "license": "ISC",
@@ -23,6 +23,7 @@
     "@inkandswitch/patchwork-filesystem": "workspace:^"
   },
   "dependencies": {
+    "@inkandswitch/patchwork-providers": "workspace:^",
     "@types/debug": "^4.1.13",
     "@types/node": "^20.19.41",
     "debug": "^4.4.3",
@@ -34,6 +35,7 @@
     "@automerge/automerge-repo": "catalog:",
     "@automerge/automerge-repo-keyhive": "catalog:",
     "@inkandswitch/patchwork-filesystem": "workspace:^",
-    "@types/react": "catalog:"
+    "@types/react": "catalog:",
+    "happy-dom": "^20.0.0"
   }
 }

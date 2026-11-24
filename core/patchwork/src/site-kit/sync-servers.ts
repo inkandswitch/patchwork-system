@@ -1,11 +1,9 @@
 import type { PatchworkSiteOptions } from "./options.js";
 import type { ArkVersion } from "@inkandswitch/patchwork-bootloader/keyhive-sync-server";
 
-// Mirrors core/bootloader/src/sync-config.ts's DEFAULT_CLASSIC_SYNC_SERVER
-// and automerge-protocol-handler-worker.ts's SUBDUCTION_SYNC_URL selection —
-// kept here as plain constants (rather than importing those runtime modules)
-// since this only needs the hostnames, not the browser-only logic that reads
-// them.
+// The same defaults as the bootloader's DEFAULT_CLASSIC_SYNC_SERVER
+// (sync-config.ts) and the subduction url in automerge-protocol-handler.ts,
+// as plain strings: this only needs the hosts, not the browser code.
 export const DEFAULT_SYNC_SERVERS = {
   classic: "wss://sync3.automerge.org",
   subduction: "wss://subduction.sync.inkandswitch.com",
@@ -39,9 +37,9 @@ function wsToHttpOrigin(wsUrl: string): string {
 }
 
 /**
- * Resolves which sync-server origins are actually live for this build: the
- * channel that's live is subduction xor keyhive plus classic (on-demand,
- * but still worth a preconnect hint) unless disabled.
+ * The sync-server origins this build talks to: the subduction server (which
+ * keyhive uses too) and, unless it's turned off, the classic one, which only
+ * connects on demand but is still worth a preconnect hint.
  */
 export function resolveSyncServers(options: PatchworkSiteOptions): string[] {
   if (options.syncServers === false) return [];

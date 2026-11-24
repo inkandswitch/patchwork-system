@@ -142,7 +142,7 @@ describe("patchwork-view (component mode)", () => {
 const registeredTools: string[] = [];
 const registeredDatatypes: string[] = [];
 
-function registerWildcardTool(): Counters {
+function registerWildcardTool() {
   return registerTool("*");
 }
 
@@ -236,12 +236,18 @@ describe("patchwork-view (legacy mode)", () => {
     document.body.replaceChildren();
   });
 
+  beforeEach(() => {
+    // a suggested package's card reads its package.json
+    vi.stubGlobal("fetch", async () => new Response("", { status: 404 }));
+  });
+
   afterEach(() => {
     for (const id of registeredTools) toolRegistry.remove(id);
     registeredTools.length = 0;
     for (const id of registeredDatatypes) datatypeRegistry.remove(id);
     registeredDatatypes.length = 0;
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   function mount(doc: unknown) {
@@ -256,9 +262,20 @@ describe("patchwork-view (legacy mode)", () => {
 
   function loadButton(view: Element) {
     const button = view.querySelector<HTMLButtonElement>(
-      "button.pw-error__load"
+      "button.pw-card__load"
     );
     expect(button).toBeTruthy();
+    return button!;
+  }
+
+  const card = (view: Element, kind: string) =>
+    view.querySelector<HTMLElement>(`[data-card="${kind}"]`);
+
+  function buttonLabelled(view: Element, label: string) {
+    const button = [...view.querySelectorAll("button")].find(
+      (b) => b.textContent === label
+    );
+    expect(button, `a "${label}" button`).toBeTruthy();
     return button!;
   }
 
@@ -274,17 +291,50 @@ describe("patchwork-view (legacy mode)", () => {
     await settle();
 
     expect(raw.mounts).toBe(0);
-    const toast = view.querySelector('[role="status"]');
-    expect(toast?.textContent).toContain("This document suggests a package");
-    expect(toast?.querySelector("button.pw-error__load")).toBeTruthy();
+    expect(card(view, "no-tool")?.textContent).toContain("the doc suggests");
+    expect(loadButton(view).textContent).toBe("load package");
   });
 
-  it("still mounts the wildcard stopgap when the doc suggests nothing", async () => {
+  it("offers the wildcard tool rather than opening the doc with it", async () => {
     const raw = registerWildcardTool();
+    const noTool = vi.fn();
+    document.addEventListener("patchwork:no-tool", noTool);
 
-    mount({ "@patchwork": { type: "test-datatype" } });
+    const view = mount({ "@patchwork": { type: "test-datatype" } });
+    await settle();
+    document.removeEventListener("patchwork:no-tool", noTool);
+
+    expect(raw.mounts).toBe(0);
+    expect(card(view, "no-tool")?.textContent).toContain("test-datatype");
+    expect(noTool).toHaveBeenCalledTimes(1);
+
+    buttonLabelled(view, `open doc with ${raw.id}`).click();
+    await settle();
+    expect(raw.mounts).toBe(1);
+    expect(card(view, "no-tool")).toBeNull();
+  });
+
+  it("leaves a card up when a render would draw it again", async () => {
+    const view = mount({ "@patchwork": { type: "redraw-type" } });
+    await settle();
+    const first = card(view, "no-tool");
+    expect(first).toBeTruthy();
+
+    // an unrelated tool registering re-renders, but says nothing new
+    registerTool(["unrelated-type"]);
+    await settle();
+    expect(card(view, "no-tool")).toBe(first);
+  });
+
+  it("offers a look and a type for a doc with no @patchwork metadata", async () => {
+    const raw = registerWildcardTool();
+    const view = mount({ hello: "world" });
     await settle();
 
+    const missing = card(view, "missing-type");
+    expect(missing?.textContent).toContain("no @patchwork metadata");
+    buttonLabelled(view, `open with ${raw.id}`).click();
+    await settle();
     expect(raw.mounts).toBe(1);
   });
 
@@ -328,22 +378,24 @@ describe("patchwork-view (legacy mode)", () => {
     expect(far.mounts).toBe(0);
   });
 
-  it("swaps the wildcard for a supertype's tool when the datatype registers", async () => {
+  it("opens a newly eligible supertype tool when the datatype registers", async () => {
     const raw = registerWildcardTool();
     const folder = registerTool(`test-folder-tool-${++seq}`, ["test-folder"]);
 
-    mount({ "@patchwork": { type: "test-late-sketchbox" } });
+    const view = mount({ "@patchwork": { type: "test-late-sketchbox" } });
     await settle();
-    expect(raw.mounts).toBe(1);
+    expect(raw.mounts).toBe(0);
+    expect(card(view, "no-tool")).toBeTruthy();
 
     registerDatatype("test-late-sketchbox", ["test-folder"]);
     await settle();
 
-    expect(raw.cleanups).toBe(1);
+    expect(card(view, "no-tool")).toBeNull();
+    expect(raw.mounts).toBe(0);
     expect(folder.mounts).toBe(1);
   });
 
-  it("swaps to a lazy supertype tool from the same package", async () => {
+  it("loads a newly eligible lazy supertype tool from the same package", async () => {
     const raw = registerWildcardTool();
     const folder = registerLazyTool(
       `test-lazy-folder-tool-${++seq}`,
@@ -351,15 +403,194 @@ describe("patchwork-view (legacy mode)", () => {
       "test://same-package"
     );
 
-    mount({ "@patchwork": { type: "test-late-lazy-sketchbox" } });
+    const view = mount({
+      "@patchwork": { type: "test-late-lazy-sketchbox" },
+    });
     await settle();
-    expect(raw.mounts).toBe(1);
+    expect(raw.mounts).toBe(0);
+    expect(card(view, "no-tool")).toBeTruthy();
 
     registerDatatype("test-late-lazy-sketchbox", ["test-lazy-folder"]);
     await settle();
 
-    expect(raw.cleanups).toBe(1);
+    expect(card(view, "no-tool")).toBeNull();
+    expect(raw.mounts).toBe(0);
     expect(folder.mounts).toBe(1);
+  });
+
+  it("opens a doc with the tool for the type it's given", async () => {
+    const tool = registerTool(["given-type"]);
+    const view = mount({ hello: "world" });
+    await settle();
+
+    const form = view.querySelector<HTMLFormElement>("form.pw-card__set-type")!;
+    expect(form.hidden).toBe(true);
+    buttonLabelled(view, "set type").click();
+    expect(form.hidden).toBe(false);
+    // what's registered is suggested
+    const options = [...view.querySelectorAll("datalist option")].map(
+      (o) => (o as HTMLOptionElement).value
+    );
+    expect(options).toContain("given-type");
+
+    form.querySelector("input")!.value = "  given-type ";
+    form.requestSubmit();
+    await settle();
+
+    expect(tool.mounts).toBe(1);
+    const handle = await repo.find<{ "@patchwork": { type: string } }>(
+      view.getAttribute("doc-url") as never
+    );
+    expect(handle.doc()["@patchwork"].type).toBe("given-type");
+  });
+
+  it("keeps the rest of @patchwork when it gives a doc a type", async () => {
+    const view = mount({ "@patchwork": { copyOf: "automerge:x" } });
+    await settle();
+    expect(card(view, "missing-type")?.textContent).toContain(
+      "doesn't declare a type"
+    );
+
+    const form = view.querySelector<HTMLFormElement>("form.pw-card__set-type")!;
+    form.querySelector("input")!.value = "kept-type";
+    form.requestSubmit();
+    await settle();
+
+    const handle = await repo.find<{
+      "@patchwork": { type: string; copyOf: string };
+    }>(view.getAttribute("doc-url") as never);
+    expect(handle.doc()["@patchwork"]).toEqual({
+      type: "kept-type",
+      copyOf: "automerge:x",
+    });
+    // no tool for it: now it says so in those words
+    expect(card(view, "no-tool")?.textContent).toContain("kept-type");
+  });
+
+  it("says a link that can't name a doc is broken, and doesn't retry it", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const provider = document.createElement("repo-provider");
+    const view = document.createElement("patchwork-view-legacy");
+    view.setAttribute("doc-url", "automerge:not-a-doc-id");
+    provider.append(view);
+    document.body.append(provider);
+    await settle();
+
+    expect(card(view, "invalid-url")?.textContent).toContain(
+      "automerge:not-a-doc-id"
+    );
+    expect(card(view, "unavailable")).toBeNull();
+  });
+
+  it("says when a tool's code doesn't load, and tries again", async () => {
+    const id = `failing-tool-${++seq}`;
+    let fail = true;
+    const render = () => () => {};
+    let mounts = 0;
+    toolRegistry.register(
+      {
+        id,
+        type: "patchwork:tool",
+        name: "Failing",
+        supportedDatatypes: ["failing-type"],
+        load: async () => {
+          if (fail) throw new Error("the file didn't arrive");
+          return () => {
+            mounts++;
+            return render();
+          };
+        },
+      } as never,
+      `test://${id}`
+    );
+    registeredTools.push(id);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const view = mount({ "@patchwork": { type: "failing-type" } });
+    await vi.waitFor(() => expect(card(view, "tool-failed")).toBeTruthy());
+    expect(card(view, "tool-failed")?.textContent).toContain(
+      "the file didn't arrive"
+    );
+
+    fail = false;
+    buttonLabelled(view, "try again").click();
+    await vi.waitFor(() => expect(mounts).toBe(1));
+    expect(card(view, "tool-failed")).toBeNull();
+  });
+
+  it("reloads the page when trying a tool again fails again", async () => {
+    const id = `failing-tool-${++seq}`;
+    toolRegistry.register(
+      {
+        id,
+        type: "patchwork:tool",
+        name: "Failing",
+        supportedDatatypes: ["failing-again-type"],
+        load: async () => {
+          throw new Error("the file didn't arrive");
+        },
+      } as never,
+      `test://${id}`
+    );
+    registeredTools.push(id);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const reload = vi
+      .spyOn(window.location, "reload")
+      .mockImplementation(() => {});
+
+    const view = mount({ "@patchwork": { type: "failing-again-type" } });
+    await vi.waitFor(() => expect(card(view, "tool-failed")).toBeTruthy());
+    // the first failure only puts the card up
+    expect(reload).not.toHaveBeenCalled();
+
+    buttonLabelled(view, "try again").click();
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+  });
+
+  it("offers other tools when the asked-for one doesn't load", async () => {
+    const id = `failing-tool-${++seq}`;
+    toolRegistry.register(
+      {
+        id,
+        type: "patchwork:tool",
+        name: "Failing",
+        supportedDatatypes: ["open-with-type"],
+        load: async () => {
+          throw new Error("the file didn't arrive");
+        },
+      } as never,
+      `test://${id}`
+    );
+    registeredTools.push(id);
+    const other = registerTool(["open-with-type"]);
+    const elsewhere = registerTool(["unrelated-type"]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const view = mount({ "@patchwork": { type: "open-with-type" } });
+    // pinned, so the pick has to win over tool-id
+    view.setAttribute("tool-id", id);
+    await vi.waitFor(() => expect(card(view, "tool-failed")).toBeTruthy());
+
+    buttonLabelled(view, "open with…").click();
+    const offered = [...view.querySelectorAll(".pw-card__tool")].map(
+      (b) => b.textContent
+    );
+    expect(offered).toContain(other.id);
+    expect(offered).not.toContain(id);
+    expect(offered).not.toContain(elsewhere.id);
+
+    // a tool that isn't offered can still be asked for by id
+    const search = view.querySelector<HTMLInputElement>(".pw-card__search")!;
+    search.value = elsewhere.id;
+    search.dispatchEvent(new Event("input"));
+    expect(view.querySelector(".pw-card__tool")?.textContent).toBe(
+      `use tool id ${elsewhere.id}`
+    );
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+
+    await vi.waitFor(() => expect(elsewhere.mounts).toBe(1));
+    expect(card(view, "tool-failed")).toBeNull();
+    expect(other.mounts).toBe(0);
   });
 
   it("doesn't mount a tool-id change on a view removed in the same task", async () => {
@@ -407,17 +638,23 @@ describe("patchwork-view (legacy mode)", () => {
     loadButton(view).click();
     await settle();
 
-    // Only the failure is on screen: no leftover loading pulse beside it.
+    // Only the card is on screen, saying why.
     const content = view.querySelector(".patchwork-view-content")!;
     expect(content.children).toHaveLength(1);
-    expect(content.textContent).toContain("couldn't load the package");
+    expect(content.textContent).toContain("couldn't load it: offline");
 
+    // A package that loads but brings no tool for it says so, rather than
+    // sit on "loading…".
     vi.mocked(importPackage).mockResolvedValueOnce({ plugins: [] });
     const retry = loadButton(view);
-    expect(retry.textContent).toContain("Try again");
+    expect(retry.textContent).toBe("try again");
     retry.click();
     await settle();
     expect(importPackage).toHaveBeenCalledTimes(2);
+    expect(content.textContent).toContain(
+      "it doesn't have a tool for no-tool-type"
+    );
+    expect(loadButton(view).disabled).toBe(false);
   });
 
   it("shows the trust prompt a url the doc can't dress up", async () => {

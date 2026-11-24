@@ -3,22 +3,14 @@ import path from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * E2E harness for the real Patchwork browser + Service-Worker boot path.
+ * E2E for the real browser boot: Chromium, Firefox and WebKit against a built
+ * site served by `vite preview`, so service worker registration, wasm init,
+ * IndexedDB and sync between tabs run for real. (The Vitest sync tests only
+ * simulate them with Node Repos.)
  *
- * Unlike the in-process Vitest sync tests (which simulate Tab <-> SW with
- * two Node Repos over a MessageChannel), these tests drive an actual
- * Chromium instance against a built `patchwork.inkandswitch.com` site served by
- * `vite preview`. That exercises SW registration, Wasm init, IndexedDB,
- * and the MessageChannel relay end to end.
- *
- * Stage B1 scope: scenarios that route only through the SW relay +
- * IndexedDB (no external Subduction server). Cross-device/server tests
- * arrive in B3 once a local sync server is wired in.
- *
- * Resource note: every test gets its own browser context (own IndexedDB,
- * own service worker), so tests are independent and run in parallel.
- * CI runs one browser project per job; locally `playwright test` runs all
- * three, so we keep the local worker count lower to bound memory.
+ * Each test gets its own browser context, with its own IndexedDB and service
+ * worker, so they run in parallel. CI runs one browser per job; locally all
+ * three run, so the worker count is halved to bound memory.
  */
 
 // The `patchwork-e2e` bin sets these so the suite can run from the root of a
@@ -86,11 +78,9 @@ export default defineConfig({
       : []),
   ]),
 
-  // Build is expected to have run already (see e2e README / CI). We only
-  // start the preview server here so the harness boots quickly and
-  // deterministically. `reuseExistingServer` lets you keep a `vite preview`
-  // running locally during iteration. `--base-url` points the suite at a
-  // server someone else is running, so we start nothing.
+  // The site must be built already; this only starts its preview server, or
+  // locally reuses one you have running. With `--base-url` someone else's
+  // server is used and nothing is started.
   webServer: EXTERNAL_BASE_URL
     ? undefined
     : {

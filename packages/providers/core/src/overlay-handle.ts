@@ -4,50 +4,96 @@ import {
   type AutomergeUrl,
   type DocHandle,
   type DocumentId,
+  type StorageId,
+  type SyncInfo,
+  type UrlHeads,
 } from "@automerge/automerge-repo/slim";
 
 import { forwardingProxy } from "./forwarding-proxy.js";
 
 type Listener = (...args: unknown[]) => void;
+type Segments = NonNullable<ReturnType<typeof parseAutomergeUrl>["segments"]>;
 
 // The only members whose behavior an overlay handle changes: the presented
-// identity, the backing accessors (`backingHandle`/`swapBackingDocHandle`),
-// the identity-preserving `sub` (sub-handle urls stay in the presented space),
-// the argument-unwrapping handle comparisons
-// (`merge`/`overlaps`/`contains`/`isChildOf`/`equals`), and the re-stamping
-// EventEmitter surface. Everything else (doc/change/heads/ref/view/diff/...)
-// forwards to the backing handle.
+// identity, the backing accessors (`backingHandle`/`swapBackingDocHandle`/
+// `setSyncHandle`), the identity-preserving `sub`/`view` (derived urls stay
+// in the presented space), url equality (`equals`), the argument-unwrapping
+// comparisons (`merge`/`overlaps`/`contains`/`isChildOf`/`diff`), the peer
+// members that go to the sync handle (`broadcast`/`getSyncInfo`/
+// `getRemoteHeads`/`isCaughtUpWith`), and the re-stamping EventEmitter
+// surface. Everything else (doc/change/heads/ref/history/...) forwards to the
+// backing handle.
 const OVERLAY_HANDLE_OWNED: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
   "url",
   "documentId",
   "backingHandle",
   "swapBackingDocHandle",
+  "setSyncHandle",
   "sub",
+  "view",
+  "equals",
   "merge",
   "overlaps",
   "contains",
   "isChildOf",
-  "equals",
+  "diff",
+  "broadcast",
+  "getSyncInfo",
+  "getRemoteHeads",
+  "isCaughtUpWith",
   "on",
   "off",
   "once",
   "addListener",
   "removeListener",
   "removeAllListeners",
+  "listenerCount",
+  "listeners",
+  "eventNames",
   "emit",
   "dispose",
+]);
+
+// Events about the document's peers rather than its contents, which
+// automerge-repo sends to every handle on the document; an overlay handle
+// hears them from its sync handle (see `setSyncHandle`). The other peer event,
+// `remote-heads`, it emits on the document's root handle alone.
+const PEER_EVENTS: ReadonlySet<string> = new Set([
+  "ephemeral-message",
+  "ephemeral-message-outbound",
 ]);
 
 export type OverlayHandleOpts<T> = {
   presentedUrl: AutomergeUrl;
   backing: DocHandle<T>;
+  /** Where peer traffic goes, when not to the backing; see `setSyncHandle`. */
+  sync?: DocHandle<unknown>;
 };
 
-type SubCacheEntry = {
-  wrapped: OverlayHandle<unknown>;
-  /** Original `sub(...)` args, replayed on a backing swap. */
-  segments: unknown[];
-};
+/**
+ * How a derived handle is re-made on its root's next backing: a `view(heads)`
+ * somewhere in its derivation (if any), then its path relative to the root.
+ * The path is the one in the backing handle's url, so cursor ranges keep
+ * their cursors (valid in any fork) rather than being re-placed by index.
+ */
+type Recipe = { heads?: UrlHeads; segments: Segments };
+
+// Consumers hold the Proxy, which can't reach the target's private fields;
+// this maps each Proxy back to its target.
+const targets = new WeakMap<object, OverlayHandle<any>>();
+
+type Family = Map<AutomergeUrl, WeakRef<OverlayHandle<unknown>>>;
+
+// A backing event's forwarder, and the handle it's attached to.
+type Forwarder = { fn: Listener; on: DocHandle<unknown> };
+
+// Prunes a collected wrapper's entry from its root's family.
+const collected = new FinalizationRegistry<{
+  family: Family;
+  url: AutomergeUrl;
+}>(({ family, url }) => {
+  if (family.get(url)?.deref() === undefined) family.delete(url);
+});
 
 /**
  * A url-hiding proxy around a swappable backing `DocHandle`. `url`/`documentId`
@@ -57,33 +103,57 @@ type SubCacheEntry = {
  * re-stamped to this wrapper, so consumers never observe the backing (clone)
  * handle or its url.
  *
+ * Handles derived with `sub`/`view` are wrappers too, canonicalized like the
+ * real repo's: the same presented url gives the same wrapper, however it was
+ * reached, for as long as anything holds it (or listens to it).
+ *
  * Remappers may re-point a live handle at a different backing via
- * {@link swapBackingDocHandle}: listeners are re-wired, cached sub-handles
+ * {@link swapBackingDocHandle}: listeners are re-wired, derived handles
  * re-based, and a synthetic `change` with `scopeReplaced: true` tells
  * consumers to re-read `doc()` — the backings may be divergent forks with no
  * patch stream connecting them.
+ *
+ * Peer traffic (ephemeral messages, sync info, remote heads) goes to the
+ * backing too, unless a sync handle is set ({@link setSyncHandle}): then to
+ * that, for the root and every handle derived from it.
  */
 export class OverlayHandle<T> {
   readonly #originalUrl: AutomergeUrl;
   #handle: DocHandle<T>;
   readonly #listeners = new Map<string, Set<Listener>>();
-  // Forwarders attached to the current backing; moved over on a swap.
-  readonly #forwarders = new Map<string, Listener>();
-  // Sub-handle wrappers keyed by *presented* url (stable across swaps), so
-  // repeated `sub(...)` of the same path return the same wrapper.
-  readonly #subCache = new Map<AutomergeUrl, SubCacheEntry>();
+  // One forwarder per event with listeners, attached to the backing (or, for
+  // a peer event, the sync handle); moved over when either changes, dropped
+  // with the event's last listener.
+  readonly #forwarders = new Map<string, Forwarder>();
   // The Proxy returned from the constructor — the object consumers actually
   // hold. Re-stamped onto forwarded events so identity stays consistent.
-  #self: OverlayHandle<T>;
+  readonly #self: OverlayHandle<T>;
+  // The wrapper this one was derived from (itself, for one made directly),
+  // and how to re-make this one on that wrapper's next backing.
+  #root: OverlayHandle<unknown>;
+  #recipe: Recipe = { segments: [] };
+  // On a root: every live wrapper derived from it, by presented url. Held
+  // weakly, as the real repo holds its sub-handles: a wrapper nothing holds
+  // and nothing listens to can go.
+  readonly #family: Family = new Map();
+  // On a root: the handle peer traffic goes to instead of the backing, for
+  // this wrapper and its family. Unset, each goes to its own backing.
+  #sync: DocHandle<unknown> | undefined;
+  // Set once this wrapper has stopped following any backing (disposed, or a
+  // view its root's new backing couldn't make); it never forwards again.
+  #detached = false;
 
   constructor(opts: OverlayHandleOpts<T>) {
     this.#originalUrl = opts.presentedUrl;
     this.#handle = opts.backing;
+    this.#sync = opts.sync;
+    this.#root = this as OverlayHandle<unknown>;
     this.#self = forwardingProxy<OverlayHandle<T>>(
       this,
       () => this.#handle,
       OVERLAY_HANDLE_OWNED
     );
+    targets.set(this.#self, this);
     return this.#self;
   }
 
@@ -101,52 +171,118 @@ export class OverlayHandle<T> {
   }
 
   /**
-   * @internal Re-point this wrapper and its cached sub-handles at a new
+   * @internal Re-point this wrapper and every handle derived from it at a new
    * backing, keeping presented and proxy identity intact. Emits a synthetic
-   * `change` with `scopeReplaced: true` so consumers reconcile from `doc()`
-   * instead of applying patches.
+   * `change` with `scopeReplaced: true` (and `heads-changed`, when the heads
+   * move) so consumers reconcile from `doc()` instead of applying patches.
+   * `sync` is the new backing's sync handle, as for {@link setSyncHandle}.
    */
-  swapBackingDocHandle(next: DocHandle<T>): void {
-    const previous = this.#handle;
-    if (next === previous) return;
-    const before = previous.doc();
-    this.#handle = next;
-
-    // Move the forwarders onto the new backing so listeners keep firing.
-    const emitter = (handle: DocHandle<T>) =>
-      handle as unknown as {
-        on(ev: string, fn: Listener): void;
-        off(ev: string, fn: Listener): void;
-      };
-    for (const [ev, forwarder] of this.#forwarders) {
-      emitter(previous).off(ev, forwarder);
-      emitter(next).on(ev, forwarder);
+  swapBackingDocHandle(next: DocHandle<T>, sync?: DocHandle<unknown>): void {
+    if (next === this.#handle) {
+      this.setSyncHandle(sync);
+      return;
     }
-
-    // Re-base cached sub-handles against the new backing; each child emits
-    // its own scopeReplaced change.
-    for (const entry of this.#subCache.values()) {
-      const nextSub = (
-        next as unknown as { sub: (...s: unknown[]) => DocHandle<unknown> }
-      ).sub(...entry.segments);
-      entry.wrapped.swapBackingDocHandle(nextSub);
+    this.#sync = sync;
+    const moved: [OverlayHandle<unknown>, DocHandle<unknown>][] = [
+      [this as OverlayHandle<unknown>, this.#rebind(next)],
+    ];
+    for (const [url, ref] of this.#family) {
+      const member = ref.deref();
+      if (!member) {
+        this.#family.delete(url);
+        continue;
+      }
+      const target = targets.get(member)!;
+      let remade: DocHandle<unknown> | undefined;
+      try {
+        remade = remake(next as DocHandle<any>, target.#recipe);
+      } catch (err) {
+        console.error(
+          `[patchwork-providers] couldn't re-base ${url} on its new backing:`,
+          err
+        );
+      }
+      if (!remade) {
+        // A view at heads the new backing doesn't have: it stays the snapshot
+        // it was, but hears nothing more from a backing that may be going.
+        target.#detach();
+        this.#family.delete(url);
+        continue;
+      }
+      if (remade === target.#handle) continue;
+      moved.push([target, target.#rebind(remade)]);
     }
+    // Every handle is re-pointed before anyone hears about it, and, as in a
+    // real change, all hear `heads-changed` before any hears `change`.
+    for (const [target, previous] of moved) {
+      if (!sameHeads(previous.heads(), target.#handle.heads())) {
+        target.emit("heads-changed", {
+          handle: target.#self,
+          doc: target.#handle.fullDoc(),
+        });
+      }
+    }
+    for (const [target, previous] of moved) {
+      const after = target.#handle.fullDoc();
+      target.emit("change", {
+        handle: target.#self,
+        doc: target.#handle.doc(),
+        patches: [],
+        scopeReplaced: true,
+        patchInfo: { before: previous.fullDoc(), after, source: "change" },
+      });
+    }
+  }
 
-    // No patch stream connects the two backings, so signal a wholesale scope
-    // replacement; consumers reconcile from `doc` instead of patches.
-    const after = next.doc();
-    this.emit("change", {
-      handle: this.#self,
-      doc: after,
-      patches: [],
-      scopeReplaced: true,
-      patchInfo: { before, after, source: "change" },
-    });
+  /**
+   * @internal Send this wrapper's and its family's peer traffic through
+   * `sync` instead of their backings: `broadcast`, `getSyncInfo`,
+   * `getRemoteHeads`, `isCaughtUpWith`, and the `ephemeral-message`,
+   * `ephemeral-message-outbound` and `remote-heads` events. For a backing
+   * with no peers of its own, such as a scratch document, whose peers are
+   * those of the stored document it's computed from. `undefined` goes back
+   * to the backings.
+   */
+  setSyncHandle(sync: DocHandle<unknown> | undefined): void {
+    const root = this.#root;
+    if (root.#sync === sync) return;
+    root.#sync = sync;
+    root.#reattach();
+    for (const ref of root.#family.values()) {
+      const member = ref.deref();
+      if (member) targets.get(member)!.#reattach();
+    }
+  }
+
+  // Peers are the document's, so these read no path or heads: a derived
+  // handle's are its root's.
+  broadcast(message: unknown): void {
+    this.#syncHandle().broadcast(message);
+  }
+
+  getSyncInfo(storageId: StorageId): SyncInfo | undefined {
+    return this.#syncHandle().getSyncInfo(storageId);
+  }
+
+  getRemoteHeads(storageId: StorageId): UrlHeads | undefined {
+    return this.#syncHandle().getRemoteHeads(storageId);
+  }
+
+  // Asked of the stored document: whether this tab holds what a peer last
+  // advertised for it, which a scratch document's own history can't answer.
+  isCaughtUpWith(storageId: StorageId): boolean | undefined {
+    return this.#syncHandle().isCaughtUpWith(storageId);
+  }
+
+  // `equals` is url equality, and ours is the presented url.
+  equals(other: DocHandle<unknown>): boolean {
+    return this.#originalUrl === other.url;
   }
 
   // Handle comparisons read the *other* handle's internals (Automerge rejects
-  // a foreign wrapper, and `overlaps`/`contains` touch its private `#path`), so
-  // unwrap an overlay argument down to its backing before delegating.
+  // a foreign wrapper, `overlaps`/`contains` touch its private `#path`, and
+  // `diff` tells handles from heads with `instanceof`), so unwrap an overlay
+  // argument down to its backing before delegating.
   merge(other: DocHandle<T>): void {
     this.#handle.merge(unwrapHandle(other));
   }
@@ -163,48 +299,58 @@ export class OverlayHandle<T> {
     return this.#handle.isChildOf(unwrapHandle(other));
   }
 
-  equals(other: DocHandle<unknown>): boolean {
-    return this.#handle.equals(unwrapHandle(other));
+  diff(
+    first: UrlHeads | DocHandle<T>,
+    second?: UrlHeads
+  ): ReturnType<DocHandle<T>["diff"]> {
+    return this.#handle.diff(
+      Array.isArray(first) ? first : unwrapHandle(first),
+      second
+    );
   }
 
-  // Sub-handles must keep reporting urls in the *presented* space; otherwise a
-  // ref or cursor produced here (a comment target, a selection cursor, ...)
-  // would leak the backing (clone) documentId and break identity for consumers
-  // that resolve it back through the overlay. We scope `sub` to the backing
-  // handle (reads/writes still hit the clone) but wrap the result in another
-  // OverlayHandle whose presented url swaps the documentId back to ours.
-  // Cached by presented url (stable across swaps); the segments are kept so
-  // a swap can replay them against the new backing.
+  // Derived handles must keep reporting urls in the *presented* space;
+  // otherwise a ref or cursor produced here (a comment target, a selection
+  // cursor, ...) would leak the backing (clone) documentId and break identity
+  // for consumers that resolve it back through the overlay. Reads/writes still
+  // hit the backing's own sub-handle (or view).
   sub(...segments: unknown[]): DocHandle<unknown> {
-    const backingSub = (
+    const backing = (
       this.#handle as unknown as {
         sub: (...s: unknown[]) => DocHandle<unknown>;
       }
     ).sub(...segments);
-    const presentedSubUrl = restampUrl(this.#originalUrl, backingSub.url);
-    const cached = this.#subCache.get(presentedSubUrl);
-    if (cached) return cached.wrapped as unknown as DocHandle<unknown>;
-    const wrapped = new OverlayHandle<unknown>({
-      presentedUrl: presentedSubUrl,
-      backing: backingSub,
-    });
-    this.#subCache.set(presentedSubUrl, { wrapped, segments });
-    return wrapped as unknown as DocHandle<unknown>;
+    return this.#derive(backing, this.#recipe.heads);
+  }
+
+  view(heads: UrlHeads): DocHandle<T> {
+    return this.#derive(
+      this.#handle.view(heads) as DocHandle<unknown>,
+      heads
+    ) as DocHandle<T>;
   }
 
   on(ev: string, fn: Listener): OverlayHandle<T> {
-    this.#forward(ev);
     let set = this.#listeners.get(ev);
     if (!set) {
       set = new Set();
       this.#listeners.set(ev, set);
     }
     set.add(fn);
+    this.#forward(ev);
     return this.#self;
   }
 
-  off(ev: string, fn: Listener): OverlayHandle<T> {
-    this.#listeners.get(ev)?.delete(fn);
+  // As in the real handle, `off(ev)` with no listener removes all of them.
+  off(ev: string, fn?: Listener): OverlayHandle<T> {
+    const set = this.#listeners.get(ev);
+    if (!set) return this.#self;
+    if (fn) set.delete(fn);
+    else set.clear();
+    if (set.size === 0) {
+      this.#listeners.delete(ev);
+      this.#unforward(ev);
+    }
     return this.#self;
   }
 
@@ -220,14 +366,26 @@ export class OverlayHandle<T> {
     return this.on(ev, fn);
   }
 
-  removeListener(ev: string, fn: Listener): OverlayHandle<T> {
+  removeListener(ev: string, fn?: Listener): OverlayHandle<T> {
     return this.off(ev, fn);
   }
 
   removeAllListeners(ev?: string): OverlayHandle<T> {
-    if (ev) this.#listeners.get(ev)?.clear();
-    else this.#listeners.clear();
+    if (ev !== undefined) return this.off(ev);
+    for (const event of [...this.#listeners.keys()]) this.off(event);
     return this.#self;
+  }
+
+  listenerCount(ev: string): number {
+    return this.#listeners.get(ev)?.size ?? 0;
+  }
+
+  listeners(ev: string): Listener[] {
+    return [...(this.#listeners.get(ev) ?? [])];
+  }
+
+  eventNames(): string[] {
+    return [...this.#listeners.keys()];
   }
 
   // Two deliberate departures from Node's EventEmitter: listener errors are
@@ -253,12 +411,101 @@ export class OverlayHandle<T> {
     return true;
   }
 
-  // Lazily forward a backing event the first time someone subscribes to it,
-  // re-stamping `payload.handle = this wrapper` so consumers see the wrapper
-  // rather than the backing handle as the event source.
+  dispose(): void {
+    this.#detach();
+    this.#listeners.clear();
+    for (const ref of this.#family.values()) ref.deref()?.dispose();
+    this.#family.clear();
+  }
+
+  // The wrapper for `backing`, a handle derived from ours: ourselves if it's
+  // our own backing, else the root's live wrapper for its presented url, else
+  // a new one.
+  #derive(
+    backing: DocHandle<unknown>,
+    heads: UrlHeads | undefined
+  ): DocHandle<unknown> {
+    const root = this.#root;
+    const recipe: Recipe = {
+      heads,
+      segments: relativeSegments(backing.url, root.#handle.url),
+    };
+    const url = presentedUrlOf(root.#originalUrl, recipe);
+    if (
+      backing === (this.#handle as DocHandle<unknown>) &&
+      url === this.#originalUrl
+    ) {
+      return this.#self as unknown as DocHandle<unknown>;
+    }
+    if (url === root.#originalUrl) {
+      return root.#self as unknown as DocHandle<unknown>;
+    }
+    const live = root.#family.get(url)?.deref();
+    if (live) return live as unknown as DocHandle<unknown>;
+    const member = new OverlayHandle<unknown>({ presentedUrl: url, backing });
+    const target = targets.get(member)!;
+    target.#root = root;
+    target.#recipe = recipe;
+    root.#family.set(url, new WeakRef(member));
+    collected.register(member, { family: root.#family, url });
+    return member as unknown as DocHandle<unknown>;
+  }
+
+  // Point at `next`, moving the forwarders over; returns the old backing.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  #rebind(next: DocHandle<any>): DocHandle<unknown> {
+    const previous = this.#handle as DocHandle<unknown>;
+    this.#handle = next as DocHandle<T>;
+    this.#reattach();
+    return previous;
+  }
+
+  // Where peer traffic goes: the root's sync handle, else the backing.
+  #syncHandle(): DocHandle<unknown> {
+    return this.#root.#sync ?? (this.#handle as DocHandle<unknown>);
+  }
+
+  // Where `ev`'s forwarder belongs. `remote-heads` comes from the sync handle
+  // only to the handle the repo would emit it on: a root not pinned to heads.
+  // Anywhere else it's left on the backing, which, as in the repo, never
+  // emits it.
+  #sourceOf(ev: string): DocHandle<unknown> {
+    const peer =
+      PEER_EVENTS.has(ev) ||
+      (ev === "remote-heads" &&
+        this.#root === (this as OverlayHandle<unknown>) &&
+        !parseAutomergeUrl(this.#originalUrl).heads);
+    return peer ? this.#syncHandle() : (this.#handle as DocHandle<unknown>);
+  }
+
+  // Move each forwarder to where it now belongs.
+  #reattach(): void {
+    for (const [ev, forwarder] of this.#forwarders) {
+      const on = this.#sourceOf(ev);
+      if (on === forwarder.on) continue;
+      emitter(forwarder.on).off(ev, forwarder.fn);
+      emitter(on).on(ev, forwarder.fn);
+      forwarder.on = on;
+    }
+  }
+
+  // Stop forwarding anything, for good.
+  #detach(): void {
+    this.#detached = true;
+    for (const [ev, forwarder] of this.#forwarders) {
+      emitter(forwarder.on).off(ev, forwarder.fn);
+    }
+    this.#forwarders.clear();
+  }
+
+  // Lazily forward a backing (or sync handle) event while someone listens for
+  // it, re-stamping `payload.handle = this wrapper` so consumers see the
+  // wrapper rather than the backing handle as the event source. While
+  // attached, the forwarder also keeps this wrapper alive, as a listener
+  // keeps a real handle alive.
   #forward(ev: string): void {
-    if (this.#forwarders.has(ev)) return;
-    const forwarder: Listener = (payload: unknown) => {
+    if (this.#detached || this.#forwarders.has(ev)) return;
+    const fn: Listener = (payload: unknown) => {
       if (
         payload &&
         typeof payload === "object" &&
@@ -269,42 +516,76 @@ export class OverlayHandle<T> {
         this.emit(ev, payload);
       }
     };
-    this.#forwarders.set(ev, forwarder);
-    (this.#handle as unknown as { on(ev: string, fn: Listener): void }).on(
-      ev,
-      forwarder
-    );
+    const on = this.#sourceOf(ev);
+    this.#forwarders.set(ev, { fn, on });
+    emitter(on).on(ev, fn);
   }
 
-  dispose(): void {
-    const backing = this.#handle as unknown as {
-      off(ev: string, fn: Listener): void;
-    };
-    for (const [ev, forwarder] of this.#forwarders) backing.off(ev, forwarder);
-    this.#forwarders.clear();
-    this.#listeners.clear();
-    for (const entry of this.#subCache.values()) entry.wrapped.dispose();
-    this.#subCache.clear();
+  #unforward(ev: string): void {
+    const forwarder = this.#forwarders.get(ev);
+    if (!forwarder) return;
+    emitter(forwarder.on).off(ev, forwarder.fn);
+    this.#forwarders.delete(ev);
   }
 }
 
-// Unwrap an overlay wrapper down to its backing handle (Automerge rejects a
-// foreign wrapper, and comparisons touch the backing's private fields). Plain
-// handles pass through untouched.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function emitter(handle: DocHandle<any>) {
+  return handle as unknown as {
+    on(ev: string, fn: Listener): void;
+    off(ev: string, fn: Listener): void;
+  };
+}
+
+// The derived handle `recipe` names, on a root's new backing; `undefined` for
+// a view at heads that backing doesn't have.
+function remake(
+  backing: DocHandle<unknown>,
+  recipe: Recipe
+): DocHandle<unknown> | undefined {
+  let handle = backing;
+  if (recipe.heads) {
+    const has = (handle as { containsHeads?: (h: UrlHeads) => boolean })
+      .containsHeads;
+    if (has && !has.call(handle, recipe.heads)) return undefined;
+    handle = handle.view(recipe.heads);
+  }
+  if (recipe.segments.length > 0) {
+    handle = (
+      handle as unknown as { sub: (...s: unknown[]) => DocHandle<unknown> }
+    ).sub(...recipe.segments);
+  }
+  return handle;
+}
+
+// `url`'s path past `rootUrl`'s; a derived handle's path starts with its
+// root's.
+function relativeSegments(url: AutomergeUrl, rootUrl: AutomergeUrl): Segments {
+  const segments = parseAutomergeUrl(url).segments ?? [];
+  const rootSegments = parseAutomergeUrl(rootUrl).segments ?? [];
+  return segments.slice(rootSegments.length);
+}
+
+// A derived handle's presented url: the presented root's document, the
+// recipe's view heads (else the root's own), and the root's path extended by
+// the recipe's. Built from the presented root rather than the backing's url,
+// so heads a remapper stamped on its backing don't leak into derived urls.
+function presentedUrlOf(root: AutomergeUrl, recipe: Recipe): AutomergeUrl {
+  const { documentId, segments = [], heads } = parseAutomergeUrl(root);
+  const path = [...segments, ...recipe.segments];
+  return stringifyAutomergeUrl({
+    documentId,
+    heads: recipe.heads ?? heads,
+    segments: path.length > 0 ? path : undefined,
+  });
+}
+
+function sameHeads(a: UrlHeads, b: UrlHeads): boolean {
+  return a.length === b.length && a.every((head, i) => head === b[i]);
+}
+
+// Unwrap an overlay wrapper down to its backing handle. Plain handles pass
+// through untouched.
 function unwrapHandle<T>(handle: DocHandle<T>): DocHandle<T> {
-  return handle instanceof OverlayHandle
-    ? (handle.backingHandle as DocHandle<T>)
-    : handle;
-}
-
-// Re-stamp a backing (clone) handle url into the presented space: keep the
-// path segments and any pinned heads, but swap the documentId back to the
-// presented root's. Mirrors the original->clone mapping in OverlayRepo#resolve.
-function restampUrl(
-  presentedRoot: AutomergeUrl,
-  backingUrl: AutomergeUrl
-): AutomergeUrl {
-  const { documentId } = parseAutomergeUrl(presentedRoot);
-  const { segments, heads } = parseAutomergeUrl(backingUrl);
-  return stringifyAutomergeUrl({ documentId, segments, heads });
+  return (targets.get(handle)?.backingHandle as DocHandle<T>) ?? handle;
 }

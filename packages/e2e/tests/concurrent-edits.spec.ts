@@ -2,28 +2,27 @@ import { expect, test } from "@playwright/test";
 import {
   createDoc,
   findDocField,
+  navigate,
   waitForRepoReady,
   waitForServiceWorkerActive,
 } from "./helpers.js";
 
 /**
- * CRDT merge semantics across the SW relay.
- *
  * Two tabs editing the same doc must converge without losing either edit.
- * The edits here are fired without ordering between the tabs, so they race
- * through the relay; Automerge's merge must keep both.
+ * The edits are fired with no ordering between the tabs, so they race, and
+ * Automerge's merge must keep both.
  */
 
 test("edits to different fields from two tabs both survive the merge", async ({
   context,
 }) => {
   const tabA = await context.newPage();
-  await tabA.goto("/");
+  await navigate(tabA, "/");
   await waitForServiceWorkerActive(tabA);
   await waitForRepoReady(tabA);
 
   const tabB = await context.newPage();
-  await tabB.goto("/");
+  await navigate(tabB, "/");
   await waitForRepoReady(tabB);
 
   const url = await createDoc(tabA, { a: "", b: "" });
@@ -66,12 +65,12 @@ test("list pushes from two tabs merge without dropping items", async ({
   context,
 }) => {
   const tabA = await context.newPage();
-  await tabA.goto("/");
+  await navigate(tabA, "/");
   await waitForServiceWorkerActive(tabA);
   await waitForRepoReady(tabA);
 
   const tabB = await context.newPage();
-  await tabB.goto("/");
+  await navigate(tabB, "/");
   await waitForRepoReady(tabB);
 
   const url = await createDoc(tabA, { items: [] });

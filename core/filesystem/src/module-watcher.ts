@@ -7,7 +7,7 @@ import {
   stringifyAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
 import {
-  importPackageFromFolderDocUrl,
+  importPackage,
   importPackageFromHttpUrl,
 } from "./packages.js";
 import { type HasPatchworkMetadata } from "./metadata.js";
@@ -26,18 +26,53 @@ export type ModuleSettingsDoc = {
     "@patchwork": { type: "patchwork:module-settings" };
   };
 
-// A single pushwork sync commits a burst of changes to a package's doc — the
-// file-list write, an optional pin refresh, and a trailing `lastSyncAt` stamp —
-// and the file docs it references sync as independent documents. Coalesce that
-// burst into one reload by waiting for the package doc's heads to stop moving
-// for this long before re-importing, so we pin to the settled, consistent
-// snapshot instead of an intermediate one.
+// One pushwork sync is a burst of changes to a package's doc (the file list,
+// maybe a pin refresh, a `lastSyncAt` stamp), so wait for its heads to stop
+// moving this long, then import the settled snapshot once.
 const RELOAD_DEBOUNCE_MS = 250;
 
 // A package can fail to import just because the automerge worker serving its
 // files is still coming up. Nothing else brings it back — setDocWatcher only
 // fires when the package doc's own heads move — so back off and try again.
 const RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 20_000];
+
+// How long a batch from `prioritize` gets to load what it was expected to,
+// from when it opens, before everything still held back is let go. A return
+// visit boots in about a second.
+const BATCH_TIME_LIMIT_MS = 3_000;
+
+/** A plugin, by the type and id it registers under. */
+export type PluginRef = { type: string; id: string };
+
+/**
+ * Settings entries to load ahead of the rest, each with the plugins it's
+ * expected to provide.
+ */
+export type LoadBatch = Record<string, PluginRef[]>;
+
+const refKey = (ref: PluginRef) => `${ref.type}\u0000${ref.id}`;
+
+type Gate = { promise: Promise<void>; open: () => void };
+
+function gate(): Gate {
+  let open!: () => void;
+  const promise = new Promise<void>((resolve) => (open = resolve));
+  return { promise, open };
+}
+
+type LoadPlan = {
+  batches: Map<string, PluginRef[]>[];
+  /** How many gates are open. One past the last batch's is the rest's. */
+  opened: number;
+  /** One per batch, then one for every module in none of them. */
+  gates: Gate[];
+  timer?: ReturnType<typeof setTimeout>;
+  /** What each entry provided, as `refKey`s, once it's loaded. */
+  provided: Map<string, Set<string>>;
+  /** Entries whose import or lookup failed. */
+  failed: Set<string>;
+  settle: (held: boolean) => void;
+};
 
 function getDocumentBaseUrl(): string {
   // `document.baseURI` is the document's proper base URL — for a srcdoc/sandboxed
@@ -51,9 +86,8 @@ function getDocumentBaseUrl(): string {
 }
 
 /**
- * Relative (non-Automerge) module URLs are
- * resolved against the manifest's own URL so they can be dynamically imported
- * regardless of where the watcher code itself lives.
+ * Relative module URLs in a manifest resolve against the manifest's own URL,
+ * so they import from wherever this code lives.
  */
 async function fetchModuleManifest(url: string): Promise<ModuleSettingsDoc> {
   const manifestUrl = new URL(url, getDocumentBaseUrl()).href;
@@ -94,11 +128,27 @@ type WatchedModule = {
   looking: boolean;
   /** A change landed while `looking`, so look again once it's back. */
   stale: boolean;
+  /** Lookups that have failed in a row, which pick the next retry's delay. */
+  failures: number;
+  /** Looks the package up again after a failed lookup. */
+  retry?: ReturnType<typeof setTimeout>;
 };
 
 /** The url of the document `url` names, without heads. */
 const stripHeads = (url: AutomergeUrl) =>
   stringifyAutomergeUrl({ documentId: parseAutomergeUrl(url).documentId });
+
+/**
+ * `url`, a service-worker url for a path inside a package, with the package
+ * named at `latest` heads. Reloading imports the same file the first load did,
+ * and since the url is new, the browser fetches it again.
+ */
+function pinServiceWorkerUrl(url: string, latest: AutomergeUrl) {
+  return url.replace(
+    /\/automerge%3A[^/]+\//i,
+    `/${encodeURIComponent(latest)}/`
+  );
+}
 
 function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
   console.warn(
@@ -109,30 +159,49 @@ function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
 // todo this can be a function that takes a plugin system and returns a change
 // handler
 
+/** How a package is doing: what a list of packages shows beside each one. */
+export type PackageStatus =
+  | { state: "loading" }
+  | { state: "loaded"; plugins: string[] }
+  | { state: "failed"; error: string };
+
+const describeError = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
+
 /**
- * Settings sources are passed in keyed by name (e.g. `{ system, user }`). Each
- * source URL may be either an Automerge module-settings doc (`automerge:...`,
- * live-reloaded) or an HTTP(S) URL to a static JSON manifest of the same shape
- * (fetched once at construction). The two kinds can be freely mixed, and the
- * module URLs *within* either kind can themselves point at Automerge package
- * docs (folders or directories) or plain HTTP(S) bundles.
+ * Settings sources come keyed by name (`{ system, user }`). Each is an
+ * Automerge module-settings doc (`automerge:…`, live) or an HTTP(S) URL to a
+ * static JSON manifest of the same shape (fetched once), mixed freely. The
+ * module URLs in either can be Automerge package docs or plain HTTP(S)
+ * bundles.
+ *
+ * Dispatches a `"status"` event whenever a package's {@link PackageStatus}
+ * changes; read it with {@link ModuleWatcher.packageStatus}.
  */
-export class ModuleWatcher {
+export class ModuleWatcher extends EventTarget {
   repo: Repo;
   urls: Record<string, string>;
   handles: Record<string, DocHandle<ModuleSettingsDoc>> | undefined;
   staticManifests: Record<string, ModuleSettingsDoc> = {};
   doneLoading: Promise<void>;
   #watchedModules = new Map<string, WatchedModule>();
-  // Per-module announce generation. Bumped whenever a newer announce starts
-  // for the same module, so a stale retry chain (still backing off from a
-  // failed import of an older pinned version) abandons itself instead of
-  // eventually succeeding and rolling the registry back to that old version.
+  // Bumped when a newer announce starts for a module, so a retry chain still
+  // backing off from an older version gives up instead of rolling the
+  // registry back to it.
   #announceGenerations = new Map<string, number>();
   #retryTimers = new Map<string, ReturnType<typeof setTimeout>>();
   #lastAnnounced = new Map<string, string>();
+  // The url each module was last handed to `onLoad` from. A branches doc's
+  // default branch is a different document from the settings entry, so this is
+  // what an unload has to name for its plugins to be found.
+  #loadedUrls = new Map<string, string>();
   #activeModules = new Set<string>();
+  /** Package status, by the package doc's documentId. */
+  #status = new Map<string, PackageStatus>();
   #disposed = false;
+  #plan: LoadPlan | undefined;
+  // The sources given to the constructor have been read.
+  #sourcesRead = gate();
 
   /**
    * Told the url the module was imported from (pinned to heads, for an
@@ -141,22 +210,25 @@ export class ModuleWatcher {
    * when it goes away.
    */
   onLoad: (name: string, mod: any, moduleKey: string) => void;
-  onUnload?: (name: string) => void;
+  /**
+   * Told a module's stable identity, and the url it was last loaded from,
+   * when it goes away: either because it left the settings, or because a
+   * reload came from a different document than the last load did (a branches
+   * doc's default branch moved), whose plugins the new load won't replace.
+   */
+  onUnload?: (moduleKey: string, importUrl: string) => void;
   /** Told every module the settings list, whenever it (re)reads them. */
   onModules?: (modules: string[]) => void;
   /**
-   * How an Automerge package doc (pinned to heads) is turned into the
-   * `{ plugins }` shape `onLoad` consumes. Defaults to importing the package
-   * entry point directly on this thread. The browser bootloader overrides this
-   * to run the entry point in a worker for descriptor discovery and rebuild the
-   * `{ plugins }` shape with main-thread `load()` functions.
+   * Turns an Automerge package doc, pinned to heads, into the `{ plugins }`
+   * `onLoad` takes. By default it imports the entry point on this thread; the
+   * browser bootloader runs it in a worker instead.
    */
   importAutomergePackage: (urlAtHeads: string) => Promise<any>;
   /**
-   * How a package's doc is looked up at its latest heads and watched for new
-   * ones. Defaults to holding each package doc in `repo`. The browser setup
-   * passes {@link trackPackagesViaServiceWorker}, looking them up through the
-   * service worker and watching them in `repo`.
+   * How a package doc is looked up at its latest heads and watched for new
+   * ones. Defaults to holding each one in `repo`; the browser passes
+   * {@link trackPackagesViaServiceWorker}.
    */
   tracker: PackageTracker;
 
@@ -164,11 +236,12 @@ export class ModuleWatcher {
     repo: Repo,
     urls: Record<string, string>,
     callback: (name: string, mod: any, moduleKey: string) => void,
-    onUnload?: (name: string) => void,
+    onUnload?: (moduleKey: string, importUrl: string) => void,
     importAutomergePackage: (urlAtHeads: string) => Promise<any> = (url) =>
-      importPackageFromFolderDocUrl(url as AutomergeUrl),
+      importPackage(url),
     tracker: PackageTracker = trackPackagesInRepo(repo)
   ) {
+    super();
     this.repo = repo;
     this.urls = { ...urls };
     this.onLoad = callback;
@@ -211,8 +284,131 @@ export class ModuleWatcher {
         this.staticManifests[value.name] = value.manifest;
       }
     }
+    this.#sourcesRead.open();
     if (this.#disposed) return;
     await this.load();
+  }
+
+  /**
+   * Load `batches` ahead of everything else, one after another: each opens
+   * once every entry in the one before has loaded and provided the plugins
+   * it was expected to. Modules in no batch wait for the last. If an entry
+   * fails, comes back without a plugin it was expected to provide, or a batch
+   * takes longer than {@link BATCH_TIME_LIMIT_MS}, everything still held back
+   * is let go at once.
+   *
+   * Call it straight after constructing the watcher, before its first load.
+   * Resolves true once every batch loaded as expected, and false if the plan
+   * fell back (or there was nothing to plan).
+   */
+  prioritize(batches: LoadBatch[]): Promise<boolean> {
+    const planned = batches
+      .map((batch) => new Map(Object.entries(batch)))
+      .filter((batch) => batch.size > 0);
+    if (!planned.length || this.#plan || this.#disposed) {
+      return Promise.resolve(false);
+    }
+    return new Promise<boolean>((settle) => {
+      this.#plan = {
+        batches: planned,
+        opened: 0,
+        gates: [...planned, null].map(() => gate()),
+        provided: new Map(),
+        failed: new Set(),
+        settle,
+      };
+      this.#openNextBatch();
+    });
+  }
+
+  #openNextBatch() {
+    const plan = this.#plan;
+    if (!plan) return;
+    clearTimeout(plan.timer);
+    plan.gates[plan.opened++].open();
+    if (plan.opened > plan.batches.length) {
+      this.#endPlan(true);
+      return;
+    }
+    plan.timer = setTimeout(
+      () =>
+        this.#fallBack(
+          `batch ${plan.opened} took more than ${BATCH_TIME_LIMIT_MS}ms`
+        ),
+      BATCH_TIME_LIMIT_MS
+    );
+    this.#checkBatch();
+  }
+
+  /** Opens the next batch if the open one has loaded as expected. */
+  #checkBatch() {
+    const plan = this.#plan;
+    if (!plan) return;
+    const batch = plan.batches[plan.opened - 1];
+    for (const [entry, expected] of batch) {
+      if (plan.failed.has(entry)) {
+        this.#fallBack(`${entry} failed to load`);
+        return;
+      }
+      const provided = plan.provided.get(entry);
+      if (!provided) return;
+      const missing = expected.find((ref) => !provided.has(refKey(ref)));
+      if (missing) {
+        this.#fallBack(
+          `${entry} no longer provides ${missing.type} ${missing.id}`
+        );
+        return;
+      }
+    }
+    this.#openNextBatch();
+  }
+
+  #fallBack(reason: string) {
+    const plan = this.#plan;
+    if (!plan) return;
+    log(`letting every module load: ${reason}`);
+    for (const { open } of plan.gates) open();
+    this.#endPlan(false);
+  }
+
+  #endPlan(held: boolean) {
+    const plan = this.#plan;
+    if (!plan) return;
+    clearTimeout(plan.timer);
+    this.#plan = undefined;
+    plan.settle(held);
+  }
+
+  /** Waits for `entry`'s batch to open, if a plan is holding it back. */
+  #turnOf(entry: string): Promise<void> | undefined {
+    const plan = this.#plan;
+    if (!plan) return undefined;
+    const batch = plan.batches.findIndex((batch) => batch.has(entry));
+    const index = batch === -1 ? plan.batches.length : batch;
+    if (index < plan.opened) return undefined;
+    return plan.gates[index].promise;
+  }
+
+  #noteLoaded(entry: string, mod: any) {
+    const plan = this.#plan;
+    if (!plan) return;
+    const plugins: any[] = Array.isArray(mod?.plugins) ? mod.plugins : [];
+    plan.provided.set(
+      entry,
+      new Set(
+        plugins
+          .filter((p) => typeof p?.type === "string" && typeof p?.id === "string")
+          .map(refKey)
+      )
+    );
+    this.#checkBatch();
+  }
+
+  #noteFailed(entry: string) {
+    const plan = this.#plan;
+    if (!plan) return;
+    plan.failed.add(entry);
+    this.#checkBatch();
   }
 
   private settingsDocs(): Array<{
@@ -234,6 +430,12 @@ export class ModuleWatcher {
     await Promise.all(
       modules.map(async (importName) => {
         try {
+          const turn = this.#turnOf(importName);
+          if (turn) {
+            await turn;
+            // It may have left the settings while it waited.
+            if (this.#disposed || !this.#activeModules.has(importName)) return;
+          }
           await this.processModuleEntry(importName);
         } catch (error) {
           console.error(
@@ -253,9 +455,18 @@ export class ModuleWatcher {
       // it from settings unloads this module.
       const entry = this.watchPackage(importName, stripHeads(importName));
       if (!entry) return;
-      const latest = await this.findLatestVersion(importName, entry);
+      let latest: AutomergeUrl | undefined;
+      try {
+        latest = await this.findLatestVersion(importName, entry);
+      } catch (error) {
+        this.retryLookup(importName, entry, error);
+        this.#setStatus(importName, { state: "failed", error: describeError(error) });
+        this.#noteFailed(importName);
+        return;
+      }
       // A newer lookup took over, and announces what it finds.
       if (!latest) return;
+      entry.failures = 0;
       entry.version = latest;
       if (this.#lastAnnounced.get(importName) === latest) return;
       await this.announce(latest, importName, latest);
@@ -266,30 +477,53 @@ export class ModuleWatcher {
     await this.announce(importName);
   }
 
-  private async importPackageSafe(importName: string): Promise<any> {
+  /**
+   * How the package doc `urlOrDocumentId` is doing, or undefined if it isn't a
+   * package this watcher loads (an http module has none).
+   */
+  packageStatus(urlOrDocumentId: string): PackageStatus | undefined {
+    const documentId = isValidAutomergeUrl(urlOrDocumentId)
+      ? parseAutomergeUrl(urlOrDocumentId).documentId
+      : urlOrDocumentId;
+    return this.#status.get(documentId);
+  }
+
+  #setStatus(moduleKey: string, status: PackageStatus) {
+    if (!isValidAutomergeUrl(moduleKey)) return;
+    this.#status.set(parseAutomergeUrl(moduleKey).documentId, status);
+    this.dispatchEvent(new Event("status"));
+  }
+
+  private async importPackageSafe(
+    importName: string
+  ): Promise<{ mod: any } | { error: unknown }> {
     try {
       if (isValidAutomergeUrl(importName)) {
         // Pin to heads so descriptor discovery and any later main-thread load
         // resolve against the exact same version of the package doc.
-        return await this.importAutomergePackage(
-          await this.tracker.findLatest(importName)
-        );
+        return {
+          mod: await this.importAutomergePackage(
+            await this.tracker.findLatest(importName)
+          ),
+        };
       }
-      return await importPackageFromHttpUrl(importName);
+      return { mod: await importPackageFromHttpUrl(importName) };
     } catch (error) {
       console.error(
         `%c Failed to import ${importName}`,
         "color: #000, background: #ffbcef",
         error
       );
-      return undefined;
+      return { error };
     }
   }
 
   async addUrl(name: string, url: string): Promise<void> {
     if (this.urls[name] === url) return;
     this.urls[name] = url;
-    await this.doneLoading;
+    // A plan may want this source's modules first, so it can't wait for the
+    // others to load. Without one, the constructor's sources load first.
+    await (this.#plan ? this.#sourcesRead.promise : this.doneLoading);
     if (this.#disposed) return;
     const replaced = this.handles?.[name];
     if (replaced) replaced.removeListener("change", this.onChange);
@@ -307,9 +541,8 @@ export class ModuleWatcher {
 
   /**
    * Import a module and hand it to `onLoad`, retrying on failure. `moduleKey`
-   * is the module's stable identity (the unversioned settings-doc entry);
-   * `importUrl` may be a version pinned to heads (the reload path). Starting
-   * an announce supersedes any announce still in flight for the same key.
+   * is its stable identity (the settings-doc entry); `importUrl` may be pinned
+   * to heads. A newer announce for the same key supersedes this one.
    */
   private async announce(
     importUrl: string,
@@ -322,15 +555,36 @@ export class ModuleWatcher {
       this.#announceGenerations.get(moduleKey) === generation;
 
     const attempt = async (attemptIndex: number): Promise<void> => {
-      const mod = await this.importPackageSafe(importUrl);
-      // A newer announce for this module started while we were importing or
-      // backing off — its result wins; announcing ours now could regress the
-      // registry to an older version.
+      // A reload keeps saying "loaded" until the new version is in or fails.
+      if (attemptIndex === 0 && !this.#loadedUrls.has(moduleKey)) {
+        this.#setStatus(moduleKey, { state: "loading" });
+      }
+      const result = await this.importPackageSafe(importUrl);
+      // A newer announce started meanwhile; its result wins.
       if (!current()) return;
+      const mod = "mod" in result ? result.mod : undefined;
       if (mod) {
         this.#lastAnnounced.set(moduleKey, versionKey);
-        return this.onLoad(importUrl, mod, moduleKey);
+        this.unloadIfDocumentChanged(moduleKey, importUrl);
+        this.#loadedUrls.set(moduleKey, importUrl);
+        this.#setStatus(moduleKey, {
+          state: "loaded",
+          plugins: Array.isArray(mod.plugins)
+            ? mod.plugins
+                .map((plugin: { id?: unknown }) => plugin?.id)
+                .filter((id: unknown): id is string => typeof id === "string")
+            : [],
+        });
+        this.onLoad(importUrl, mod, moduleKey);
+        this.#noteLoaded(moduleKey, mod);
+        return;
       }
+      this.#setStatus(moduleKey, {
+        state: "failed",
+        error:
+          "error" in result ? describeError(result.error) : "it exported nothing",
+      });
+      this.#noteFailed(moduleKey);
       const delay = RETRY_DELAYS_MS[attemptIndex];
       if (delay === undefined) return;
       const timer = setTimeout(() => {
@@ -358,11 +612,9 @@ export class ModuleWatcher {
 
   /**
    * Reload `importName` when the package doc at `packageUrl` moves to new
-   * heads, debounced to the trailing edge so a push's burst of changes
-   * collapses into one import at the settled heads. This reacts to real
-   * content changes (including offline `save`, which never stamps
-   * lastSyncAt) rather than a magic timestamp field. With `baseline`, the
-   * current version is looked up now, and only what comes after it reloads.
+   * heads, on the trailing edge so a push's burst is one import. Heads, not
+   * `lastSyncAt`: an offline `save` never stamps that. With `baseline`, the
+   * current version is looked up now and only what comes after it reloads.
    */
   private watchPackage(
     importName: string,
@@ -379,8 +631,10 @@ export class ModuleWatcher {
         const first = entry.seen === undefined;
         entry.seen = seen;
         // The lookup that settles the version is still to come, and finds
-        // whatever this is.
-        if (first && entry.version === undefined) return;
+        // whatever this is. If it already failed, nothing is coming.
+        if (first && entry.version === undefined && entry.failures === 0) {
+          return;
+        }
       }
       if (entry.timer) clearTimeout(entry.timer);
       entry.timer = setTimeout(() => {
@@ -396,6 +650,7 @@ export class ModuleWatcher {
       lookups: 0,
       looking: false,
       stale: false,
+      failures: 0,
     };
     this.#watchedModules.set(importName, entry);
     if (baseline) void this.reloadIfMoved(importName, entry);
@@ -431,11 +686,10 @@ export class ModuleWatcher {
   }
 
   /**
-   * One lookup and import at a time per package. A package doc that's still
-   * syncing in says it changed with every batch, and a lookup or an import
-   * can take as long as the automerge worker's resolve timeout; starting one
-   * per change piles them up on a worker that's slow because it's busy.
-   * Changes that land meanwhile collapse into one more once this one's back.
+   * One lookup and import at a time per package: a doc still syncing in says
+   * it changed with every batch, and a lookup or import can take as long as
+   * the worker's resolve timeout, so one per change piles up on a busy worker.
+   * Changes meanwhile collapse into one more.
    */
   private async reloadIfMoved(importName: string, entry: WatchedModule) {
     if (entry.looking) {
@@ -458,10 +712,12 @@ export class ModuleWatcher {
     try {
       latest = await this.findLatestVersion(importName, entry);
     } catch (error) {
-      console.warn(`couldn't look up the heads of ${importName}`, error);
+      this.retryLookup(importName, entry, error);
       return;
     }
-    if (!latest || latest === entry.version) return;
+    if (!latest) return;
+    entry.failures = 0;
+    if (latest === entry.version) return;
     entry.version = latest;
     if (entry.baseline) {
       entry.baseline = false;
@@ -471,13 +727,60 @@ export class ModuleWatcher {
     log(`change in ${importName}, reloading at ${latest}`);
     // Keyed by the stable importName so this reload supersedes any
     // still-retrying announce of an older version of the same module.
-    await this.announce(latest, importName, latest);
+    await this.announce(
+      isValidAutomergeUrl(importName)
+        ? latest
+        : pinServiceWorkerUrl(importName, latest),
+      importName,
+      latest
+    );
+  }
+
+  /**
+   * A failed lookup leaves the watch with nothing to compare against, and
+   * nothing else brings it back until the package changes, so try again the
+   * way a failed import does.
+   */
+  private retryLookup(
+    importName: string,
+    entry: WatchedModule,
+    error: unknown
+  ) {
+    // The watch went while the lookup was out (the module left the settings,
+    // or the watcher was disposed), so nothing is waiting on it.
+    if (this.#watchedModules.get(importName) !== entry) return;
+    console.warn(`couldn't look up the heads of ${importName}`, error);
+    const delay = RETRY_DELAYS_MS[entry.failures++];
+    if (delay === undefined) return;
+    if (entry.retry) clearTimeout(entry.retry);
+    entry.retry = setTimeout(() => {
+      entry.retry = undefined;
+      void this.reloadIfMoved(importName, entry);
+    }, delay);
+  }
+
+  /**
+   * A reload from another document than the last load's (a branches doc's
+   * default branch was pointed elsewhere) leaves the old document's plugins
+   * registered, since registering only replaces what the same document made.
+   */
+  private unloadIfDocumentChanged(moduleKey: string, importUrl: string) {
+    const previous = this.#loadedUrls.get(moduleKey);
+    if (
+      previous &&
+      isValidAutomergeUrl(previous) &&
+      isValidAutomergeUrl(importUrl) &&
+      stripHeads(previous) !== stripHeads(importUrl)
+    ) {
+      this.onUnload?.(moduleKey, previous);
+    }
   }
 
   private detachDocWatcher(importName: string) {
     const watched = this.#watchedModules.get(importName);
     if (!watched) return;
     if (watched.timer) clearTimeout(watched.timer);
+    if (watched.retry) clearTimeout(watched.retry);
     watched.unwatch();
     this.#watchedModules.delete(importName);
   }
@@ -498,11 +801,18 @@ export class ModuleWatcher {
     this.detachDocWatcher(entry);
     this.cancelAnnounce(entry);
     this.#lastAnnounced.delete(entry);
-    this.onUnload?.(entry);
+    const loadedUrl = this.#loadedUrls.get(entry) ?? entry;
+    this.#loadedUrls.delete(entry);
+    if (isValidAutomergeUrl(entry)) {
+      this.#status.delete(parseAutomergeUrl(entry).documentId);
+      this.dispatchEvent(new Event("status"));
+    }
+    this.onUnload?.(entry, loadedUrl);
   }
 
   dispose() {
     this.#disposed = true;
+    this.#fallBack("the watcher was disposed");
     for (const handle of Object.values(this.handles ?? {})) {
       handle.removeListener("change", this.onChange);
     }

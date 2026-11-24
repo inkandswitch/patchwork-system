@@ -35,6 +35,9 @@ jobs:
       - name: lint
         run: pnpm lint
 
+      - name: check every changed dependency has a changeset
+        run: pnpm check-published-deps
+
       - name: build everything
         run: pnpm build
 

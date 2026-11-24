@@ -68,8 +68,6 @@ self.addEventListener("unhandledrejection", (event) => {
   );
 });
 
-// ── Lifecycle ──────────────────────────────────────────────────────────
-
 self.addEventListener("install", (event) => {
   lifecycle(
     "info",
@@ -130,6 +128,14 @@ self.addEventListener("message", async (event) => {
   if (data?.type === "debug") {
     debugging = data.debug;
     log("serviceworker debugging enabled");
+    return;
+  }
+
+  // A page loaded past us by a hard reload isn't ours until we claim it, and
+  // we only claim on activate, which has already happened.
+  if (data?.type === "claim") {
+    lifecycle("info", "claiming clients (asked by a page)");
+    (event as unknown as ExtendableEvent).waitUntil(self.clients.claim());
     return;
   }
 
@@ -379,8 +385,6 @@ async function broadcastHandoff(
     pendingHandoffs.delete(id);
   });
 }
-
-// ── Caching ────────────────────────────────────────────────────────────
 
 /** A page is cached under its own url plus /index.html and / on this origin. */
 function pageCacheKeys(request: Request | string): Request[] {

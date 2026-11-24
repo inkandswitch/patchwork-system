@@ -1,13 +1,8 @@
 /**
- * Heads on a URL pin the document they name, and nothing further.
- *
- * `resolvePath` walks from a root document to a file by following links, and those links are
- * ordinarily bare — pushwork pins them only inside artifact directories. So the content behind
- * `/{root#heads}/a/b` can change while the URL does not, which makes it unsafe to cache as if it
- * were content-addressed.
- *
- * These tests pin that property down, and check that a resolution reports whether it was pinned
- * the whole way, so a caller can tell an immutable answer from a merely current one.
+ * Heads on a URL pin the document they name, and nothing further. Links are usually bare
+ * (pushwork pins them only inside artifact directories), so the content behind
+ * `/{root#heads}/a/b` can change while the URL doesn't. A resolution says whether it was pinned
+ * the whole way, so a caller can tell an immutable answer from a current one.
  */
 import { describe, expect, it } from "vitest";
 import {
@@ -56,13 +51,11 @@ describe("resolvePath and what heads actually pin", () => {
     const r = repo();
     const { file, root } = await tree(r, { pinLinks: false });
 
-    // Pin the root, then read through it.
     const headsAtFirstRead = root.heads()!;
     const before = await resolvePath(r, root.view(headsAtFirstRead), ["child", "page.txt"]);
     expect(String(before?.content)).toBe("first");
 
-    // Change the file. The root is untouched — rewriting a page never touches the repo root,
-    // which is exactly the case this models.
+    // The root is untouched: rewriting a page never touches the repo root.
     file.change((d) => {
       d.content = "second";
     });

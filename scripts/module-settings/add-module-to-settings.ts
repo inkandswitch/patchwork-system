@@ -1,31 +1,20 @@
 /**
- * Manage module-settings docs over Subduction.
+ * Manage module-settings docs over Subduction (see USAGE below).
  *
- * Subcommands:
- *   add    <settings-url> <module-url>   Append a module URL to a settings doc.
- *   remove <settings-url> <module-url>   Remove a module URL from a settings doc.
- *   init                                 Create a new module-settings doc.
+ * One-time PATH setup, from the repo root: `pnpm run link-cli`, then put
+ * pnpm's global bin on PATH if it isn't (`pnpm bin -g`). If an older version
+ * is linked, `pnpm unlink --global` first.
  *
- * Legacy form (for backward compatibility with existing `pnpm run register`):
- *   <settings-url> <module-url>          Equivalent to `add`.
- *
- * One-time PATH setup (from patchwork-next repo root):
- *   pnpm run link-cli
- *   # add pnpm's global bin to PATH if needed: pnpm bin -g
- *
- * If you previously linked an older version, unlink first: pnpm unlink --global
- *
- * From a tool package (after link-cli + PATH):
+ * From a tool package:
  *   MODULE_SETTINGS_DOC_URL='automerge:…' pnpm run register
  *   MODULE_SETTINGS_DOC_URL='automerge:…' pnpm run unregister
- *   pw-modules init
  *
- * Or call the binary directly from any directory:
+ * Or from anywhere:
  *   pw-modules add    "$MODULE_SETTINGS_DOC_URL" "$(pushwork url)"
  *   pw-modules remove "$MODULE_SETTINGS_DOC_URL" "$(pushwork url)"
  *   pw-modules init
  *
- * Env: SUBDUCTION_SERVER, AUTOMERGE_DATA_DIR (default: <this-folder>/automerge-repo-data)
+ * AUTOMERGE_DATA_DIR defaults to <this-folder>/automerge-repo-data.
  */
 
 import { mkdir } from "node:fs/promises";
@@ -49,11 +38,8 @@ const USAGE = `Usage:
 
 Env: SUBDUCTION_SERVER, AUTOMERGE_DATA_DIR`;
 
-// Automerge URLs are `automerge:<base58check-encoded-documentId>`; the
-// encoded portion is 1+ base58 chars. We keep this loose — upstream does
-// the authoritative parse — but tight enough to catch shell-substitution
-// accidents like `$(pushwork url)` returning error text on stderr-less
-// older binaries.
+// Loose (the real parse is upstream's), but enough to catch `$(pushwork url)`
+// handing back error text.
 const AUTOMERGE_URL_RE = /^automerge:[1-9A-HJ-NP-Za-km-z]+$/;
 
 function requireAutomergeUrl(label: string, value: string): AutomergeUrl {

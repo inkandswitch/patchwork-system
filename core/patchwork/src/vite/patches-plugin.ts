@@ -15,9 +15,14 @@ import type { Plugin } from "vite";
  *
  * The edits are upstream-shaped and meant to be deleted once subduction takes
  * them. Until then each patch is pinned to one automerge-repo version and
- * every hunk has to match, so a dependency bump fails the build instead of
- * quietly un-patching it. There's one patch per version a build can bundle:
- * the current one, and the one the ARK 0.6 stack brings (`keyhive.ark`).
+ * every hunk has to match. Other versions are left alone; moving the
+ * `@ark-0.6/automerge-repo` pin without re-making the patch is caught by pnpm
+ * here, which refuses a `patchedDependencies` entry nothing installs.
+ *
+ * The current automerge-repo is @chee/automerge-repo, aliased in the catalog,
+ * which ships these edits already and installs under node_modules/@chee/, so
+ * this plugin leaves it alone. The one patch left is for the version the
+ * ARK 0.6 stack brings (`keyhive.ark`).
  */
 const AUTOMERGE_REPO = "@automerge/automerge-repo";
 const PATCHES_DIR = fileURLToPath(new URL("../patches/", import.meta.url));
@@ -113,9 +118,14 @@ function versionAt(root: string): Promise<string> {
 
 /**
  * The patch for the automerge-repo at `root`, which `file` is part of, or
- * undefined if no patch edits `file`. Throws when the version has no patch
- * but the patches for other versions edit `file`: the version moved and the
- * patch didn't move with it.
+ * undefined if no patch edits `file`.
+ *
+ * Only an exact version match is patched. Any other @automerge/automerge-repo
+ * in the tree is left alone: the patch is for the ARK 0.6 stack's copy, which
+ * `@ark-0.6/automerge-repo` pins exactly, and the others are not the Repo
+ * patchwork constructs. The current keyhive stack, for one, depends on an
+ * unaliased @automerge/automerge-repo of its own, and patchwork hands it the
+ * Repo to use through `createRepo`.
  */
 async function patchFor(
   root: string,
@@ -124,14 +134,7 @@ async function patchFor(
 ): Promise<{ version: string; files: Record<string, Hunk[]> } | undefined> {
   const version = await versionAt(root);
   const files = patches.get(version);
-  if (files) return files[file] ? { version, files } : undefined;
-  if (![...patches.values()].some((other) => other[file])) return;
-  throw new Error(
-    `@inkandswitch/patchwork: ${AUTOMERGE_REPO} is ${version}, and the pnpm ` +
-      `patches in patches/ are for ${[...patches.keys()].join(", ")}. ` +
-      `Re-make one against the new version (${file} is one of the files ` +
-      `they edit).`
-  );
+  return files?.[file] ? { version, files } : undefined;
 }
 
 function without(hunk: Hunk, prefix: string): string[] {
@@ -237,13 +240,13 @@ export function patches({
       return apply(code, found.file, patch.files[found.file]);
     },
 
-    // A build bundles one automerge-repo, so only that version's patch has to
-    // have applied in full. Bundling none of them means a layout change.
+    // A patch that applied to some of its files has to have applied to all of
+    // them. Patching nothing is fine: the current automerge-repo comes
+    // pre-patched, and only the ARK 0.6 stack's needs it.
     async buildEnd(error) {
       if (serve || error || !complete) return;
       const patches = await load();
-      const versions = seen.size ? [...seen.keys()] : [...patches.keys()];
-      const missing = versions.flatMap((version) =>
+      const missing = [...seen.keys()].flatMap((version) =>
         Object.keys(patches.get(version)!).filter(
           (file) => !seen.get(version)?.has(file)
         )

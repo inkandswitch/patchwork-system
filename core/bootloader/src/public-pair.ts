@@ -1,28 +1,4 @@
-// Reading documents made public with Patchwork's public pair.
-//
-// Keyhive 0.6 has no public "world" user. A repo is made public to an app by
-// granting two principals whose secrets the app ships in the clear:
-//
-//   reader   read. Its archive holds its prekey secrets but no signing key,
-//            so anyone can decrypt as it and nobody can sign as it.
-//   fetcher  relay. Its signing seed is shipped, so anyone can connect to
-//            the sync server as it and pull the ciphertext.
-//
-// The user's own Repo connects as the user, who isn't a member of these docs,
-// so the server never sends it their blobs. Instead a second Repo connects as
-// the fetcher: it syncs keyhive as the fetcher, hands every keyhive event it
-// gets to a keyhive opened as the reader, and decrypts blobs with that. It sits
-// beside the user's Repo as a peer on a MessageChannel, and the user's Repo
-// asks it for exactly the docs the user's keyhive doesn't know, so a find for
-// a public doc is answered over automerge sync like any other.
-//
-// The reader Repo never writes: anything the user changes in a public doc
-// stays local. Pushwork makes repos public this way (`--public-access read`).
-//
-// Ingesting the server's keyhive is seconds of wasm, so in a browser the
-// reader runs once per origin, in its own SharedWorker (public-reader.ts), and
-// every tab's Repo and the resolver's connect to it over a port. Its keyhive
-// state is kept in IndexedDB, so only the first start replays it all.
+// See docs/bootloader.html#public-pair.
 
 import {
   stringifyAutomergeUrl,
@@ -53,6 +29,12 @@ const log = debug("patchwork:public-pair");
 
 /** How long the fetcher's keyhive events gather before the reader ingests them. */
 const RELAY_AFTER_MS = 100;
+// A failed batch is tried again after this, doubling, up to RELAY_ATTEMPTS
+// tries in all (about 3s of waiting). A failure that clears by itself, such as
+// storage busy, does so quickly; one that lasts that long needs someone to see
+// it, which is what the `failed` phase is for.
+const RELAY_RETRY_MS = 200;
+const RELAY_ATTEMPTS = 5;
 // How often a run of incoming keyhive events is reported. They arrive one at
 // a time while the fetcher ingests a sync, thousands on a first visit.
 const REPORT_RECEIVED_EVERY_MS = 250;
@@ -95,12 +77,16 @@ export type PublicReaderStatus = {
    * `fetching`: the fetcher is taking them in (`received` counts them).
    * `reading`: the reader is ingesting a batch of them, which is seconds of
    * wasm on a first visit. `ready`: everything received has been read.
+   * `failed`: the reader couldn't ingest a batch after several tries (see
+   * `error`); the events are kept and tried again when more arrive.
    */
-  phase: "waiting" | "fetching" | "reading" | "ready";
+  phase: "waiting" | "fetching" | "reading" | "ready" | "failed";
   /** Keyhive events the fetcher has handed over since it started. */
   received: number;
   /** Keyhive events relayed to the reader since it started. */
   relayed: number;
+  /** Why the reader is `failed`. Absent otherwise. */
+  error?: string;
 };
 
 export type PublicReader = {
@@ -140,10 +126,17 @@ export async function startPublicReader({
   let phase: PublicReaderStatus["phase"] = "waiting";
   let received = 0;
   let relayed = 0;
+  let failure: string | undefined;
   let reportedAt = 0;
   const report = () => {
     reportedAt = performance.now();
-    onStatus?.({ firstVisit: !resumed, phase, received, relayed });
+    onStatus?.({
+      firstVisit: !resumed,
+      phase,
+      received,
+      relayed,
+      ...(failure === undefined ? {} : { error: failure }),
+    });
   };
   report();
   const queue = serial();
@@ -201,10 +194,20 @@ export async function startPublicReader({
   // before their keys are retried once a batch has changed the reader.
   let batch: Uint8Array[] = [];
   let flush: ReturnType<typeof setTimeout> | undefined;
+  // Only one relay at a time, so events that failed go back in front of any
+  // that arrived since and are ingested in the order the fetcher gave them.
+  let relaying = false;
+  let failures = 0;
+  const scheduleRelay = (after: number) => {
+    flush ??= setTimeout(() => void relay(), after);
+  };
   const relay = async () => {
     flush = undefined;
+    if (relaying) return;
+    relaying = true;
     const events = batch;
     batch = [];
+    failure = undefined;
     phase = "reading";
     report();
     try {
@@ -219,6 +222,7 @@ export async function startPublicReader({
         grew ? "" : ", none new"
       );
       relayed += events.length;
+      failures = 0;
       phase = batch.length ? "fetching" : "ready";
       report();
       if (grew) {
@@ -227,6 +231,25 @@ export async function startPublicReader({
       }
     } catch (error) {
       log("relaying %d keyhive events failed: %O", events.length, error);
+      batch = [...events, ...batch];
+      if (++failures < RELAY_ATTEMPTS) {
+        phase = "fetching";
+        report();
+        scheduleRelay(RELAY_RETRY_MS * 2 ** (failures - 1));
+      } else {
+        // The events stay, and the next to arrive tries them again.
+        failures = 0;
+        failure = error instanceof Error ? error.message : String(error);
+        phase = "failed";
+        report();
+      }
+    } finally {
+      relaying = false;
+      // Events that arrived meanwhile found a relay running, and their wait
+      // may have run out during it. They're tried even after a batch failed
+      // for good: they're the more arriving it waits for.
+      const arrived = batch.length - (phase === "failed" ? events.length : 0);
+      if (arrived > 0) scheduleRelay(RELAY_AFTER_MS);
     }
   };
   fetcher.emitter.on("update", (event) => {
@@ -234,17 +257,15 @@ export async function startPublicReader({
     received++;
     // the fetcher's ingest holds the worker, but a report posted from in here
     // still reaches the tabs, so the count climbs while it runs
-    if (phase !== "reading") phase = "fetching";
+    if (phase !== "reading" && phase !== "failed") phase = "fetching";
     if (performance.now() - reportedAt >= REPORT_RECEIVED_EVERY_MS) report();
-    flush ??= setTimeout(() => void relay(), RELAY_AFTER_MS);
+    scheduleRelay(RELAY_AFTER_MS);
   });
 
-  // The fetcher's saved state can be ahead of the reader's: the last run may
-  // have gone after the fetcher persisted an update but before the reader's
-  // debounced save, or the reader's archive may be missing or rejected. Only
-  // what's new is relayed, so the reader catches up from the fetcher's whole
-  // history here, before any client is served. Updates from here on are queued
-  // behind this snapshot if they arrive while it is being ingested.
+  // The fetcher's saved state can be ahead of the reader's (the last run went
+  // before the reader's save, or its archive was missing or rejected), and
+  // only what's new is relayed, so the reader catches up on the fetcher's
+  // whole history here, before anyone is served.
   try {
     const caughtUp = await queue(async () => {
       const before = (await reader.stats()).totalOps;

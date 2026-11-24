@@ -14,15 +14,10 @@ export interface RepoProviderElement extends HTMLElement {
 }
 
 /**
- * Defines the `<repo-provider>` custom element.
- *
- * It carries the realm-local repo on its `.repo` property and acts as the
- * root-level fallback answerer for `repo:handle-descriptor`. Sitting above every
- * `<patchwork-view>`, it resolves a requested url to itself (no clone) so any
- * view rendered outside a remapper (e.g. a draft overlay) still resolves and
- * the overlay shim's `find` never hangs. A nearer remapper answers
- * `{ url, cloneUrl? }` and `stopPropagation()`s first, so this only fires when
- * nothing else claims the subscription.
+ * Defines the `<repo-provider>` custom element. It carries the realm's repo on
+ * `.repo`, and answers `repo:handle-descriptor` with the url it was asked
+ * about, so a view with no remapper above it still resolves instead of
+ * hanging. A nearer remapper answers first and stops the event.
  */
 export function registerRepoProviderElement(
   repo: Repo,

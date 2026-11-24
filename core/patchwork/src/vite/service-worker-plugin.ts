@@ -2,11 +2,9 @@ import type { Plugin, ResolvedConfig } from "vite";
 import { fileURLToPath } from "node:url";
 import { hashedFiles } from "./hashed-plugin.js";
 
-// Anchor resolution at this file (inside @inkandswitch/patchwork's own
-// installed directory) rather than the site root — these worker specifiers
-// are @inkandswitch/patchwork-bootloader's own exports, a transitive
-// dependency of the site under strict pnpm, not resolvable from the site's
-// own node_modules by bare specifier.
+// Resolved from here, inside @inkandswitch/patchwork's own directory: these
+// are the bootloader's exports, which under strict pnpm the site can't resolve
+// by bare specifier.
 const self = fileURLToPath(import.meta.url);
 
 // The service worker and the automerge shared worker are emitted as their

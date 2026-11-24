@@ -45,12 +45,10 @@ export function buildDefines(
 }
 
 /**
- * Owns envPrefix, define (__SITE_TITLE__/__STORAGE_PREFIX__/__BUILD_ID__/
- * sync-server configuration),
- * server/preview CORS defaults, worker format + the wasm plugin, and build
- * defaults (firefox150 target, unminified, sourcemapped) — everything a site
- * used to hand-write in its own vite.config.ts. Each is switched off
- * individually via the matching `false` option.
+ * Vite's config for a site: envPrefix, the defines, CORS headers for server
+ * and preview, the workers' format and plugins, and build defaults
+ * (firefox150, unminified, with sourcemaps). `server`, `preview` and `worker`
+ * can each be `false`.
  */
 export function config(options: PatchworkVitePluginOptions = {}): Plugin {
   return {

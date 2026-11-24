@@ -1,22 +1,16 @@
 /**
- * One import for a Patchwork site.
+ * One import for a Patchwork site. `setup(options)` makes the Repo, connects
+ * the automerge worker, loads the packages, opens the user's account,
+ * installs the router, and resolves with what a site assigns to
+ * `window.patchwork`.
  *
- * `setup(options)` constructs the Repo, wires up the
- * automerge-protocol-handler-worker port, loads plugins via the
- * ModuleWatcher, resolves the user's account document,
- * installs the router, and resolves with the site's runtime API — `repo`,
- * `create`, `open`, `find`, `packages`, `plugins`, `sw` — which is what a
- * site assigns to `window.patchwork`.
+ * It owns page-wide state (the `window.repo`, `window.Automerge`,
+ * `window.AutomergeRepo` and `window.hive` globals, custom elements, document
+ * listeners), so it runs once per page; a second call throws.
  *
- * Setup owns page-wide state — the `window.repo`/`window.Automerge`/
- * `window.AutomergeRepo`/`window.hive` globals, custom-element registration,
- * document listeners — so it may run only once per page; a second call
- * throws.
- *
- * Pulls in DOM- and plugin-layer dependencies, so it is for a browser site's
- * `main.ts` only. Non-UI consumers should import
- * `@inkandswitch/patchwork-bootloader` directly, which does SW registration
- * and the automerge-protocol-handler-worker handoff and nothing else.
+ * It's for a browser site's `main.ts`. Anything without a UI should import
+ * `@inkandswitch/patchwork-bootloader`, which only registers the service
+ * worker and hands the automerge worker its port.
  */
 import {
   type AutomergeUrl,
@@ -41,9 +35,11 @@ import {
   type DatatypeDescription,
   type LoadedDatatype,
   createDocOfDatatype2,
+  followThemePreferences,
   getRegistry,
   registerPlugins,
   resolveAccountHandle,
+  startThemes,
   unregisterPlugins,
 } from "@inkandswitch/patchwork-plugins";
 import * as plugins from "@inkandswitch/patchwork-plugins";
@@ -67,6 +63,14 @@ import { gatePublicDocsOnReader } from "./public-access.js";
 import { watchDocument } from "./watch-document.js";
 import { createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
+import { showBootStatus } from "./boot-status.js";
+import {
+  hashTools,
+  planLoadOrder,
+  preloadPlugins,
+  readLoadOrder,
+  recordLoadOrder,
+} from "./load-order.js";
 
 const log = debug("patchwork:setup");
 
@@ -82,8 +86,6 @@ declare global {
   }
 }
 
-// ── Setup ────────────────────────────────────────────────────────────────
-
 let setupCalled = false;
 
 export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
@@ -93,31 +95,50 @@ export function setup(options: PatchworkOptions = {}): Promise<Patchwork> {
     );
   }
   setupCalled = true;
-  const done = doSetup(options);
-  void done.then(() => log("patchwork setup complete"));
 
+  // One record of where boot has got to. The site hears it through
+  // onProgress, or if it isn't listening, Patchwork shows it in the corner.
+  const progress: BootProgress = { stage: "workers" };
   const timeout = options.timeout ?? 30_000;
-  if (timeout === false) return done;
-  let timer: ReturnType<typeof setTimeout>;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(
-      () =>
-        reject(
-          new Error(`patchwork.setup: boot did not finish within ${timeout}ms`)
-        ),
-      timeout
-    );
+  const status = showBootStatus({
+    draw: !options.onProgress,
+    stuckAfterMs: timeout === false ? undefined : timeout,
+    onStuck: () => report({ stuck: true }),
   });
-  done.then(
-    () => clearTimeout(timer),
-    () => clearTimeout(timer)
+  const report = (change: Partial<BootProgress>) => {
+    Object.assign(progress, change);
+    status.update({ ...progress });
+    try {
+      options.onProgress?.({ ...progress });
+    } catch (error) {
+      console.error("patchwork.setup: onProgress threw", error);
+    }
+  };
+  report({});
+
+  const done = doSetup(options, progress, report, () => {
+    // A site's own stuck screen goes on hearing it isn't any more.
+    if (progress.stuck) report({ stuck: false });
+    // The box stays up while the rest of the packages load.
+    status.mounted();
+  });
+  void done.then(
+    () => log("patchwork setup complete"),
+    // The site shows its own error for a boot that failed.
+    () => status.done()
   );
-  return Promise.race([done, deadline]);
+  return done;
 }
 
 export default setup;
 
-async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
+async function doSetup(
+  options: PatchworkOptions,
+  progress: BootProgress,
+  report: (change: Partial<BootProgress>) => void,
+  // Boot is over: the root view mounted, or without routing, setup resolved.
+  finished: () => void
+): Promise<Patchwork> {
   const siteTitle =
     options.title ??
     (typeof __SITE_TITLE__ !== "undefined" ? __SITE_TITLE__ : "Patchwork");
@@ -126,16 +147,9 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
 
   log("booting", options);
 
-  const progress: BootProgress = { stage: "workers" };
-  const report = (change: Partial<BootProgress>) => {
-    Object.assign(progress, change);
-    try {
-      options.onProgress?.({ ...progress });
-    } catch (error) {
-      console.error("patchwork.setup: onProgress threw", error);
-    }
-  };
-  report({});
+  // The site's default theme for now, and every theme's stylesheet as its
+  // package registers. The account's choice joins once the account is open.
+  startThemes();
 
   if (!options.repo) await initWasm();
 
@@ -163,9 +177,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     resolveHandoffsWith(repo);
   }
 
-  // Dev-console / tool-runtime globals (e2e and loaded tools read these). The
-  // `window.patchwork` handle is deliberately not set here — the caller does
-  // `window.patchwork = await setup(...)`.
+  // Loaded tools and e2e read these. `window.patchwork` is the caller's to set.
   window.repo = repo;
   window.Automerge = Automerge as typeof import("@automerge/automerge/slim");
   window.AutomergeRepo =
@@ -182,10 +194,8 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     throw new Error(`patchwork.setup: no element with id="${rootElementId}"`);
   }
 
-  // `<repo-provider>` sits above the root and answers `repo:handle-descriptor`
-  // for any view outside a remapper, resolving to the requested url unchanged.
-  // Generated site html already declares it around the root; wrap only
-  // hand-written markup that lacks one.
+  // Answers `repo:handle-descriptor` for views with no remapper above them.
+  // Generated site html already has one around the root.
   if (!rootElement.closest("repo-provider")) {
     const repoProvider = document.createElement("repo-provider");
     rootElement.parentElement!.insertBefore(repoProvider, rootElement);
@@ -195,12 +205,15 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   if (hive) gatePublicDocsOnReader(repo);
   registerPatchworkViewElement({ hive, repo });
 
-  // Started with the site bundle alone so resolveAccountHandle has something to
-  // await on — the `account` datatype lives there. The user's own
-  // module-settings URL is added lazily once it appears on the account doc.
-  // Keyed by the settings entry rather than the heads-pinned import url, so
-  // reloading a package doesn't count it twice, and counted against the
-  // current list, so unloaded or removed packages drop out of the count.
+  const accountKey = options.accountKey ?? "patchworkAccountURL";
+  const loadOrderKey = `patchwork:load-order:${accountKey}`;
+  const loadOrderHints = readLoadOrder(localStorage, loadOrderKey);
+  const loadOrder = recordLoadOrder(localStorage, loadOrderKey, loadOrderHints);
+
+  // Starts with the site's sources alone: they hold the `account` datatype
+  // resolveAccountHandle waits for, and the account's own settings join later.
+  // Counted by settings entry, not heads-pinned url, so a reload doesn't count
+  // twice, and only against the current list, so removed packages drop out.
   const loaded = new Set<string>();
   let listed: Set<string> | undefined;
   const loadedCount = () => {
@@ -213,6 +226,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     nameSources(moduleSources),
     (name, mod, moduleKey) => {
       onModuleLoaded(name, mod);
+      loadOrder.loaded(moduleKey, mod);
       loaded.add(moduleKey);
       report({
         packages: {
@@ -222,12 +236,13 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
         },
       });
     },
-    (name) => {
-      loaded.delete(name);
-      unregisterPlugins(name);
+    // Counted by settings entry; registered under the url that was loaded,
+    // which for a branch package is a different document.
+    (moduleKey, importUrl) => {
+      loaded.delete(moduleKey);
+      loadOrder.unloaded(moduleKey);
+      unregisterPlugins(importUrl);
     },
-    // Discover an Automerge package's plugin descriptors off the main thread;
-    // each plugin's load() re-imports the package (at heads) on this thread.
     options.importModulesInWorker === false
       ? undefined
       : importAutomergePackageViaWorker,
@@ -238,6 +253,15 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
       watchDocument(repo, url, onChange)
     )
   );
+
+  // What the last visit had on screen loads first: the hash's tools, then
+  // the root view's, then the views inside it, and so on.
+  const loadBatches = planLoadOrder(
+    loadOrderHints,
+    routing === false ? [] : hashTools(window.location.hash)
+  );
+  const prioritized = moduleWatcher.prioritize(loadBatches);
+  preloadPlugins(loadBatches, prioritized);
 
   moduleWatcher.onModules = (modules) => {
     listed = new Set(modules);
@@ -253,12 +277,18 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   report({ stage: "package-list" });
 
   const accountDocHandle = (await resolveAccountHandle(repo, {
-    storageKey: options.accountKey ?? "patchworkAccountURL",
+    storageKey: accountKey,
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
 
-  wireModuleSettings(accountDocHandle, moduleWatcher);
+  followThemePreferences(repo, accountDocHandle);
+
+  // Once the account's packages are listed too, the list is whole, and a
+  // package that's left it since last visit is forgotten.
+  wireModuleSettings(accountDocHandle, moduleWatcher, () => {
+    if (listed) loadOrder.keepOnly(listed);
+  });
 
   const toolsLoaded = moduleWatcher.doneLoading.then(
     () =>
@@ -271,7 +301,14 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     (err: unknown) => console.error("doneLoading rejected:", err)
   );
 
-  void toolsLoaded.then(() => {
+  // The tools that were on screen last visit, when they all loaded where
+  // they did then. Otherwise there's no telling which are needed first, so
+  // every one of the site's packages.
+  const firstToolsLoaded = prioritized.then((held) =>
+    held ? undefined : toolsLoaded
+  );
+
+  void firstToolsLoaded.then(() => {
     stopHearingReader();
     report({ stage: "opening" });
   });
@@ -279,7 +316,7 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   let router: Router | undefined;
   if (routing !== false) {
     rootElement.style.visibility = "hidden";
-    await toolsLoaded;
+    await firstToolsLoaded;
     router = createRouter({
       rootElement,
       repo,
@@ -289,7 +326,10 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
     });
   }
 
-  installReveal(rootElement, router, toolsLoaded);
+  installReveal(rootElement, router, toolsLoaded, finished);
+  // Without routing the site puts its own view on screen, so boot is over
+  // once setup is.
+  if (!router) finished();
 
   return {
     repo,
@@ -337,12 +377,11 @@ async function doSetup(options: PatchworkOptions): Promise<Patchwork> {
   };
 }
 
-// ── Reveal / mount ───────────────────────────────────────────────────────
-
 function installReveal(
   rootElement: HTMLElement,
   router: Router | undefined,
-  toolsLoaded: Promise<unknown>
+  toolsLoaded: Promise<unknown>,
+  onMounted: () => void
 ): void {
   let revealed = false;
   const reveal = () => {
@@ -354,6 +393,7 @@ function installReveal(
   rootElement.addEventListener("patchwork:mounted", (event) => {
     if (event.target !== rootElement) return;
     log("root element mounted");
+    onMounted();
     if (router) {
       void router.route();
       // Deep-links into tools that were still loading get routed again once
@@ -363,12 +403,9 @@ function installReveal(
     reveal();
   });
 
-  // If nothing ever mounts, reveal anyway so the user sees something rather
-  // than a blank page.
+  // Reveal anyway if nothing ever mounts.
   setTimeout(reveal, 12_000);
 }
-
-// ── Module sources ───────────────────────────────────────────────────────
 
 /**
  * The site's module-list sources. The site owns any dev overrides and passes
@@ -425,12 +462,13 @@ function onModuleLoaded(name: string, mod: any): void {
  */
 function wireModuleSettings(
   accountDocHandle: DocHandle<AccountDoc>,
-  moduleWatcher: ModuleWatcher
+  moduleWatcher: ModuleWatcher,
+  onLoaded: () => void
 ): void {
   const wire = () => {
     const url = accountDocHandle.doc()?.moduleSettingsUrl;
     if (!url) return;
-    void moduleWatcher.addUrl("user", url);
+    void moduleWatcher.addUrl("user", url).then(onLoaded);
     accountDocHandle.off("change", wire);
   };
   wire();
@@ -482,8 +520,6 @@ function subscribeSyncState(
 
   return () => repo.off("subduction-remote-heads", onHeads);
 }
-
-// ── Named exports ────────────────────────────────────────────────────────
 
 export { createRepo, initWasm } from "./repo.js";
 export { watchDocument } from "./watch-document.js";

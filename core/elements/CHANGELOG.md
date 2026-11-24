@@ -1,5 +1,28 @@
 # @inkandswitch/patchwork-elements
 
+## 6.2.3
+
+### Patch Changes
+
+- b5e066f: `<patchwork-view>`'s cards ("can't load this doc", "no tool for this", and the rest) fold down to a small `!` button when the view is too small to read them in: 240px wide or less, or 160px tall or less. Clicking the `!` opens the full card in a popover above the page. The card works this out with a container query, so a card sitting in a thin strip or a narrow sidebar no longer gets cut off. A view with no set height gives its card a 24em height, and a card taller than that scrolls.
+- e3be145: The "can't load" card for a tool whose code didn't load now reloads the page if "try again" fails as well. The browser keeps a failed module import for that URL, so importing it a second time usually fails the same way, and a reload is what actually fixes it. Long error messages on the card, such as a failed import's URL, now wrap inside the card instead of running past its edge.
+
+## 6.2.2
+
+### Patch Changes
+
+- 7078752: `<patchwork-view doc-url>` now says what's wrong in words when it can't show a doc, with cards moved over from threepane, instead of a bare `:(`. They cover a doc it's still finding, one it couldn't get (with the sync server's connection status, and another try when the connection comes back), one not shared with you (with a "copy my card" button), a broken link, a tool whose code didn't load (with "try again"), and a type nothing opens. The no-tool card names the package the doc suggests, offers to load it, and has a details popover listing what its package.json claims and who has written to its folder.
+
+  A new card covers docs with no `@patchwork` type. It offers to open the doc with a tool that opens anything (raw, when that's registered) so you can look inside, and has a "set type" box that writes `@patchwork.type` on the doc. Once the type is set, the view reopens the doc with that type's tool.
+
+  A doc whose type has no tool of its own no longer opens in a `*` tool like raw without being asked. The card offers that tool instead. The view also sends a `patchwork:no-tool` event (`NoToolEvent`) whenever it shows a card in place of a tool, so anything waiting on `patchwork:mounted` can stop waiting. `@automerge/automerge` is now a peer dependency, used to read a suggested package's folder history.
+
+## 6.2.1
+
+### Patch Changes
+
+- 594d83b: A component-mode `<patchwork-view>` whose document is `unavailable` or `failed` now tries again on a timer, as legacy mode does, instead of staying blank until a reload: it resyncs and restarts after 1s, 2s, 4s, 8s, 15s and then every 30s, and a `ready` arriving first restarts it at once. The schedule and resync step are shared with legacy mode.
+
 ## 6.2.0
 
 ### Minor Changes

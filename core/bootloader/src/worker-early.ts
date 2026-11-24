@@ -1,15 +1,4 @@
-// What a SharedWorker's script does before it imports the rest of itself.
-//
-// A module's body only runs once its whole static import graph has been
-// fetched and evaluated, which for the automerge worker is most of a megabyte
-// and takes from half a second to several. Until it asks for its lock, nothing
-// can tell it exists: the service worker, finding no lock, asks the tabs to
-// start a worker. So a worker's script is a small module that does this, then
-// imports the rest; startWorkerControl picks it up from there.
-//
-// Handed over through the global rather than a module, so it survives the two
-// halves being bundled separately (the dev server bundles each worker on its
-// own).
+// See docs/bootloader.html#worker-early.
 
 const EARLY = Symbol.for("@patchwork/worker-early");
 

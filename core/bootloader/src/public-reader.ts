@@ -1,16 +1,4 @@
-// The public reader, in a SharedWorker: one per origin, for as long as any tab
-// is open. It reads documents made public to Patchwork through its public pair
-// (see public-pair.ts) for every tab's Repo and for the resolver's.
-//
-// It's here rather than beside each Repo because catching up on the server's
-// keyhive is seconds of wasm: on a tab's thread that held up the page, long
-// enough that the service worker gave up asking the tab for its own requests,
-// and the resolver, which then got them, had to catch up all over again.
-//
-// Each Repo is a client: a tab sends `{type: "client", port}` on this
-// worker's port, for itself or for the resolver (a SharedWorker can't start
-// another, so the tabs introduce the two). The reader answers on `port`, as
-// `PublicReader.serve` does.
+// See docs/bootloader.html#public-reader.
 import { initializeWasm } from "@automerge/automerge/slim";
 // eslint-disable-next-line
 // @ts-ignore — the default init is a wasm-bindgen runtime helper not in the .d.ts
