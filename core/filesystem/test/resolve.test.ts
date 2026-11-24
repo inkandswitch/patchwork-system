@@ -45,6 +45,17 @@ describe("resolvePath", () => {
     });
   }
 
+  it("steps into a list inside a directory doc by index", async () => {
+    const repo = new Repo();
+    const root = repo.create({
+      "@patchwork": { type: "directory" },
+      nested: [{ content: "ok", mimeType: "text/plain" }],
+    });
+    const found = await resolvePath(repo, root, ["nested", "0"]);
+    expect(found?.type).toBe("text/plain");
+    expect(decode(found!.content)).toBe("ok");
+  });
+
   it("follows ImmutableString links in a folder doc", async () => {
     const repo = new Repo();
     const file = repo.create({

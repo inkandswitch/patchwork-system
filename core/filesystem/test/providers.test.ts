@@ -26,6 +26,18 @@ describe("directoryProvider", () => {
     });
   });
 
+  it("steps into a list by index", () => {
+    const doc = { nested: [{ content: "ok" }, A] };
+    expect(directoryProvider.lookup(doc.nested, ["1"])).toEqual({
+      child: { name: "1", link: A },
+      consumed: 1,
+    });
+    expect(directoryProvider.list(doc.nested)).toEqual([
+      { name: "0", value: { content: "ok" } },
+      { name: "1", link: A },
+    ]);
+  });
+
   it("reads ImmutableString links", () => {
     const doc = { "a.js": new ImmutableString(A) };
     expect(directoryProvider.lookup(doc, ["a.js"])?.child).toEqual({
@@ -52,6 +64,15 @@ describe("folderProvider", () => {
       child: { name: "a", link: A },
       consumed: 1,
     });
+  });
+
+  it("skips entries that aren't objects", () => {
+    const doc = { docs: [null, { name: "a", type: "x", url: A }] };
+    expect(folderProvider.lookup(doc, ["a"])?.child).toEqual({
+      name: "a",
+      link: A,
+    });
+    expect(folderProvider.list(doc)).toEqual([{ name: "a", link: A }]);
   });
 
   it("misses an unknown name", () => {
