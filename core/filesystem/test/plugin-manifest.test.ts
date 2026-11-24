@@ -126,6 +126,23 @@ describe("patchwork.plugins in package.json", () => {
     warn.mockRestore();
   });
 
+  it("resolves a relative style against the package, and leaves a URL alone", () => {
+    const themed = {
+      ...manifest,
+      patchwork: {
+        plugins: {
+          "patchwork:theme": {
+            gloom: { name: "Gloom", style: "./gloom.css" },
+            far: { name: "Far", style: "https://example.com/far.css" },
+          },
+        },
+      },
+    };
+    const [gloom, far] = pluginsFromManifest(themed, fixtureBase);
+    expect(gloom.style).toBe(new URL("gloom.css", fixtureBase).href);
+    expect(far.style).toBe("https://example.com/far.css");
+  });
+
   it("resolves an export from a string exports field", async () => {
     const plain = {
       name: "plain",

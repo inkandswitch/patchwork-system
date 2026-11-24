@@ -239,6 +239,10 @@ export function hasPluginManifest(pkgJson: Record<string, any>): boolean {
  * An `export` that matches nothing breaks only that plugin: it's still listed,
  * a warning says why, and its `load()` rejects. The package's other plugins
  * are unaffected.
+ *
+ * A relative `style` (a theme's stylesheet) is a file in the package, so it's
+ * resolved against `base` here: whoever reads the description gets a URL
+ * that works from any page.
  */
 export function pluginsFromManifest(
   pkgJson: Record<string, any>,
@@ -253,6 +257,9 @@ export function pluginsFromManifest(
     for (const [id, entry] of Object.entries(byId)) {
       if (!isRecord(entry)) continue;
       const { export: subpath, ...description } = entry;
+      if (typeof description.style === "string") {
+        description.style = new URL(description.style, base).href;
+      }
       let load = async () => {};
       if (subpath !== undefined) {
         let entryPoint: string;
