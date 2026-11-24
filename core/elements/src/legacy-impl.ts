@@ -886,8 +886,12 @@ export class LegacyImpl {
   // Loads the new version before taking the old one down, so the swap is
   // quick, and leaves the old one up if the new one doesn't load.
   async #updatePackage(url: AutomergeUrl, epoch: number): Promise<void> {
+    if (epoch !== this.#initEpoch || this.#disposed) return;
     const current = this.#packageTool;
-    if (!current || epoch !== this.#initEpoch) return;
+    if (!current) {
+      if (this.#handle) void this.#restart();
+      return;
+    }
     try {
       const pinned = await this.#packages.findLatest(url);
       if (pinned === current.pinned || epoch !== this.#initEpoch) return;
