@@ -9,6 +9,7 @@ import {
 import { ModuleWatcher } from "../src/module-watcher.js";
 import { importPackageFromHttpUrl } from "../src/packages.js";
 import { PackageDatabase } from "../src/package-db/database.js";
+import type { AddedBy } from "../src/package-db/types.js";
 import {
   fetchLatestViaServiceWorker,
   trackPackagesInRepo,
@@ -1358,6 +1359,38 @@ describe("ModuleWatcher package database", () => {
       });
       await pause(100);
       expect(database.get(doc.url)).toBeUndefined();
+    } finally {
+      await done();
+    }
+  });
+
+  it("a saved package that left the list is removed once the lists are read", async () => {
+    const { doc, database, watcher, done } = await setup(async (url) => ({
+      plugins: [],
+      package: at(url),
+    }));
+    let hydrate!: () => void;
+    database.ready = new Promise<void>((resolve) => (hydrate = resolve));
+    const saved = (key: string, ...addedBy: AddedBy[]) => {
+      for (const by of addedBy) {
+        database.add({ ...at(`${key}#v`), key, plugins: [], addedBy: by });
+      }
+    };
+    try {
+      const forgotten = watcher.forgetUnlisted();
+      // Last visit's entries come in as the database hydrates.
+      saved("automerge:gone", { by: "package-list", entry: "automerge:gone" });
+      saved(
+        "automerge:also-js",
+        { by: "package-list", entry: "automerge:also-js" },
+        { by: "js", url: "x", stack: "" }
+      );
+      saved("automerge:suggested", { by: "suggested" });
+      hydrate();
+      await forgotten;
+      expect(database.all().map((entry) => entry.key).sort()).toEqual(
+        ["automerge:also-js", "automerge:suggested", doc.url].sort()
+      );
     } finally {
       await done();
     }

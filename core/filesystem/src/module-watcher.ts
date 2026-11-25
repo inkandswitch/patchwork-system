@@ -656,6 +656,24 @@ export class ModuleWatcher extends EventTarget {
     if (isNew) database.announce(key);
   }
 
+  /**
+   * Remove the packages a package list added, last visit's included, that no
+   * list has any more. Call it once every list has been read.
+   */
+  async forgetUnlisted(): Promise<void> {
+    const database = this.database;
+    if (!database) return;
+    // A removal before hydration finishes wouldn't stick.
+    await database.ready.catch(() => {});
+    for (const entry of database.all()) {
+      const unlisted = entry.addedBy.every(
+        (added) =>
+          added.by === "package-list" && !this.#activeModules.has(added.entry)
+      );
+      if (unlisted && entry.addedBy.length) database.remove(entry.key);
+    }
+  }
+
   /** Look the package docs at `key` up again: another tab has news of them. */
   recheck(key: string): void {
     for (const [importName, watched] of this.#watchedModules) {

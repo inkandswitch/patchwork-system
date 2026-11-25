@@ -66,6 +66,7 @@ import { createDefaultAccount } from "./createAccount.js";
 import { showBootStatus } from "./boot-status.js";
 import { loadFolderTree } from "./folder-tree.js";
 import {
+  bootFromLastVisit,
   hashTools,
   planLoadOrder,
   preloadPlugins,
@@ -320,6 +321,7 @@ async function doSetup(
     moduleWatcher,
     () => {
       if (listed) loadOrder.keepOnly(listed);
+      void moduleWatcher.forgetUnlisted();
     }
   );
 
@@ -347,7 +349,15 @@ async function doSetup(
   let router: Router | undefined;
   if (routing !== false) {
     rootElement.style.visibility = "hidden";
-    await firstToolsLoaded;
+    // Last visit's packages, as soon as they're read back, and newer versions
+    // replace them as they load. Or, with none saved (a first visit) to pick
+    // a frame tool from, this visit's.
+    const fromLastVisit = bootFromLastVisit(
+      options.bootFromLastVisit,
+      localStorage
+    );
+    if (fromLastVisit) await packages.ready.catch(() => {});
+    if (!fromLastVisit || !packages.all().length) await firstToolsLoaded;
     router = createRouter({
       rootElement,
       repo,
@@ -566,6 +576,7 @@ function subscribeSyncState(
 export { createRepo, initWasm } from "./repo.js";
 export { watchDocument } from "./watch-document.js";
 export { createRouter } from "./router.js";
+export { bootFromLastVisit } from "./load-order.js";
 export {
   showLoadingAnimation,
   hideLoadingAnimation,

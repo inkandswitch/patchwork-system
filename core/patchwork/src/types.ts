@@ -126,6 +126,14 @@ export interface PatchworkOptions {
   importModulesInWorker?: boolean;
 
   /**
+   * Render views from last visit's packages straight away, and reload them in
+   * place as newer versions come in, rather than wait for the package lists.
+   * Defaults to `false`. `localStorage["patchwork:boot-from-last-visit"]`,
+   * `"on"` or `"off"`, overrides it.
+   */
+  bootFromLastVisit?: boolean;
+
+  /**
    * Told what boot is doing, as it moves on, for a loading screen. Called
    * with a fresh object each time. Without it, Patchwork shows a small box in
    * the corner saying what boot is doing, if boot takes long enough to notice;

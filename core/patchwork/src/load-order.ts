@@ -40,6 +40,28 @@ const sameRef = (a: PluginRef, b: PluginRef) =>
 
 const refKey = (ref: PluginRef) => `${ref.type}\u0000${ref.id}`;
 
+const BOOT_FROM_LAST_VISIT_KEY = "patchwork:boot-from-last-visit";
+
+/**
+ * Whether views render from last visit's packages straight away, rather than
+ * wait for the package lists. `localStorage["patchwork:boot-from-last-visit"]`
+ * (`"on"` or `"off"`) overrides the option, which defaults to off.
+ */
+export function bootFromLastVisit(
+  option: boolean | undefined,
+  storage: Pick<Storage, "getItem"> | undefined
+): boolean {
+  let stored: string | null | undefined;
+  try {
+    stored = storage?.getItem(BOOT_FROM_LAST_VISIT_KEY);
+  } catch {
+    // Storage is off: the option decides.
+  }
+  if (stored === "on") return true;
+  if (stored === "off") return false;
+  return option ?? false;
+}
+
 export function readLoadOrder(
   storage: Storage | undefined,
   key: string
