@@ -10,6 +10,7 @@ import {
   getSuggestedImportUrl,
   getType,
   importPackage,
+  importPackageWithJson,
   packages,
   pluginRecords,
   readPackageJson,
@@ -1305,18 +1306,17 @@ export class LegacyImpl {
     try {
       // A `suggestedImportUrl` can be an `automerge:` folder doc served through
       // the service worker as well as a plain HTTP(S) module bundle.
-      const mod = await importPackage(url);
-      if (!Array.isArray(mod?.plugins)) {
+      const { plugins, package: pkg } = await importPackageWithJson(url);
+      if (!plugins) {
         console.warn(`suggested module ${url} has no plugins array`);
         this.#reportImportFailed(epoch, url, "it doesn't export any plugins");
         return;
       }
-      const pkg = await readPackageJson(url);
-      if (pkg) packages.add(entryOf(pkg, mod.plugins, { by: "suggested" }));
-      registerPlugins(mod.plugins, url);
+      if (pkg) packages.add(entryOf(pkg, plugins, { by: "suggested" }));
+      registerPlugins(plugins, url);
       // Once its tool registers, the registry listeners swap the card for it.
       // A package that brings none would leave the card saying "loading…".
-      if (!this.#bringsTool(mod.plugins)) {
+      if (!this.#bringsTool(plugins)) {
         this.#reportImportFailed(epoch, url, this.#noToolReason());
       }
     } catch (error) {

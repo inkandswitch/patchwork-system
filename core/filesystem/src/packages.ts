@@ -85,7 +85,8 @@ export type PackageJsonAt = {
   version: string;
 };
 
-export type ImportedPackage = { plugins: any[]; package?: PackageJsonAt };
+/** `plugins` is undefined when the entry point exports no `plugins` array. */
+export type ImportedPackage = { plugins?: any[]; package?: PackageJsonAt };
 
 async function locate(url: string): Promise<PackageLocation> {
   return isValidAutomergeUrl(url)
@@ -124,7 +125,7 @@ export async function importPackageWithJson(
     importModule,
   );
   return {
-    plugins: Array.isArray(mod?.plugins) ? mod.plugins : [],
+    plugins: Array.isArray(mod?.plugins) ? mod.plugins : undefined,
     package: packageAt(url, location),
   };
 }

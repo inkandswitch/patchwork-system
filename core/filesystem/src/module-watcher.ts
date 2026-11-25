@@ -650,7 +650,7 @@ export class ModuleWatcher extends EventTarget {
       importUrl: mod.package.importUrl,
       base,
       packageJson,
-      plugins: pluginRecords(mod.plugins, packageJson, base),
+      plugins: pluginRecords(mod.plugins ?? [], packageJson, base),
       addedBy: { by: "package-list", entry: moduleKey },
     });
     if (isNew) database.announce(key);

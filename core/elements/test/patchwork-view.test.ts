@@ -1,6 +1,7 @@
 import { Repo } from "@automerge/automerge-repo";
 import {
   importPackage,
+  importPackageWithJson,
   packages,
   readPackageJson,
   sourceOf,
@@ -15,6 +16,9 @@ vi.mock("@inkandswitch/patchwork-filesystem", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   importPackage: vi.fn(async () => {
     throw new Error("importPackage not stubbed for this test");
+  }),
+  importPackageWithJson: vi.fn(async () => {
+    throw new Error("importPackageWithJson not stubbed for this test");
   }),
   readPackageJson: vi.fn(async () => undefined),
 }));
@@ -766,9 +770,36 @@ describe("patchwork-view (legacy mode)", () => {
     });
   });
 
+  it("adds a confirmed suggestion with a package.json by suggested", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const url = "http://example.invalid/suggested-pkg/";
+    vi.mocked(importPackageWithJson).mockResolvedValueOnce({
+      plugins: [{ type: "patchwork:tool", id: "suggested-tool", name: "s" }],
+      package: {
+        importUrl: url,
+        base: url,
+        packageJson: { name: "suggested" },
+        version: "v1",
+      },
+    });
+    const view = mount({
+      "@patchwork": { type: "no-tool-type", suggestedImportUrl: url },
+    });
+    await settle();
+
+    loadButton(view).click();
+    await vi.waitFor(() => expect(packages.get(sourceOf(url)!)).toBeTruthy());
+
+    expect(packages.get(sourceOf(url)!)!.addedBy).toEqual([
+      { by: "suggested" },
+    ]);
+    getRegistry("patchwork:tool").remove("suggested-tool");
+    packages.remove(sourceOf(url)!);
+  });
+
   it("offers the package again after its import fails", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    vi.mocked(importPackage).mockRejectedValueOnce(new Error("offline"));
+    vi.mocked(importPackageWithJson).mockRejectedValueOnce(new Error("offline"));
     const view = mount({
       "@patchwork": {
         type: "no-tool-type",
@@ -787,12 +818,12 @@ describe("patchwork-view (legacy mode)", () => {
 
     // A package that loads but brings no tool for it says so, rather than
     // sit on "loading…".
-    vi.mocked(importPackage).mockResolvedValueOnce({ plugins: [] });
+    vi.mocked(importPackageWithJson).mockResolvedValueOnce({ plugins: [] });
     const retry = loadButton(view);
     expect(retry.textContent).toBe("try again");
     retry.click();
     await settle();
-    expect(importPackage).toHaveBeenCalledTimes(2);
+    expect(importPackageWithJson).toHaveBeenCalledTimes(2);
     expect(content.textContent).toContain(
       "it doesn't have a tool for no-tool-type"
     );
@@ -815,6 +846,6 @@ describe("patchwork-view (legacy mode)", () => {
     const message = confirm.mock.calls[0]![0] as string;
     expect(message).toContain("evil.example");
     expect(message).not.toContain("\n\nThis package is verified");
-    expect(importPackage).not.toHaveBeenCalled();
+    expect(importPackageWithJson).not.toHaveBeenCalled();
   });
 });
