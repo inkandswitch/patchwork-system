@@ -21,8 +21,11 @@ import { AUTOMERGE_WASM, SUBDUCTION_WASM } from "./emitted.js";
 import { createResolver } from "./resolver.js";
 import {
   AUTOMERGE_WORKER_LOCK,
+  HANDOFF_RELAY_ACK_TIMEOUT_MS,
   HANDOFF_CHANNEL,
+  HANDOFF_RELAY_PROBE_TIMEOUT_MS,
   type HandoffOnlineMessage,
+  type HandoffRelayProbeMessage,
   type HandoffRequestMessage,
 } from "./types.js";
 
@@ -39,6 +42,14 @@ const syncServer =
     : { url: "wss://subduction.sync.inkandswitch.com" };
 
 const handoffPorts = new Set<MessagePort>();
+const pendingRelays = new Map<
+  string,
+  {
+    port: MessagePort;
+    type: "handoff-relay-ready" | "handoff-relay-delivered";
+    resolve: (received: boolean) => void;
+  }
+>();
 
 const control = startWorkerControl("automerge-protocol-handler-worker", {
   onConnect(port) {
@@ -49,7 +60,19 @@ const control = startWorkerControl("automerge-protocol-handler-worker", {
   },
   onRestart: drainForRestart,
   // A tab introducing us to the public reader (see setup.ts).
-  onMessage(data) {
+  onMessage(data, port) {
+    if (typeof data?.id === "string") {
+      const pending = pendingRelays.get(data.id);
+      if (
+        pending?.port === port &&
+        pending.type === data.type &&
+        (data.type === "handoff-relay-ready" ||
+          data.type === "handoff-relay-delivered")
+      ) {
+        pending.resolve(true);
+        return;
+      }
+    }
     if (data?.type === "public-reader" && data.port instanceof MessagePort) {
       readerPort?.close();
       readerPort = data.port;
@@ -227,6 +250,87 @@ function handoffFinished() {
   recycleTimer = setTimeout(recycleIfHolding, RECYCLE_IDLE_MS);
 }
 
+function waitForRelay(
+  port: MessagePort,
+  id: string,
+  type: "handoff-relay-ready" | "handoff-relay-delivered",
+  message: HandoffRelayProbeMessage | undefined,
+  timeoutMs: number
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const finish = (received: boolean) => {
+      clearTimeout(timeout);
+      if (pendingRelays.get(id)?.resolve === finish) pendingRelays.delete(id);
+      resolve(received);
+    };
+    const timeout = setTimeout(() => finish(false), timeoutMs);
+    pendingRelays.set(id, { port, type, resolve: finish });
+    try {
+      if (message) port.postMessage(message);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+async function relayReply(
+  message: HandoffRequestMessage,
+  initialReply: NonNullable<Awaited<ReturnType<typeof resolver.answer>>>
+): Promise<void> {
+  let reply = initialReply;
+  const refreshReply = async () => {
+    const refreshed = await resolver.answer(message);
+    if (!refreshed) {
+      log(`couldn't refresh handoff reply ${message.id} after a failed relay`);
+      return false;
+    }
+    reply = refreshed;
+    return true;
+  };
+  for (const port of [...handoffPorts]) {
+    const ready = await waitForRelay(
+      port,
+      message.id,
+      "handoff-relay-ready",
+      { type: "handoff-relay-probe", id: message.id },
+      HANDOFF_RELAY_PROBE_TIMEOUT_MS
+    );
+    if (!ready) {
+      log(`tab didn't acknowledge relay probe for handoff ${message.id}`);
+      continue;
+    }
+
+    const body =
+      reply.type === "response" && reply.response.body instanceof Uint8Array
+        ? reply.response.body
+        : undefined;
+    try {
+      port.postMessage(
+        { type: "handoff-reply", reply },
+        body ? [body.buffer] : []
+      );
+    } catch {
+      if (!(await refreshReply())) return;
+      continue;
+    }
+
+    const delivered = await waitForRelay(
+      port,
+      message.id,
+      "handoff-relay-delivered",
+      undefined,
+      HANDOFF_RELAY_ACK_TIMEOUT_MS
+    );
+    if (delivered) return;
+
+    log(`tab didn't acknowledge relayed handoff ${message.id}; retrying`);
+    if (!(await refreshReply())) return;
+  }
+
+  log(`broadcasting handoff reply ${message.id} as a relay fallback`);
+  handoffChannel.postMessage(reply);
+}
+
 // wasm memory never shrinks, so a grown instance restarts once handoffs stop.
 // See docs/bootloader.html#recycling.
 
@@ -309,19 +413,7 @@ async function handleHandoffRequest(message: HandoffRequestMessage) {
       log(`ignoring handoff ${message.id} for a url that isn't automerge:`);
       return;
     }
-    const port = handoffPorts.values().next().value as MessagePort | undefined;
-    if (!port) {
-      log(`no tab available to relay handoff ${message.id}`);
-      return;
-    }
-    const body =
-      reply.type === "response" && reply.response.body instanceof Uint8Array
-        ? reply.response.body
-        : undefined;
-    port.postMessage(
-      { type: "handoff-reply", reply },
-      body ? [body.buffer] : []
-    );
+    await relayReply(message, reply);
   } finally {
     handoffFinished();
   }

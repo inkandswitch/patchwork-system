@@ -5,6 +5,7 @@ import {
   HANDOFF_CHANNEL,
   type AutomergeWorkerMissingMessage,
   type HandoffReplyMessage,
+  type HandoffReceivedMessage,
   type HandoffRelayMessage,
   type HandoffRequestMessage,
   type ResolveAcceptedMessage,
@@ -169,21 +170,35 @@ type PendingHandoff = {
 
 const pendingHandoffs = new Map<string, PendingHandoff>();
 
-function resolveHandoffReply(data: HandoffRelayMessage) {
+function resolveHandoffReply(data: HandoffRelayMessage): boolean {
   const pending = pendingHandoffs.get(data.reply.id);
-  if (!pending) return log(`no pending handoff for id ${data.reply.id}`);
+  if (!pending) {
+    log(`no pending handoff for id ${data.reply.id}`);
+    return false;
+  }
   pending.resolvers.resolve(data.reply);
+  return true;
 }
 
 self.addEventListener("message", (event) => {
   const data = event.data as HandoffRelayMessage;
-  if (data?.type === "handoff-reply") resolveHandoffReply(data);
+  if (data?.type !== "handoff-reply") return;
+  if (resolveHandoffReply(data) && typeof data.reply?.id === "string") {
+    event.ports[0]?.postMessage({
+      type: "handoff-received",
+      id: data.reply.id,
+    } satisfies HandoffReceivedMessage);
+  }
 });
 
 handoffChannel.addEventListener("message", (event) => {
   const data = event.data;
 
-  if (data?.type === "cached" || data?.type === "response") {
+  if (
+    data?.type === "cached" ||
+    data?.type === "response" ||
+    data?.type === "abort"
+  ) {
     const pending = pendingHandoffs.get(data.id);
     if (!pending) return log(`no pending handoff for id ${data.id}`);
     pending.resolvers.resolve(data as HandoffReplyMessage);

@@ -15,6 +15,11 @@ import {
   lifecycleLog,
   sharedWorkerHandle,
 } from "./shared-worker-lifecycle.js";
+import {
+  HANDOFF_RELAY_ACK_TIMEOUT_MS,
+  type HandoffRelayDeliveredMessage,
+  type HandoffRelayReadyMessage,
+} from "./types.js";
 
 export { lifecycleLog };
 export { resolveHandoffsWith } from "./tab-resolver.js";
@@ -120,17 +125,54 @@ const automergeProtocolHandlerWorker = sharedWorkerHandle(
     debugging: workerDebugging,
     onMessage(event) {
       const data = event.data;
+      if (data?.type === "handoff-relay-probe" && typeof data.id === "string") {
+        automergeProtocolHandlerWorker.post({
+          type: "handoff-relay-ready",
+          id: data.id,
+        } satisfies HandoffRelayReadyMessage);
+        return;
+      }
       if (data?.type === "handoff-reply") {
         const reply = data.reply;
+        if (typeof reply?.id !== "string") return;
         const body =
           reply?.type === "response" &&
           reply.response.body instanceof Uint8Array
             ? reply.response.body
             : undefined;
-        navigator.serviceWorker.controller?.postMessage(
-          data,
-          body ? [body.buffer] : []
+        const { port1, port2 } = new MessageChannel();
+        const timeout = setTimeout(
+          () => port1.close(),
+          HANDOFF_RELAY_ACK_TIMEOUT_MS + 100
         );
+        port1.onmessage = ({ data: acknowledgement }) => {
+          if (
+            acknowledgement?.type !== "handoff-received" ||
+            acknowledgement.id !== reply.id
+          ) {
+            return;
+          }
+          clearTimeout(timeout);
+          port1.close();
+          automergeProtocolHandlerWorker.post({
+            type: "handoff-relay-delivered",
+            id: reply.id,
+          } satisfies HandoffRelayDeliveredMessage);
+        };
+        const controller = navigator.serviceWorker.controller;
+        if (!controller) {
+          clearTimeout(timeout);
+          port1.close();
+          port2.close();
+          return;
+        }
+        try {
+          controller.postMessage(data, body ? [body.buffer, port2] : [port2]);
+        } catch {
+          clearTimeout(timeout);
+          port1.close();
+          port2.close();
+        }
         return;
       }
       forwardWorkerConsole("automerge-protocol-handler-worker", event.data);

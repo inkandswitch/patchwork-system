@@ -5,6 +5,8 @@
  * reintroduced when either of them restarts — and so tabs can listen in.
  */
 export const HANDOFF_CHANNEL = "@patchwork/handoff";
+export const HANDOFF_RELAY_PROBE_TIMEOUT_MS = 250;
+export const HANDOFF_RELAY_ACK_TIMEOUT_MS = 1_000;
 
 /**
  * The Web Lock the automerge worker holds for as long as it lives. The
@@ -125,6 +127,26 @@ export type HandoffReplyMessage =
 export interface HandoffRelayMessage {
   type: "handoff-reply";
   reply: HandoffReplyMessage;
+}
+
+export interface HandoffRelayProbeMessage {
+  type: "handoff-relay-probe";
+  id: string;
+}
+
+export interface HandoffRelayReadyMessage {
+  type: "handoff-relay-ready";
+  id: string;
+}
+
+export interface HandoffRelayDeliveredMessage {
+  type: "handoff-relay-delivered";
+  id: string;
+}
+
+export interface HandoffReceivedMessage {
+  type: "handoff-received";
+  id: string;
 }
 
 /**
