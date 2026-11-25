@@ -5,6 +5,13 @@ import {
   importPluginFromPackage,
   resolvePackageExport,
 } from "../packages.js";
+import {
+  deleteCurrent,
+  openSaved,
+  readCurrent,
+  readVersions,
+  writeCurrent,
+} from "./saved.js";
 import type {
   AddedBy,
   LivePlugin,
@@ -30,6 +37,9 @@ export class PackageDatabase {
   #modules = new Map<string, unknown>();
   #events = new EventEmitter<Events>();
   #importModule: (url: string) => Promise<any>;
+  #saved?: IDBDatabase;
+  #writes: Promise<void> = Promise.resolve(); // writes go in order
+  ready: Promise<void> = Promise.resolve();
 
   constructor(options: { importModule?: (url: string) => Promise<any> } = {}) {
     this.#importModule = options.importModule ?? importModule;
@@ -44,6 +54,7 @@ export class PackageDatabase {
     const sameVersion = previous?.version === rest.version;
     if (previous && sameVersion && !plugins.some(isLive)) {
       mergeAddedBy(previous.addedBy, addedBy);
+      this.#save(previous);
       return previous;
     }
     const entry: PackageEntry = {
@@ -56,6 +67,7 @@ export class PackageDatabase {
     };
     this.#entries.delete(entry.key);
     this.#entries.set(entry.key, entry);
+    this.#save(entry);
     if (previous) {
       this.#forget(previous);
       this.#events.emit("replaced", entry, previous);
@@ -70,8 +82,37 @@ export class PackageDatabase {
     if (!entry) return false;
     this.#entries.delete(key);
     this.#forget(entry);
+    this.#write(() => deleteCurrent(this.#saved!, key));
     this.#events.emit("removed", entry);
     return true;
+  }
+
+  /** Hydrate from the database called `name`, and save to it from now on. */
+  open(name: string): Promise<void> {
+    if (typeof indexedDB === "undefined") return Promise.resolve();
+    return this.ready = this.#open(name);
+  }
+
+  /** Every saved version of a package, oldest first. */
+  async versions(key: string): Promise<PackageEntry[]> {
+    if (!this.#saved) return [];
+    await this.#writes;
+    return readVersions(this.#saved, key);
+  }
+
+  /** Tell other tabs a package changed. */
+  announce(key: string) {
+    if (typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel(CHANNEL);
+    channel.postMessage({ key });
+    channel.close();
+  }
+
+  onNews(cb: (key: string) => void): () => void {
+    if (typeof BroadcastChannel === "undefined") return () => {};
+    const channel = new BroadcastChannel(CHANNEL);
+    channel.onmessage = (event) => cb(event.data.key);
+    return () => channel.close();
   }
 
   get(key: string): PackageEntry | undefined {
@@ -139,6 +180,34 @@ export class PackageDatabase {
     };
   }
 
+  async #open(name: string) {
+    const db = await openSaved(name);
+    const hydrated = (await readCurrent(db))
+      .filter((entry) => !this.#entries.has(entry.key))
+      .sort((a, b) => a.addedAt - b.addedAt);
+    // Saved entries are older than what was added meanwhile.
+    const before = [...this.#entries.values()];
+    this.#entries = new Map(
+      [...hydrated, ...before].map((entry) => [entry.key, entry]),
+    );
+    this.#saved = db;
+    for (const entry of before) this.#save(entry);
+    for (const entry of hydrated) this.#events.emit("added", entry);
+    await this.#writes;
+  }
+
+  #save(entry: PackageEntry) {
+    if (entry.plugins.some(isLive)) return;
+    this.#write(() => writeCurrent(this.#saved!, entry));
+  }
+
+  #write(write: () => Promise<void>) {
+    if (!this.#saved) return;
+    this.#writes = this.#writes.then(write).catch((error) => {
+      console.warn("couldn't save the package database", error);
+    });
+  }
+
   async #import(view: PluginView): Promise<unknown> {
     if ("module" in view) return view.module;
     const { load, import: url } = view as LivePlugin;
@@ -182,6 +251,8 @@ export class PackageDatabase {
     }
   }
 }
+
+const CHANNEL = "patchwork:packages";
 
 function loadKey(importUrl: string, type: string, id: string) {
   return `${importUrl} ${type} ${id}`;
