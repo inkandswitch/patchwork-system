@@ -47,7 +47,11 @@ export function handleResolveRequest(event: MessageEvent): boolean {
       )
       .then((reply) =>
         port.postMessage(
-          reply ?? ({ type: "unavailable" } satisfies ResolveUnavailableMessage)
+          reply ?? ({ type: "unavailable" } satisfies ResolveUnavailableMessage),
+          reply?.type === "response" &&
+            reply.response.body instanceof Uint8Array
+            ? [reply.response.body.buffer]
+            : []
         )
       );
 
