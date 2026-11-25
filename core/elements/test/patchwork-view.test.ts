@@ -408,6 +408,74 @@ describe("patchwork-view (legacy mode)", () => {
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
   });
 
+  it("offers other tools when the asked-for one doesn't load", async () => {
+    const id = `failing-tool-${++seq}`;
+    toolRegistry.register(
+      {
+        id,
+        type: "patchwork:tool",
+        name: "Failing",
+        supportedDatatypes: ["open-with-type"],
+        load: async () => {
+          throw new Error("the file didn't arrive");
+        },
+      } as never,
+      `test://${id}`
+    );
+    registeredTools.push(id);
+    const other = registerTool(["open-with-type"]);
+    const elsewhere = registerTool(["unrelated-type"]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const view = mount({ "@patchwork": { type: "open-with-type" } });
+    // pinned, so the pick has to win over tool-id
+    view.setAttribute("tool-id", id);
+    await vi.waitFor(() => expect(card(view, "tool-failed")).toBeTruthy());
+
+    buttonLabelled(view, "open with…").click();
+    const offered = [...view.querySelectorAll(".pw-card__tool")].map(
+      (b) => b.textContent
+    );
+    expect(offered).toContain(other.id);
+    expect(offered).not.toContain(id);
+    expect(offered).not.toContain(elsewhere.id);
+
+    // a tool that isn't offered can still be asked for by id
+    const search = view.querySelector<HTMLInputElement>(".pw-card__search")!;
+    search.value = elsewhere.id;
+    search.dispatchEvent(new Event("input"));
+    expect(view.querySelector(".pw-card__tool")?.textContent).toBe(
+      `use tool id ${elsewhere.id}`
+    );
+    search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
+
+    await vi.waitFor(() => expect(elsewhere.mounts).toBe(1));
+    expect(card(view, "tool-failed")).toBeNull();
+    expect(other.mounts).toBe(0);
+  });
+
+  it("offers the other frames when an account's frame tool isn't there", async () => {
+    const frame = registerTool(["account"]);
+    (toolRegistry.get(frame.id) as { tags?: string[] }).tags = ["frame-tool"];
+    const sidebar = registerTool(["account"]);
+    const missing = `missing-frame-${++seq}`;
+
+    const view = mount({ "@patchwork": { type: "account" }, frameToolId: missing });
+    view.setAttribute("tool-id", missing);
+    await vi.waitFor(() => expect(card(view, "no-tool")).toBeTruthy());
+
+    buttonLabelled(view, "open with…").click();
+    const offered = [...view.querySelectorAll(".pw-card__tool")].map(
+      (b) => b.textContent
+    );
+    expect(offered).toEqual([frame.id]);
+    expect(offered).not.toContain(sidebar.id);
+
+    (view.querySelector(".pw-card__tool") as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(frame.mounts).toBe(1));
+    expect(card(view, "no-tool")).toBeNull();
+  });
+
   it("doesn't mount a tool-id change on a view removed in the same task", async () => {
     const first = registerTool(["lifecycle-type"]);
     const second = registerTool(["unrelated-type"]);
@@ -571,6 +639,28 @@ describe("patchwork-view (legacy mode)", () => {
       expect(text).toContain("the package containing the tool");
       expect(text).toContain("not json");
     });
+
+    it.each(["missing", "broken"])(
+      "opens a registered tool instead when the package is %s",
+      async (failure) => {
+        const other = registerTool(["pkg-type"]);
+        if (failure === "missing") servePackage({ other: ["other-type"] });
+        else vi.mocked(importPackage).mockRejectedValue(new Error("not json"));
+        const view = mountWith(
+          { "@patchwork": { type: "pkg-type" } },
+          {
+            "tool-id": "asked-for",
+            "package-url": "http://example.invalid/package/",
+          }
+        );
+        await vi.waitFor(() => expect(card(view, "tool-failed")).toBeTruthy());
+        buttonLabelled(view, "open with…").click();
+        (view.querySelector(".pw-card__tool") as HTMLButtonElement).click();
+        await vi.waitFor(() => expect(other.mounts).toBe(1));
+        expect(card(view, "tool-failed")).toBeNull();
+        expect(live()).toHaveLength(0);
+      }
+    );
 
     it("follows an automerge package without heads to its new heads", async () => {
       servePackage({ followed: ["pkg-type"] });

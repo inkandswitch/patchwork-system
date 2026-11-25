@@ -76,6 +76,44 @@ function anythingTool(): Anything | undefined {
   return tool && { id: tool.id, name: tool.name };
 }
 
+/**
+ * The kind of tool `toolId` is (a frame, a sidebar), by its tags. One that
+ * isn't registered has no tags to go by, but an account that names it as its
+ * frame says it's a frame.
+ */
+function toolKinds(toolId: string, doc: HasPatchworkMetadata | undefined): string[] {
+  const tags = getRegistry<ToolDescription>("patchwork:tool").get(toolId)?.tags;
+  if (tags?.length) return tags;
+  const frameToolId = (doc as { frameToolId?: unknown } | undefined)?.frameToolId;
+  const type = doc ? getType(doc) : undefined;
+  return type === "account" && frameToolId === toolId ? ["frame-tool"] : [];
+}
+
+/**
+ * The tools a reader could open the doc with instead of `except`. Of the kind
+ * `except` is, when there are any of those (another frame for a frame);
+ * otherwise the datatype's own first, then ones that open anything.
+ */
+function otherTools(doc: HasPatchworkMetadata | undefined, except: string): Anything[] {
+  const type = doc ? getType(doc) : undefined;
+  const kinds = toolKinds(except, doc);
+  let tools = getRegistry<ToolDescription>("patchwork:tool").filter(
+    (tool) =>
+      !tool.unlisted &&
+      !tool.forTitleBar &&
+      tool.id !== except &&
+      (isWildcardOnlyMatch(tool, undefined) ||
+        (!!type && !!tool.supportedDatatypes?.includes(type)))
+  );
+  const sameKind = tools.filter((tool) => tool.tags?.some((tag) => kinds.includes(tag)));
+  if (sameKind.length) tools = sameKind;
+  tools.sort(
+    (a, b) =>
+      Number(isWildcardOnlyMatch(a, type)) - Number(isWildcardOnlyMatch(b, type))
+  );
+  return tools.map((tool) => ({ id: tool.id, name: tool.name ?? tool.id }));
+}
+
 /** The types something here opens, to suggest when giving a doc a type. */
 function knownTypes(): { id: string; name?: string }[] {
   const names = new Map<string, string | undefined>();
@@ -380,9 +418,10 @@ export class LegacyImpl {
   #packageTool: PackageTool | null = null;
   // Finds a package doc's latest heads, and says when they may have moved.
   #packages: PackageTracker;
-  // A tool that opens anything, which the reader picked from a card to look
-  // at the doc with. Kept across restarts, dropped when the doc's type, the
-  // doc, or the asked-for tool changes.
+  // A tool the reader picked from a card to open the doc with: one that opens
+  // anything, or another when the asked-for one didn't load. Wins over
+  // `tool-id`. Kept across restarts, dropped when the doc's type, the doc, or
+  // the asked-for tool changes.
   #peekToolId: string | null = null;
   #handle: DocHandle<HasPatchworkMetadata> | null = null;
   #tool: LoadedTool | null = null;
@@ -490,9 +529,9 @@ export class LegacyImpl {
     }
   };
 
-  /** The tool asked for: by `tool-id`, or picked from a card. */
+  /** The tool asked for: picked from a card, or by `tool-id`. */
   #chosenToolId(): string | null {
-    return this.#toolId || this.#peekToolId;
+    return this.#peekToolId || this.#toolId;
   }
 
   // Every remount goes through `#init`, which a disposed impl refuses, so one
@@ -531,7 +570,7 @@ export class LegacyImpl {
       "registered",
       async (addedTool) => {
         // the registry has no say over a package's tool
-        if (this.#packageUrl) return;
+        if (this.#packageUrl && !this.#peekToolId) return;
         const toolId = addedTool.id;
         const isChosenTool = toolId == this.#chosenToolId();
         // getFallbackTool scans the whole registry: calling it on every
@@ -558,7 +597,7 @@ export class LegacyImpl {
     const removeLoadedListener = toolRegistry.on(
       "loaded",
       async (loadedTool) => {
-        if (this.#packageUrl) return;
+        if (this.#packageUrl && !this.#peekToolId) return;
         const toolId = loadedTool.id;
         const isChosenTool = toolId == this.#chosenToolId();
         const isFallbackTool = toolId == this.#fallbackId;
@@ -789,7 +828,7 @@ export class LegacyImpl {
       return;
     }
 
-    if (this.#packageUrl) {
+    if (this.#packageUrl && !this.#peekToolId) {
       this.#renderPackageTool(this.#packageUrl);
       return;
     }
@@ -898,7 +937,7 @@ export class LegacyImpl {
   // Loads the new version before taking the old one down, so the swap is
   // quick, and leaves the old one up if the new one doesn't load.
   async #updatePackage(url: AutomergeUrl, epoch: number): Promise<void> {
-    if (epoch !== this.#initEpoch || this.#disposed) return;
+    if (epoch !== this.#initEpoch || this.#disposed || this.#peekToolId) return;
     const current = this.#packageTool;
     if (!current) {
       if (this.#handle) void this.#restart();
@@ -913,7 +952,7 @@ export class LegacyImpl {
       console.warn(`couldn't load the new version of ${url}`, error);
       return;
     }
-    if (epoch !== this.#initEpoch || this.#disposed) return;
+    if (epoch !== this.#initEpoch || this.#disposed || this.#peekToolId) return;
     void this.#restart();
   }
 
@@ -972,6 +1011,8 @@ export class LegacyImpl {
             this.#retryingToolId = id;
             if (this.#state === State.unable) this.#queueRender();
           },
+          tools: () => otherTools(this.#handle?.doc(), this.#chosenToolId() ?? id),
+          onOpenWith: (id) => this.#peek(id),
         })
       );
       return undefined;
@@ -1047,6 +1088,7 @@ export class LegacyImpl {
           anything,
           onLoad: (url) => this.#loadSuggestedImport(url),
           onPeek: (id) => this.#peek(id),
+          tools: () => otherTools(this.#handle?.doc(), missingToolId!),
           repo: this.#baseRepo,
           readClaims,
         })

@@ -110,6 +110,8 @@ export function showBootStatus(options: {
       const seconds = Math.round((options.stuckAfterMs ?? 0) / 1000);
       lines.push(line(`Still not ready after ${seconds}s`));
     }
+    const folders = foldersText(progress);
+    if (folders) lines.push(line(folders, "pw-boot-status-detail"));
     const packages = packagesText(progress);
     if (packages) lines.push(line(packages, "pw-boot-status-detail"));
     const reader = readerText(progress);
@@ -194,13 +196,21 @@ function line(text: string, className?: string): HTMLParagraphElement {
   return p;
 }
 
+function foldersText({ folders }: BootProgress): string | undefined {
+  if (!folders || folders.done) return undefined;
+  const count = folders.found.toLocaleString();
+  return `Your folders: ${count} loaded so far`;
+}
+
 function packagesText({ packages }: BootProgress): string | undefined {
   if (!packages?.total || packages.loaded >= packages.total) return undefined;
   const count = `Packages: ${packages.loaded} of ${packages.total}`;
   return packages.latest ? `${count} (${packages.latest})` : count;
 }
 
-function readerText({ publicReader: reader }: BootProgress): string | undefined {
+function readerText({
+  publicReader: reader,
+}: BootProgress): string | undefined {
   if (!reader || reader.phase === "ready") return undefined;
   const count = (n: number) => n.toLocaleString();
   switch (reader.phase) {

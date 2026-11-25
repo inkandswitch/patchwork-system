@@ -436,7 +436,7 @@ function cacheInBackground(
     ).catch((error) => {
       // Always loud: a QuotaExceededError here is the first sign the origin is
       // under storage pressure.
-      console.warn(`error caching ${request.url} in ${cachename}`, error);
+      console.warn("error caching %s in %s", request.url, cachename, error);
     })
   );
 }
@@ -529,9 +529,7 @@ async function servePassthrough(
 
   if (cached) return cached;
   return new Response(
-    `couldnt fetch ${request.url} and no stale copy in ${cachename}\n\n${
-      result.stack ?? result.message
-    }`,
+    `couldnt fetch ${request.url} and no stale copy in ${cachename}\n\n${result.message}`,
     { status: 503, headers: { "content-type": "text/plain" } }
   );
 }
@@ -557,15 +555,15 @@ async function respond(
     if (error instanceof HandoffAborted) throw error;
 
     console.error(
-      `service worker error resolving ${fetchEvent.request.url}` +
-        (handoffURL ? ` (for: ${handoffURL})` : ""),
+      "service worker error resolving %s (for: %s)",
+      fetchEvent.request.url,
+      handoffURL?.href ?? "itself",
       error
     );
     if (cached) return cached;
+    // The stack is in the console above; the page gets the message only.
     return new Response(
-      error instanceof Error
-        ? `${error.message}\n\n${error.stack}`
-        : String(error),
+      error instanceof Error ? error.message : "service worker error",
       { status: 556, headers: { "content-type": "text/plain" } }
     );
   }

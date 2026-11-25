@@ -5,10 +5,7 @@
  * hash's `tool` and `frame` first, then the root view's, then those inside
  * it, and so on, then everything else (see `ModuleWatcher.prioritize`).
  */
-import type {
-  LoadBatch,
-  PluginRef,
-} from "@inkandswitch/patchwork-filesystem";
+import type { LoadBatch, PluginRef } from "@inkandswitch/patchwork-filesystem";
 import { getRegistry } from "@inkandswitch/patchwork-plugins";
 
 const VERSION = 1;
@@ -200,7 +197,10 @@ export function recordLoadOrder(
     if (!dirty) return;
     dirty = false;
     try {
-      storage?.setItem(key, JSON.stringify({ version: VERSION, modules, views }));
+      storage?.setItem(
+        key,
+        JSON.stringify({ version: VERSION, modules, views })
+      );
     } catch {
       // Full, or storage is off: next boot loads everything at once.
     }

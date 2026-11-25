@@ -48,16 +48,16 @@ test("a counter tool installed from an automerge url can be created and clicked"
   }, COUNTER_SOURCE);
 
   await page.getByRole("button", { name: "Packages" }).click();
-  const search = page.locator(".pw-packages__search");
+  const search = page.locator(".pw-pkg-packages__search");
   await expect(search).toBeVisible({ timeout: 30_000 });
 
   // On webkit the Add click can be swallowed while the modal is still
   // settling, so retry the whole install until the "my package list" plugin
   // count proves the settings doc took the module (the counter package
   // registers 2 plugins: the datatype and the tool).
-  const install = page.locator(".pw-install");
+  const install = page.locator(".pw-pkg-install");
   const installedCount = page.locator(
-    '.pw-packages__origin-chip[data-origin="installed"] .pw-packages__origin-count',
+    '.pw-pkg-packages__origin-chip[data-origin="installed"] .pw-pkg-packages__origin-count',
   );
   await expect(async () => {
     if ((await installedCount.textContent()) === "0") {
@@ -76,7 +76,7 @@ test("a counter tool installed from an automerge url can be created and clicked"
           }),
         );
       }, packageUrl);
-      await expect(install.locator(".pw-install__card")).toBeVisible({
+      await expect(install.locator(".pw-pkg-install__card")).toBeVisible({
         timeout: 10_000,
       });
       await install

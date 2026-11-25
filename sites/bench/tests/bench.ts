@@ -25,6 +25,14 @@ export const WORKER_MODES: Mode[] = ["tab-worker", "shared-worker"];
 export type Storage = "worker" | "direct";
 export const STORAGES: Storage[] = ["worker", "direct"];
 
+// The clients that stand in for someone else — the server probe, a seeder, the
+// stranger — keep nothing on disk: a fresh context has nothing to find there,
+// and WebKit's IndexedDB in a just-made context now and then fails outright
+// ("UnknownError: An internal error was encountered in the Indexed Database
+// server", or AbortError), which left the stranger unable to get a doc the
+// server held, or a seeder never pushing one.
+export const ELSEWHERE = "memory";
+
 export const RESULTS = "bench-results/results.jsonl";
 
 export type Result = {
@@ -80,7 +88,7 @@ export function probeServerPeer(browser: Browser): Promise<string> {
     const context = await browser.newContext();
     try {
       const page = await context.newPage();
-      await page.goto("/?mode=pertab");
+      await page.goto(`/?mode=pertab&storage=${ELSEWHERE}`);
       await page.waitForFunction(() => window.repo != null, null, {
         timeout: 60_000,
       });
@@ -101,7 +109,7 @@ export async function openTab(
     server,
     storage,
     open,
-  }: { server?: string; storage?: Storage; open?: string } = {}
+  }: { server?: string; storage?: Storage | typeof ELSEWHERE; open?: string } = {}
 ): Promise<Page> {
   const query = new URLSearchParams({ mode });
   // Extra page options for every tab, e.g. BENCH_QUERY="heads=0&bc=1".
@@ -376,7 +384,7 @@ export async function strangerSees(
 ): Promise<Record<string, unknown> | undefined> {
   const context = await browser.newContext();
   try {
-    const page = await openTab(context, "pertab");
+    const page = await openTab(context, "pertab", { storage: ELSEWHERE });
     await online(page);
     return await page
       .evaluate(
@@ -389,7 +397,10 @@ export async function strangerSees(
         },
         [url, timeoutMs] as const
       )
-      .catch(() => undefined);
+      .catch((error) => {
+        console.log(`[stranger] ${said(error)}`);
+        return undefined;
+      });
   } finally {
     await context.close();
   }
