@@ -1,10 +1,8 @@
 import { Repo } from "@automerge/automerge-repo";
 import { pathToFileURL } from "node:url";
 import {
-  importPackage,
   importPackageWithJson,
   packages,
-  readPackageJson,
   sourceOf,
   type AddedBy,
   type LivePlugin,
@@ -16,13 +14,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // should reach the network.
 vi.mock("@inkandswitch/patchwork-filesystem", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  importPackage: vi.fn(async () => {
-    throw new Error("importPackage not stubbed for this test");
-  }),
   importPackageWithJson: vi.fn(async () => {
     throw new Error("importPackageWithJson not stubbed for this test");
   }),
-  readPackageJson: vi.fn(async () => undefined),
 }));
 
 import { registerPatchworkViewElement } from "../src/patchwork-view.js";
@@ -654,9 +648,19 @@ describe("patchwork-view (legacy mode)", () => {
     let mounts: Mounts;
 
     // Each import of a package gives tools that note which url they came
-    // from, so a test can see which version is mounted.
-    function servePackage(toolIds: Record<string, string[] | "*">) {
-      vi.mocked(importPackage).mockImplementation(async (url: string) => ({
+    // from, so a test can see which version is mounted. With `packageJson`,
+    // the import hands back that package.json too.
+    function servePackage(
+      toolIds: Record<string, string[] | "*">,
+      packageJson?: Record<string, unknown>
+    ) {
+      vi.mocked(importPackageWithJson).mockImplementation(async (url) => ({
+        package: packageJson && {
+          importUrl: url,
+          base: url,
+          packageJson,
+          version: "v1",
+        },
         plugins: Object.entries(toolIds).map(([id, supportedDatatypes]) => ({
           id,
           type: "patchwork:tool",
@@ -681,9 +685,7 @@ describe("patchwork-view (legacy mode)", () => {
     });
 
     afterEach(() => {
-      vi.mocked(importPackage).mockReset();
-      vi.mocked(readPackageJson).mockReset();
-      vi.mocked(readPackageJson).mockResolvedValue(undefined);
+      vi.mocked(importPackageWithJson).mockReset();
     });
 
     function mountWith(doc: unknown, attrs: Record<string, string>) {
@@ -769,7 +771,7 @@ describe("patchwork-view (legacy mode)", () => {
     });
 
     it("blames the package when it doesn't import", async () => {
-      vi.mocked(importPackage).mockRejectedValue(new Error("not json"));
+      vi.mocked(importPackageWithJson).mockRejectedValue(new Error("not json"));
       const view = mountWith(
         { "@patchwork": { type: "pkg-type" } },
         {
@@ -789,7 +791,7 @@ describe("patchwork-view (legacy mode)", () => {
       async (failure) => {
         const other = registerTool(["pkg-type"]);
         if (failure === "missing") servePackage({ other: ["other-type"] });
-        else vi.mocked(importPackage).mockRejectedValue(new Error("not json"));
+        else vi.mocked(importPackageWithJson).mockRejectedValue(new Error("not json"));
         const view = mountWith(
           { "@patchwork": { type: "pkg-type" } },
           {
@@ -806,19 +808,8 @@ describe("patchwork-view (legacy mode)", () => {
       }
     );
 
-    // The package.json the database is given for a package at `url`.
-    function servePackageJson() {
-      vi.mocked(readPackageJson).mockImplementation(async (url: string) => ({
-        importUrl: url,
-        base: url,
-        packageJson: { name: "served" },
-        version: "v1",
-      }));
-    }
-
     it("package-url adds the package when there's no entry", async () => {
-      servePackage({ added: ["pkg-type"] });
-      servePackageJson();
+      servePackage({ added: ["pkg-type"] }, { name: "served" });
       const url = "http://example.invalid/added-pkg/";
       mountWith(
         { "@patchwork": { type: "pkg-type" } },
@@ -828,6 +819,8 @@ describe("patchwork-view (legacy mode)", () => {
 
       const entry = packages.get(sourceOf(url)!)!;
       expect(entry.addedBy).toEqual([{ by: "package-url" }]);
+      // one fetch gives both the tool and its package.json
+      expect(importPackageWithJson).toHaveBeenCalledOnce();
       expect(entry.version).toBe("v1");
       expect(entry.packageJson).toEqual({ name: "served" });
       expect(entry.plugins.map((p) => [p.id, p.load])).toEqual([
@@ -837,8 +830,7 @@ describe("patchwork-view (legacy mode)", () => {
     });
 
     it("package-url leaves an existing one alone", async () => {
-      servePackage({ listed: ["pkg-type"] });
-      servePackageJson();
+      servePackage({ listed: ["pkg-type"] }, { name: "served" });
       const url = "http://example.invalid/listed-pkg/";
       const listed = packages.add({
         key: sourceOf(url)!,

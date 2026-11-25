@@ -59,12 +59,19 @@ export function registerPlugins<D extends PluginDescription, I>(
     entry?.importUrl === importUrl &&
     entry.addedBy.some((a) => a.by === "package-list" || a.by === "suggested");
   if (added) return;
+  // Whoever added the package before still has it, as with `register`.
+  const others = (entry?.addedBy ?? []).filter(
+    (a) => !(a.by === "js" && a.url === importUrl)
+  );
   packages.add({
     key,
     version: importUrl,
     importUrl,
     plugins: typed as unknown as LivePlugin[],
-    addedBy: { by: "js", url: importUrl, stack: new Error().stack ?? "" },
+    addedBy: [
+      ...others,
+      { by: "js", url: importUrl, stack: new Error().stack ?? "" },
+    ],
   });
 }
 

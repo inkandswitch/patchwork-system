@@ -9,15 +9,14 @@ import {
 import {
   getSuggestedImportUrl,
   getType,
-  importPackage,
   importPackageWithJson,
   packages,
   pluginRecords,
-  readPackageJson,
   sourceOf,
   trackPackagesInRepo,
   type AddedBy,
   type HasPatchworkMetadata,
+  type ImportedPackage,
   type PackageJsonAt,
   type PackageTracker,
 } from "@inkandswitch/patchwork-filesystem";
@@ -175,12 +174,12 @@ const ATTRS = {
 // A package's module, by the url it's imported from: one import shared by
 // every view. An `automerge:` one is pinned to heads, so what's behind it
 // can't change. A failed import is forgotten, so asking again tries again.
-const packageImports = new Map<string, Promise<unknown>>();
+const packageImports = new Map<string, Promise<ImportedPackage>>();
 
-function importPackageOnce(url: string): Promise<unknown> {
+function importPackageOnce(url: string): Promise<ImportedPackage> {
   let load = packageImports.get(url);
   if (!load) {
-    load = importPackage(url);
+    load = importPackageWithJson(url);
     load.catch(() => packageImports.delete(url));
     packageImports.set(url, load);
   }
@@ -198,13 +197,6 @@ function entryOf(pkg: PackageJsonAt, plugins: unknown[], addedBy: AddedBy) {
     plugins: pluginRecords(plugins, pkg.packageJson, pkg.base),
     addedBy,
   };
-}
-
-// A `package-url`'s package goes in the database if nothing else put it there.
-async function addPackageUrl(url: string, plugins: unknown[]) {
-  const pkg = await readPackageJson(url);
-  if (!pkg || packages.get(sourceOf(url)!)) return;
-  packages.add(entryOf(pkg, plugins, { by: "package-url" }));
 }
 
 // One pushwork sync is a burst of changes to a package's doc, so wait for its
@@ -257,16 +249,13 @@ async function loadPackageTool(
   toolId: string | null,
   type: string | undefined
 ): Promise<PackageTool> {
-  const mod = (await importPackageOnce(pinned)) as { plugins?: unknown };
-  if (!Array.isArray(mod?.plugins)) {
-    throw new Error("it doesn't export any plugins");
+  const { plugins, package: pkg } = await importPackageOnce(pinned);
+  if (!plugins) throw new Error("it doesn't export any plugins");
+  // Its package goes in the database if nothing else put it there.
+  if (pkg && !packages.get(sourceOf(pinned)!)) {
+    packages.add(entryOf(pkg, plugins, { by: "package-url" }));
   }
-  if (!packages.get(sourceOf(pinned)!)) {
-    addPackageUrl(pinned, mod.plugins).catch((error) =>
-      console.warn(`couldn't add ${pinned} to the package database`, error)
-    );
-  }
-  const tools = (mod.plugins as PackagePlugin[]).filter(
+  const tools = (plugins as PackagePlugin[]).filter(
     (plugin) => plugin?.type === "patchwork:tool"
   );
   const tool = toolId

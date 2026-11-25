@@ -173,6 +173,24 @@ describe("registerPlugins and the package database", () => {
     packages.remove(key);
   });
 
+  it("registerPlugins at a new url keeps the package-list adder", () => {
+    const key = sourceOf(at(ID, v1))!;
+    packages.add({
+      key,
+      version: "a1",
+      importUrl: at(ID, v1),
+      plugins: [{ type: "test:db-relisted", id: "a" }],
+      addedBy: { by: "package-list", entry: `automerge:${ID}` },
+    });
+
+    registerPlugins([plugin("test:db-relisted", "a")], at(ID, v2));
+
+    const entry = packages.get(key)!;
+    expect(entry.importUrl).toBe(at(ID, v2));
+    expect(entry.addedBy.map((a) => a.by)).toEqual(["package-list", "js"]);
+    packages.remove(key);
+  });
+
   it("registerPlugins twice from js at one url: the second wins", () => {
     const url = "https://example.test/twice.js";
     registerPlugins([plugin("test:db-twice", "first")], url);
