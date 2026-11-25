@@ -8,6 +8,7 @@ import {
 } from "@automerge/automerge-repo";
 import { ModuleWatcher } from "../src/module-watcher.js";
 import { importPackageFromHttpUrl } from "../src/packages.js";
+import { PackageDatabase } from "../src/package-db/database.js";
 import {
   fetchLatestViaServiceWorker,
   trackPackagesInRepo,
@@ -1231,6 +1232,161 @@ describe("ModuleWatcher package status", () => {
       expect(watcher.packageStatus(AUTOMERGE_URL)).toBeUndefined();
     } finally {
       await done();
+    }
+  });
+});
+
+describe("ModuleWatcher package database", () => {
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  // A package doc, listed in the settings, whose lookup answers `latest`.
+  async function setup(importPackage: (url: string) => Promise<any>) {
+    const repo = new AutomergeRepo({ peerId: "package-db" as PeerId });
+    const doc = repo.create<any>({ "@patchwork": { type: "folder" } });
+    const settings = repo.create<any>({
+      "@patchwork": { type: "patchwork:module-settings" },
+      modules: [doc.url],
+    });
+    const state = { latest: doc.view(doc.heads()).url };
+    const tracker: PackageTracker = {
+      findLatest: async () => state.latest,
+      watch: () => () => {},
+    };
+    const database = new PackageDatabase();
+    const announced = vi.spyOn(database, "announce");
+    const events: string[] = [];
+    const watcher = new ModuleWatcher(
+      repo,
+      { system: settings.url },
+      (url, _mod, key) => {
+        const entry = database.get(doc.url);
+        events.push(`load ${url} ${entry?.version} ${key}`);
+      },
+      undefined,
+      importPackage,
+      tracker
+    );
+    watcher.database = database;
+    await watcher.doneLoading;
+    const done = async () => {
+      watcher.dispose();
+      await repo.shutdown().catch(() => {});
+    };
+    return { repo, doc, settings, state, watcher, database, announced, events, done };
+  }
+
+  const at = (url: string, packageJson: Record<string, unknown> = {}) => ({
+    importUrl: url,
+    base: "http://example.test/pkg/",
+    packageJson,
+    version: url.split("#")[1],
+  });
+
+  it("a loaded package is in the database before onLoad runs", async () => {
+    const packageJson = {
+      exports: { "./tool": "./tool.js" },
+      patchwork: {
+        plugins: {
+          "patchwork:tool": { demo: { name: "Demo", export: "./tool" } },
+        },
+      },
+    };
+    const { doc, state, database, events, done } = await setup(async (url) => ({
+      plugins: [{ type: "patchwork:tool", id: "demo", name: "Demo", load: async () => {} }],
+      package: at(url, packageJson),
+    }));
+    try {
+      const version = state.latest.split("#")[1];
+      expect(events).toEqual([`load ${state.latest} ${version} ${doc.url}`]);
+      const entry = database.get(doc.url)!;
+      expect(entry).toMatchObject({
+        key: doc.url,
+        version,
+        importUrl: state.latest,
+        base: "http://example.test/pkg/",
+        packageJson,
+        addedBy: [{ by: "package-list", entry: doc.url }],
+      });
+      expect(entry.plugins).toEqual([
+        { type: "patchwork:tool", id: "demo", name: "Demo", export: "./tool" },
+      ]);
+    } finally {
+      await done();
+    }
+  });
+
+  it("a new version replaces the entry and is announced", async () => {
+    const { doc, state, watcher, database, announced, done } = await setup(
+      async (url) => ({
+        plugins: [{ type: "patchwork:tool", id: "demo", load: async () => {}, import: "x", module: {} }],
+        package: at(url),
+      })
+    );
+    try {
+      expect(announced.mock.calls).toEqual([[doc.url]]);
+      // Asked again with nothing new: no new version, nothing announced.
+      watcher.recheck(doc.url);
+      await pause(50);
+      expect(announced).toHaveBeenCalledTimes(1);
+
+      doc.change((d: any) => {
+        d.rev = 1;
+      });
+      state.latest = doc.view(doc.heads()).url;
+      watcher.recheck(doc.url);
+      await pause(50);
+
+      const entry = database.get(doc.url)!;
+      expect(entry.version).toBe(state.latest.split("#")[1]);
+      expect(entry.importUrl).toBe(state.latest);
+      expect(entry.plugins).toEqual([{ type: "patchwork:tool", id: "demo" }]);
+      expect(announced.mock.calls).toEqual([[doc.url], [doc.url]]);
+    } finally {
+      await done();
+    }
+  });
+
+  it("a package leaving the settings is removed", async () => {
+    const { doc, settings, database, done } = await setup(async (url) => ({
+      plugins: [],
+      package: at(url),
+    }));
+    try {
+      expect(database.get(doc.url)).toBeDefined();
+      settings.change((d: any) => {
+        d.modules = [];
+      });
+      await pause(100);
+      expect(database.get(doc.url)).toBeUndefined();
+    } finally {
+      await done();
+    }
+  });
+
+  it("a module url isn't added", async () => {
+    const manifestUrl = "http://example.test/modules.json";
+    const moduleUrl = dataModule(
+      "export const plugins = [{ type: 'patchwork:tool', id: 'demo' }]"
+    );
+    stubFetchManifest({ [manifestUrl]: { modules: [moduleUrl] } });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const loaded: string[] = [];
+    const watcher = new ModuleWatcher(
+      {} as unknown as Repo,
+      { system: manifestUrl },
+      (name) => loaded.push(name)
+    );
+    const database = new PackageDatabase();
+    watcher.database = database;
+    try {
+      await watcher.doneLoading;
+      expect(loaded).toEqual([moduleUrl]);
+      expect(database.all()).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0][0])).toContain(moduleUrl);
+    } finally {
+      warn.mockRestore();
+      watcher.dispose();
     }
   });
 });

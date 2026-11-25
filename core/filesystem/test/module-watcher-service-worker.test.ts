@@ -7,7 +7,7 @@ import type { PackageTracker } from "../src/package-tracker.js";
 const importedFromHttp: string[] = [];
 vi.mock("../src/packages.js", async (original) => ({
   ...(await original<typeof import("../src/packages.js")>()),
-  importPackageFromHttpUrl: async (url: string) => {
+  importPackageWithJson: async (url: string) => {
     importedFromHttp.push(url);
     return { plugins: [] };
   },
