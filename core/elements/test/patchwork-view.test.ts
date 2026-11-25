@@ -1,4 +1,5 @@
 import { Repo } from "@automerge/automerge-repo";
+import { pathToFileURL } from "node:url";
 import {
   importPackage,
   importPackageWithJson,
@@ -927,6 +928,42 @@ describe("patchwork-view (legacy mode)", () => {
     packages.remove(sourceOf(url)!);
   });
 
+  it("confirming a suggested package opens the doc with its tool", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const url = "http://example.invalid/suggested-opens/";
+    added.push(sourceOf(url)!);
+    // the legacy name, which the database renames
+    const tool = { name: "s", supportedDataTypes: ["suggested-type"] };
+    vi.mocked(importPackageWithJson).mockResolvedValueOnce({
+      plugins: [{ type: "patchwork:tool", id: "suggested-opens", ...tool }],
+      package: {
+        importUrl: url,
+        base: url,
+        packageJson: {
+          // absolute: happy-dom's URL resolves a relative one against a
+          // file: base to http://localhost
+          main: pathToFileURL(`${__dirname}/fixtures/suggested-tool.js`).href,
+          patchwork: {
+            plugins: {
+              "patchwork:tool": { "suggested-opens": { ...tool, export: "." } },
+            },
+          },
+        },
+        version: "v1",
+      },
+    });
+    const view = mount({
+      "@patchwork": { type: "suggested-type", suggestedImportUrl: url },
+    });
+    await settle();
+
+    loadButton(view).click();
+    await vi.waitFor(() =>
+      expect(view.textContent).toContain("the suggested tool")
+    );
+    expect(card(view, "no-tool")).toBeNull();
+  });
+
   it("offers the package again after its import fails", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
     vi.mocked(importPackageWithJson).mockRejectedValueOnce(new Error("offline"));
@@ -948,7 +985,12 @@ describe("patchwork-view (legacy mode)", () => {
 
     // A package that loads but brings no tool for it says so, rather than
     // sit on "loading…".
-    vi.mocked(importPackageWithJson).mockResolvedValueOnce({ plugins: [] });
+    const url = "http://example.invalid/pkg.js";
+    added.push(sourceOf(url)!);
+    vi.mocked(importPackageWithJson).mockResolvedValueOnce({
+      plugins: [],
+      package: { importUrl: url, base: url, packageJson: {}, version: "v1" },
+    });
     const retry = loadButton(view);
     expect(retry.textContent).toBe("try again");
     retry.click();

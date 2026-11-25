@@ -58,6 +58,10 @@ const log = debug("patchwork:elements:legacy");
 
 type Supports = { supportedDatatypes?: "*" | string[] };
 
+// Whether `view` is the one its id names, so a card that picks tools by id
+// lists each id once.
+const isNewest = (view: ToolView) => tool(view.id)?.package === view.package;
+
 /**
  * Whether `tool` takes `type` only through a `*`: a generic fallback like a
  * raw viewer, not a tool built for that datatype.
@@ -77,7 +81,7 @@ function isWildcardOnlyMatch(
  */
 function anythingTool(): Anything | undefined {
   const wildcards = tools().filter(
-    (tool) => !tool.unlisted && isWildcardOnlyMatch(tool, undefined)
+    (t) => !t.unlisted && isWildcardOnlyMatch(t, undefined) && isNewest(t)
   );
   const tool = wildcards.find((t) => t.id === "raw") ?? wildcards[0];
   return tool && { id: tool.id, name: tool.name };
@@ -105,12 +109,13 @@ function otherTools(doc: HasPatchworkMetadata | undefined, except: string): Anyt
   const type = doc ? getType(doc) : undefined;
   const kinds = toolKinds(except, doc);
   let others = tools().filter(
-    (tool) =>
-      !tool.unlisted &&
-      !tool.forTitleBar &&
-      tool.id !== except &&
-      (isWildcardOnlyMatch(tool, undefined) ||
-        (!!type && !!tool.supportedDatatypes?.includes(type)))
+    (t) =>
+      !t.unlisted &&
+      !t.forTitleBar &&
+      t.id !== except &&
+      (isWildcardOnlyMatch(t, undefined) ||
+        (!!type && !!t.supportedDatatypes?.includes(type))) &&
+      isNewest(t)
   );
   const sameKind = others.filter((tool) => tool.tags?.some((tag) => kinds.includes(tag)));
   if (sameKind.length) others = sameKind;
@@ -1294,18 +1299,19 @@ export class LegacyImpl {
         this.#reportImportFailed(epoch, url, "it doesn't export any plugins");
         return;
       }
-      if (pkg) packages.add(entryOf(pkg, plugins, { by: "suggested" }));
-      // A package that brings no tool would leave the card saying "loading…".
-      const toolId = this.#toolIn(plugins);
-      if (!toolId) {
-        this.#reportImportFailed(epoch, url, this.#noToolReason());
-        return;
-      }
       if (!pkg) {
         console.warn(
           `suggested module ${url} has no package.json, which isn't supported; skipping it`
         );
         this.#reportImportFailed(epoch, url, "it has no package.json");
+        return;
+      }
+      const entry = packages.add(entryOf(pkg, plugins, { by: "suggested" }));
+      // A package that brings no tool would leave the card saying "loading…".
+      // Its entry's plugins, which have their legacy names renamed.
+      const toolId = this.#toolIn(entry.plugins);
+      if (!toolId) {
+        this.#reportImportFailed(epoch, url, this.#noToolReason());
         return;
       }
       // The default tool only comes from a package list, so the reader's
