@@ -32,6 +32,7 @@ function stubFetchManifest(manifestByUrl: Record<string, unknown>) {
         ok: true,
         status: 200,
         json: async () => body,
+        text: async () => JSON.stringify(body),
       } as Response;
     })
   );
@@ -749,15 +750,12 @@ describe("importPackageFromHttpUrl error handling", () => {
   });
 
   it("throws with cause when package.json is fetched but isn't valid JSON", async () => {
-    const parseError = new SyntaxError("Unexpected token < in JSON");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => ({
         ok: true,
         status: 200,
-        json: async () => {
-          throw parseError;
-        },
+        text: async () => "<html>",
       }))
     );
 
@@ -767,7 +765,7 @@ describe("importPackageFromHttpUrl error handling", () => {
 
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toMatch(/couldn't parse it as JSON/);
-    expect(err.cause).toBe(parseError);
+    expect(err.cause).toBeInstanceOf(SyntaxError);
   });
 });
 

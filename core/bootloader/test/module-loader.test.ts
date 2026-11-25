@@ -3,10 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../src/emitted.js", () => ({ MODULE_LOADER_WORKER: "/loader.js" }));
 vi.mock("@inkandswitch/patchwork-filesystem", () => ({
   importPluginFromPackage: vi.fn(),
-  readPluginManifest: vi.fn(async () => undefined),
+  readPackageJson: vi.fn(async () => undefined),
+  hasPluginManifest: (json: any) => !!json?.patchwork?.plugins,
+  pluginsFromManifest: () => [{ type: "patchwork:tool", id: "t" }],
 }));
 
-import { readPluginManifest } from "@inkandswitch/patchwork-filesystem";
+import { readPackageJson } from "@inkandswitch/patchwork-filesystem";
 
 class FakeWorker extends EventTarget {
   static instances: FakeWorker[] = [];
@@ -130,14 +132,40 @@ describe("module loader worker", () => {
   });
 
   it("reads a package that lists its plugins in package.json without the worker", async () => {
-    const plugins = [{ type: "patchwork:tool", id: "t", load: async () => 1 }];
-    vi.mocked(readPluginManifest).mockResolvedValueOnce({ plugins });
-    await expect(load("automerge:a")).resolves.toEqual({ plugins });
+    const pkg = {
+      importUrl: "automerge:a",
+      base: "http://x/",
+      packageJson: { patchwork: { plugins: { "patchwork:tool": {} } } },
+      version: "h",
+    };
+    vi.mocked(readPackageJson).mockResolvedValueOnce(pkg);
+    await expect(load("automerge:a")).resolves.toEqual({
+      plugins: [{ type: "patchwork:tool", id: "t" }],
+      package: pkg,
+    });
     expect(workers()).toHaveLength(0);
   });
 
+  it("the worker path returns the package.json it read", async () => {
+    const pkg = {
+      importUrl: "automerge:a",
+      base: "http://x/",
+      packageJson: {},
+      version: "h",
+    };
+    vi.mocked(readPackageJson).mockResolvedValueOnce(pkg);
+    const result = load("automerge:a");
+    await started();
+    workers()[0].say({
+      type: "descriptors",
+      id: workers()[0].sent[0].id,
+      descriptors: [],
+    });
+    await expect(result).resolves.toEqual({ plugins: [], package: pkg });
+  });
+
   it("fails without the worker when package.json can't be read", async () => {
-    vi.mocked(readPluginManifest).mockRejectedValueOnce(new Error("HTTP 404"));
+    vi.mocked(readPackageJson).mockRejectedValueOnce(new Error("HTTP 404"));
     await expect(load("automerge:a")).rejects.toThrow("HTTP 404");
     expect(workers()).toHaveLength(0);
   });
