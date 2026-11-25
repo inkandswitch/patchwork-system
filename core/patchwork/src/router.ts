@@ -105,19 +105,25 @@ function whenPlugin(
 
 /**
  * A new document of datatype `type`, waiting for a package to bring the
- * datatype if none has yet.
+ * datatype if none has yet, until `loaded` (every package loaded) settles.
  */
 export async function createDocOfType<D>(
   repo: Repo,
   type: string,
+  loaded: Promise<unknown>,
   change?: (doc: D) => void,
   hive?: { addSyncServerRelayToDoc(url: AutomergeUrl): Promise<unknown> }
 ) {
   const view =
     packages.plugin(DATATYPE, type) ??
-    (await new Promise<PluginView>((resolve) =>
-      whenPlugin(DATATYPE, type, resolve)
-    ));
+    (await new Promise<PluginView>((resolve, reject) => {
+      const stop = whenPlugin(DATATYPE, type, resolve);
+      const giveUp = () => {
+        stop();
+        reject(new Error(`patchwork.create: no datatype "${type}"`));
+      };
+      void loaded.then(giveUp, giveUp);
+    }));
   const module = (await packages.load(view)) as
     | { init(doc: D, repo: Repo): void }
     | undefined;

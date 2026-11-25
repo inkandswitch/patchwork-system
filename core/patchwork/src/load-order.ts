@@ -138,6 +138,7 @@ export function preloadPlugins(
     }
   };
   const stops = [packages.on("added", check), packages.on("replaced", check)];
+  check();
   void until.finally(() => {
     for (const stop of stops) stop();
   });

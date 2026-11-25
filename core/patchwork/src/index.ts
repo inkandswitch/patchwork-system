@@ -379,7 +379,7 @@ async function doSetup(
     },
 
     create<D>(type: string, init?: (doc: D) => void) {
-      return createDocOfType(repo, type, init, hive);
+      return createDocOfType(repo, type, allLoaded, init, hive);
     },
     open(url: AutomergeUrl, openOptions: OpenOptions = {}) {
       rootElement.dispatchEvent(

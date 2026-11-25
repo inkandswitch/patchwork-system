@@ -277,4 +277,11 @@ describe("preloadPlugins", () => {
     await new Promise((r) => setTimeout(r, 0));
     expect(late).not.toHaveBeenCalled();
   });
+
+  it("loads a planned plugin that was already in the database", async () => {
+    const load = vi.fn(async () => () => () => {});
+    add("1", load);
+    preloadPlugins([{ pkg: [tool("preload-early")] }], new Promise(() => {}));
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+  });
 });

@@ -240,10 +240,13 @@ describe("the root view", () => {
 });
 
 describe("createDocOfType", () => {
+  type Fruit = Note & { colour?: string };
+  const never = new Promise<void>(() => {});
+
   it("waits for a datatype added later", async () => {
-    let made: Awaited<ReturnType<typeof createDocOfType<Note>>> | undefined;
-    void createDocOfType<Note>(repo, "router-test-later", (doc) => {
-      doc.title = "Quince";
+    let made: Awaited<ReturnType<typeof createDocOfType<Fruit>>> | undefined;
+    void createDocOfType<Fruit>(repo, "router-test-later", never, (doc) => {
+      doc.colour = "yellow";
     }).then((handle) => (made = handle));
     await ticks(20);
     expect(made).toBeUndefined();
@@ -251,7 +254,16 @@ describe("createDocOfType", () => {
     await vi.waitFor(() => expect(made).toBeDefined());
     expect(made!.doc()).toMatchObject({
       "@patchwork": { type: "router-test-later" },
-      title: "Quince",
+      title: "Untitled",
+      colour: "yellow",
     });
+  });
+
+  it("rejects for a datatype that never arrives once loading is done", async () => {
+    let done!: () => void;
+    const loaded = new Promise<void>((resolve) => (done = resolve));
+    const made = createDocOfType(repo, "router-test-nowhere", loaded);
+    done();
+    await expect(made).rejects.toThrow('no datatype "router-test-nowhere"');
   });
 });
