@@ -13,6 +13,7 @@ import {
 import {
   getFallbackTool,
   getRegistry,
+  getSupertypes,
   isLoadablePlugin,
   registerPlugins,
   type DatatypeDescription,
@@ -47,8 +48,10 @@ import {
 const log = debug("patchwork:elements:legacy");
 
 /**
- * Whether `tool` takes `type` only through a `*`: a generic fallback like a
- * raw viewer, not a tool built for that datatype.
+ * Whether `tool` supports `type` only through a `*` wildcard rather than by
+ * naming the datatype or one of its supertypes. A wildcard-only match means the
+ * tool is a generic fallback (e.g. a raw viewer), not a tool built for this
+ * datatype.
  */
 function isWildcardOnlyMatch(
   tool: ToolDescription,
@@ -56,7 +59,9 @@ function isWildcardOnlyMatch(
 ): boolean {
   const datatypes = tool.supportedDatatypes;
   const list = datatypes === "*" ? ["*"] : (datatypes ?? []);
-  return list.includes("*") && (type === undefined || !list.includes(type));
+  if (!list.includes("*")) return false;
+  if (type === undefined) return true;
+  return ![type, ...getSupertypes(type)].some((t) => list.includes(t));
 }
 
 /**
@@ -104,7 +109,8 @@ function otherTools(doc: HasPatchworkMetadata | undefined, except: string): Anyt
   if (sameKind.length) tools = sameKind;
   tools.sort(
     (a, b) =>
-      Number(isWildcardOnlyMatch(a, type)) - Number(isWildcardOnlyMatch(b, type))
+      Number(isWildcardOnlyMatch(a, type)) -
+      Number(isWildcardOnlyMatch(b, type))
   );
   return tools.map((tool) => ({ id: tool.id, name: tool.name ?? tool.id }));
 }
@@ -483,7 +489,10 @@ export class LegacyImpl {
               isChosenTool) ||
             (this.#state == "fallback" && isFallbackTool)
           ) {
-            if (loadedTool.importUrl !== this.#tool?.importUrl) {
+            if (
+              loadedTool.id !== this.#tool?.id ||
+              loadedTool.importUrl !== this.#tool?.importUrl
+            ) {
               await this.#restart();
             }
           }
@@ -491,9 +500,35 @@ export class LegacyImpl {
       }
     );
 
+    // Registering the doc's datatype, or one of its supertypes, can bring in a
+    // `conformsTo` that makes an already-registered tool a closer fit.
+    const removeDatatypeListener = getRegistry<DatatypeDescription>(
+      "patchwork:datatype"
+    ).on("registered", (added) => {
+      if (!this.#handle || this.#toolId) return;
+      const type = getType(this.#handle.doc());
+      if (!type) return;
+      if (added.id != type && !getSupertypes(type).includes(added.id)) return;
+      const fallback = getFallbackTool(this.#handle.doc());
+      if (!fallback) return;
+      if (fallback.id == this.#fallbackId && this.#state != State.unable) {
+        return;
+      }
+      this.#fallbackId = fallback.id;
+      if (!fallback.module) {
+        // The "loaded" listener mounts it once it's in.
+        if (isLoadablePlugin(fallback)) toolRegistry.load(fallback.id);
+      } else if (this.#state == State.unable) {
+        this.#queueRender();
+      } else if (this.#state == State.fallback) {
+        void this.#restart();
+      }
+    });
+
     this.#teardowns.add(() => {
       removeAddedListener();
       removeLoadedListener();
+      removeDatatypeListener();
     });
 
     const repo = this.#repo;
@@ -622,15 +657,17 @@ export class LegacyImpl {
     if (granted || revoked) void this.#restart();
   }
 
-  // Only when there's no fallback yet, or the new tool supports the doc's type
-  // (a specific match sorts ahead of a wildcard).
+  // A registration can shift the fallback only when we don't have one yet or
+  // the new tool supports the doc's type or a supertype (a closer match sorts
+  // ahead, so a supporting tool can displace the current pick).
   #couldChangeFallback(added: ToolDescription): boolean {
     if (!this.#fallbackId) return true;
     const supported = added.supportedDatatypes;
     if (!supported) return false;
     if (supported === "*" || supported.includes("*")) return true;
     const type = this.#handle ? getType(this.#handle.doc()) : undefined;
-    return type != null && supported.includes(type);
+    if (type == null) return false;
+    return [type, ...getSupertypes(type)].some((t) => supported.includes(t));
   }
 
   async #runTeardown(): Promise<void> {
@@ -684,9 +721,7 @@ export class LegacyImpl {
   // until their own cleanup runs, hence the in-flight check.
   #mayRender(epoch: number): boolean {
     return (
-      !this.#disposed &&
-      epoch === this.#initEpoch &&
-      !this.#teardown.pending
+      !this.#disposed && epoch === this.#initEpoch && !this.#teardown.pending
     );
   }
 
@@ -817,22 +852,20 @@ export class LegacyImpl {
     const handle = this.#handle!;
     const hasMetadata = !!doc && "@patchwork" in doc;
     const anything = anythingTool();
-    this.#showCard(
-      `missing-type:${hasMetadata}:${anything?.id ?? ""}`,
-      () =>
-        missingTypeCard({
-          hasMetadata,
-          anything,
-          onPeek: (id) => this.#peek(id),
-          knownTypes: knownTypes(),
-          // the change listener sees the new type and opens it with its tool
-          onSetType: (type) =>
-            handle.change((d) => {
-              const meta = (d as Partial<HasPatchworkMetadata>)["@patchwork"];
-              if (meta && typeof meta === "object") meta.type = type;
-              else d["@patchwork"] = { type };
-            }),
-        })
+    this.#showCard(`missing-type:${hasMetadata}:${anything?.id ?? ""}`, () =>
+      missingTypeCard({
+        hasMetadata,
+        anything,
+        onPeek: (id) => this.#peek(id),
+        knownTypes: knownTypes(),
+        // the change listener sees the new type and opens it with its tool
+        onSetType: (type) =>
+          handle.change((d) => {
+            const meta = (d as Partial<HasPatchworkMetadata>)["@patchwork"];
+            if (meta && typeof meta === "object") meta.type = type;
+            else d["@patchwork"] = { type };
+          }),
+      })
     );
   }
 
@@ -1001,12 +1034,14 @@ export class LegacyImpl {
    * in flight, `failed` why the last try didn't bring a tool.
    */
   #suggestedImport():
-    | { url: string; loading: boolean; failed?: string }
+    | {
+        url: string;
+        loading: boolean;
+        failed?: string;
+      }
     | undefined {
     if (!this.#docUrl || !this.#handle) return undefined;
-    const url = presentableImportUrl(
-      getSuggestedImportUrl(this.#handle.doc())
-    );
+    const url = presentableImportUrl(getSuggestedImportUrl(this.#handle.doc()));
     if (!url) return undefined;
     return {
       url,
