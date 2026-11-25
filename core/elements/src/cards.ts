@@ -458,30 +458,65 @@ export function notSharedCard(props: { contactCard?: string }): Card {
  * A tool that's registered but whose code didn't load: an import that
  * failed, a file that didn't arrive. Says which tool, what went wrong, and
  * lets you ask again; if that fails too, the view reloads the page.
+ * With `inPackage`, it was the package the tool comes from (a `package-url`)
+ * that didn't load, so it says that instead; with `missingFromPackage`, the
+ * package loaded but doesn't have the tool, so it says that.
  */
 export function toolFailedCard(props: {
   name: string;
   error: string;
-  onRetry: () => void;
+  /** the tool comes from a package (a `package-url`), and that didn't load */
+  inPackage?: boolean;
+  /** the package loaded but lacks this: a tool id, or "a tool for <type>" */
+  missingFromPackage?: string;
+  /** left out when asking again can't help: a `tool-url` that isn't a url */
+  onRetry?: () => void;
   /** the other tools that open this doc, read when the picker opens */
   tools: () => Anything[];
   onOpenWith: (toolId: string) => void;
 }): Card {
-  const retry = button(
-    "try again",
-    () => {
-      retry.disabled = true;
-      retry.textContent = "trying…";
-      props.onRetry();
-    },
-    true
-  );
+  const onRetry = props.onRetry;
+  const retry =
+    onRetry &&
+    button(
+      "try again",
+      () => {
+        retry!.disabled = true;
+        retry!.textContent = "trying…";
+        onRetry();
+      },
+      true
+    );
   const picker = toolPicker(props.tools, props.onOpenWith);
+  if (props.missingFromPackage) {
+    return {
+      element: sheet(
+        "tool-failed",
+        `the package doesn't have ${props.missingFromPackage}`,
+        h(
+          "p",
+          null,
+          "the doc is here and the package loaded, but there's no such tool in it."
+        ),
+        h("div", { class: "pw-card__actions" }, retry, picker.toggle),
+        picker.panel
+      ),
+      dispose: nothing,
+    };
+  }
   return {
     element: sheet(
       "tool-failed",
-      `can't load ${props.name}`,
-      h("p", null, "the doc is here, but the tool that shows it didn't load."),
+      props.inPackage
+        ? `can't load the package containing ${props.name}`
+        : `can't load ${props.name}`,
+      h(
+        "p",
+        null,
+        props.inPackage
+          ? "the doc is here, but the package containing the tool that shows it didn't load."
+          : "the doc is here, but the tool that shows it didn't load."
+      ),
       h("p", { class: "pw-card__notice" }, props.error),
       h("div", { class: "pw-card__actions" }, retry, picker.toggle),
       picker.panel
