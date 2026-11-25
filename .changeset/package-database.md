@@ -1,6 +1,6 @@
 ---
 "@inkandswitch/patchwork-filesystem": patch
-"@inkandswitch/patchwork-elements": patch
+"@inkandswitch/patchwork-elements": minor
 "@inkandswitch/patchwork-bootloader": patch
 "@inkandswitch/patchwork-plugins": patch
 "@inkandswitch/patchwork": minor

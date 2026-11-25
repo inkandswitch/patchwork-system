@@ -27,9 +27,11 @@ One package database, in memory, saved to IndexedDB.
   entry yet), a suggested package someone chose, or some JS through the
   deprecated `registerPlugins`. Each entry records who added it. For JS,
   that's the url it passed, plus `new Error().stack` to show a person.
-- **Every version is kept in IndexedDB.** Memory holds the newest version of
-  each package. Lookups are against memory, so they're synchronous. Asking
-  about older versions is async.
+- **Every version of a listed package is kept in IndexedDB.** Only entries a
+  package list added are saved. Memory holds the newest version of each
+  package. Lookups are against memory, so they're synchronous. Asking about
+  older versions is async. Saved entries are only read back into memory when
+  booting from last visit is on.
 - **The database loads plugins itself**, by importing a plugin's `export`
   against the package's base url. Only the deprecated `registerPlugins` can
   hand it a live `load()`. That one gets used, and isn't saved.
