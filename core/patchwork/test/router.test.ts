@@ -275,6 +275,56 @@ describe("a site that says where it is", () => {
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
   });
 
+  it("doesn't navigate again when a route represents a document by its bare ID", async () => {
+    const apples = note("Apples");
+    const id = apples.replace(/^automerge:/, "");
+    const params = new URLSearchParams({ doc: id, tool: "outline" });
+    const went = vi.fn(() => {
+      if (went.mock.calls.length < 3) {
+        window.dispatchEvent(new Event("hashchange"));
+      }
+    });
+    start({ params: () => new URLSearchParams(params), go: went });
+    await ticks();
+    expect(went).not.toHaveBeenCalled();
+    expect(params.get("doc")).toBe(id);
+    await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
+  });
+
+  it("navigates for other changes and doesn't push when returning to a bare ID", async () => {
+    const apples = note("Apples");
+    const id = apples.replace(/^automerge:/, "");
+    const route = makeRoute(new URLSearchParams({ doc: id }));
+    start(route.routing);
+    const pears = note("Pears");
+    open(pears);
+    expect(route.went).toHaveLength(1);
+    await route.move({ doc: id });
+    expect(route.went).toHaveLength(1);
+    root.dispatchEvent(
+      new CustomEvent("patchwork:open-document", {
+        detail: { url: apples, toolId: "outline" },
+      })
+    );
+    expect(route.went).toHaveLength(2);
+    expect(route.params().get("tool")).toBe("outline");
+  });
+
+  it("navigates when the same document is opened at different heads", async () => {
+    const handle = repo.create<Note>({
+      "@patchwork": { type: "router-test-note" },
+      title: "Apples",
+    });
+    const route = makeRoute(
+      new URLSearchParams({ doc: handle.url.replace(/^automerge:/, "") })
+    );
+    start(route.routing);
+    const pinned = handle.view(handle.heads()).url;
+    open(pinned);
+    expect(route.went).toHaveLength(1);
+    expect(route.params().get("doc")).toBe(pinned);
+  });
+
   it("uses the hash by default even if a window route exists", async () => {
     const route = makeRoute();
     Reflect.set(window, "patchworkRoute", route.routing);

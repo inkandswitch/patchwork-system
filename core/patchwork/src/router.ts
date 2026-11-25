@@ -205,8 +205,11 @@ export function createRouter({
     // Setting the hash to what it already is announces nothing; a route is
     // held to the same, or the open-document its announcement causes would
     // go there again without end.
-    else if (next !== serializeHashParams(routeParams())) {
-      siteRoute.go(params);
+    else {
+      const current = new URLSearchParams(routeParams());
+      const currentDoc = docParamToUrl(current.get("doc"));
+      if (currentDoc) current.set("doc", currentDoc);
+      if (next !== serializeHashParams(current)) siteRoute.go(params);
     }
     void tabTitle.follow(url, type);
   });
