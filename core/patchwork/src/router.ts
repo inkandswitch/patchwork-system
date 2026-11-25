@@ -105,7 +105,7 @@ export function createRouter({
 }: RouterParams): Router {
   const tabTitle = createTitle(repo, siteTitle);
   const routeParams = () =>
-    siteRoute?.params() ?? new URLSearchParams(window.location.hash.slice(1));
+    new URLSearchParams(siteRoute?.params() ?? window.location.hash.slice(1));
   // The frame the root shows when the hash names none, picked at the first
   // route, so going Back past a `frame=` link puts it back.
   let homeFrameToolId: string | undefined;
@@ -206,7 +206,7 @@ export function createRouter({
     // held to the same, or the open-document its announcement causes would
     // go there again without end.
     else {
-      const current = new URLSearchParams(routeParams());
+      const current = routeParams();
       const currentDoc = docParamToUrl(current.get("doc"));
       if (currentDoc) current.set("doc", currentDoc);
       if (next !== serializeHashParams(current)) siteRoute.go(params);

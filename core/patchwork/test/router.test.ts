@@ -275,6 +275,33 @@ describe("a site that says where it is", () => {
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
   });
 
+  it("doesn't mutate cached route params before navigating", async () => {
+    const apples = note("Apples");
+    const pears = note("Pears");
+    const current = new URLSearchParams({
+      doc: apples,
+      draft: "old-draft",
+      frame: "other-frame",
+    });
+    const before = current.toString();
+    const went = vi.fn((next: URLSearchParams) => {
+      expect(current.toString()).toBe(before);
+      expect(next.get("doc")).toBe(pears);
+      expect(next.has("draft")).toBe(false);
+      expect(next.get("frame")).toBe("other-frame");
+      current.delete("draft");
+      current.set("doc", pears);
+      window.dispatchEvent(new Event("hashchange"));
+    });
+    start({ params: () => current, go: went });
+    expect(went).not.toHaveBeenCalled();
+    open(pears);
+    await ticks();
+    expect(went).toHaveBeenCalledTimes(1);
+    expect(current.get("doc")).toBe(pears);
+    expect(location.hash).toBe("");
+  });
+
   it("doesn't navigate again when a route represents a document by its bare ID", async () => {
     const apples = note("Apples");
     const id = apples.replace(/^automerge:/, "");
