@@ -3,12 +3,12 @@ import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerg
 import { gateOnAccess } from "./keyhive-access.js";
 import {
   getRegistry,
-  isKeyhiveDoc,
   isLoadablePlugin,
   type LoadablePlugin,
   type LoadedPlugin,
   type PluginDescription,
 } from "@inkandswitch/patchwork-plugins";
+import { isKeyhiveDoc } from "@inkandswitch/patchwork-filesystem";
 import {
   OverlayRepo,
   registerPatchworkViewTag,

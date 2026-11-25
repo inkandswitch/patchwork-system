@@ -24,22 +24,22 @@ import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 import {
+  type AccountDoc,
   ModuleWatcher,
+  createDocOfDatatype2,
   packages,
+  resolveAccountHandle,
   trackPackagesViaServiceWorker,
 } from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
 import { registerPatchworkViewElement } from "@inkandswitch/patchwork-elements";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import {
-  type AccountDoc,
   type DatatypeDescription,
   type LoadedDatatype,
-  createDocOfDatatype2,
   followThemePreferences,
   getRegistry,
   registerPlugins,
-  resolveAccountHandle,
   startThemes,
   unregisterPlugins,
 } from "@inkandswitch/patchwork-plugins";

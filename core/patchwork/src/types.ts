@@ -7,7 +7,7 @@ import type {
 import type {
   AccountCreator,
   AccountDoc,
-} from "@inkandswitch/patchwork-plugins";
+} from "@inkandswitch/patchwork-filesystem";
 import type * as pluginsNS from "@inkandswitch/patchwork-plugins";
 import type { PublicReaderStatus } from "@inkandswitch/patchwork-bootloader";
 

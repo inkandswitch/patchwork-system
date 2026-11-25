@@ -1,6 +1,6 @@
 import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
-import { isKeyhiveDoc } from "@inkandswitch/patchwork-plugins";
+import { isKeyhiveDoc } from "@inkandswitch/patchwork-filesystem";
 import type { Teardowns } from "./lifecycle.js";
 
 type Access = Awaited<ReturnType<AutomergeRepoKeyhive["accessForDoc"]>>;

@@ -2,8 +2,8 @@ import type { Repo } from "@automerge/automerge-repo/slim";
 import type {
   AccountCreator,
   AccountDoc,
-} from "@inkandswitch/patchwork-plugins";
-import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
+  HasPatchworkMetadata,
+} from "@inkandswitch/patchwork-filesystem";
 
 async function createSubdoc<D>(
   repo: Repo,

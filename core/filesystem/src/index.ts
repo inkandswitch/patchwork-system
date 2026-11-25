@@ -1,4 +1,7 @@
+export * from "./account.js";
+export * from "./create-doc.js";
 export * from "./find-handle.js";
+export * from "./keyhive.js";
 export * from "./metadata.js";
 export * from "./module-watcher.js";
 export * from "./package-db/index.js";

@@ -28,7 +28,7 @@ import {
   subscribe,
   type SubscribeEvent,
 } from "@inkandswitch/patchwork-providers";
-import type { AccountDoc } from "./account.js";
+import type { AccountDoc } from "@inkandswitch/patchwork-filesystem";
 import { getRegistry } from "./registry/index.js";
 import type { LoadablePlugin, PluginDescription } from "./registry/types.js";
 

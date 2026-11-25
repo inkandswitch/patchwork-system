@@ -8,8 +8,8 @@ import {
   type DocumentId,
   type Repo,
 } from "@automerge/vanillajs/slim";
+import type { AccountDoc } from "@inkandswitch/patchwork-filesystem";
 import {
-  type AccountDoc,
   type DatatypeDescription,
   type DatatypeImplementation,
   type ToolDescription,
