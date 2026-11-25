@@ -238,6 +238,68 @@ describe("the registry over the package database", () => {
   });
 });
 
+describe("the registry over a listed package", () => {
+  const listed = (type: string, url: string, ids: string[]) =>
+    packages.add({
+      key: sourceOf(url)!,
+      version: "c3",
+      importUrl: url,
+      plugins: ids.map((id) => ({ type, id, name: id })),
+      addedBy: { by: "package-list", entry: `automerge:${ID}` },
+    });
+
+  it("register on a listed package keeps its other plugins and its package-list origin", () => {
+    const type = "test:listed-register";
+    const url = at(ID, v1);
+    listed(type, url, ["a", "b"]);
+
+    getRegistry(type).register(plugin(type, "extra"), url);
+
+    const entry = packages.get(sourceOf(url)!)!;
+    expect(entry.plugins.map((p) => p.id)).toEqual(["a", "b", "extra"]);
+    expect(entry.addedBy.map((a) => a.by)).toEqual(["package-list", "js"]);
+    expect(getRegistry(type).has("a")).toBe(true);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("remove on a listed package keeps its package-list origin", () => {
+    const type = "test:listed-remove";
+    const url = at(ID, v1);
+    listed(type, url, ["a", "b"]);
+
+    expect(getRegistry(type).remove("a")).toBe(true);
+
+    const entry = packages.get(sourceOf(url)!)!;
+    expect(entry.plugins.map((p) => p.id)).toEqual(["b"]);
+    expect(entry.addedBy).toEqual([
+      { by: "package-list", entry: `automerge:${ID}` },
+    ]);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("an id another package still provides is registered again, not removed", () => {
+    const type = "test:shadowed";
+    const a = "https://example.test/shadow-a.js";
+    const b = "https://example.test/shadow-b.js";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "shared")], a);
+    registerPlugins([plugin(type, "shared"), plugin(type, "own")], b);
+    const events: string[] = [];
+    registry.on("registered", (p) => void events.push(`registered ${p.id} ${p.importUrl}`));
+    registry.on("removed", (id) => void events.push(`removed ${id}`));
+
+    registerPlugins([plugin(type, "own")], b);
+    expect(events).toEqual([`registered own ${b}`, `registered shared ${a}`]);
+
+    events.length = 0;
+    registerPlugins([plugin(type, "shared")], b);
+    events.length = 0;
+    unregisterPlugins(b);
+    expect(events).toEqual([`registered shared ${a}`]);
+    unregisterPlugins(a);
+  });
+});
+
 describe("PluginRegistry.loadWhenReady", () => {
   const description = (id: string, load: () => Promise<unknown>) =>
     ({ type: "test:when-ready", id, name: id, load }) as any;

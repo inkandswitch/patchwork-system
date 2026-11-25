@@ -39,6 +39,21 @@ describe("PackageDatabase", () => {
     expect(db.all()).toEqual([b]);
   });
 
+  it("an addedBy array replaces the adders instead of merging into them", () => {
+    const db = new PackageDatabase();
+    db.add(entry("a"));
+    db.add({ ...entry("a"), addedBy: { by: "suggested" } });
+
+    const b = db.add({
+      ...entry("b"),
+      addedBy: [{ by: "package-list", entry: "site" }],
+    });
+    expect(b.addedBy).toEqual([{ by: "package-list", entry: "site" }]);
+    const same = db.add({ ...entry("b"), addedBy: [{ by: "suggested" }] });
+    expect(same).toBe(b);
+    expect(b.addedBy).toEqual([{ by: "suggested" }]);
+  });
+
   it("same version merges addedBy and fires nothing", () => {
     const db = new PackageDatabase();
     const first = db.add(entry("a"));

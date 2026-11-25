@@ -45,24 +45,27 @@ export class PackageDatabase {
     this.#importModule = options.importModule ?? importModule;
   }
 
+  /** An `addedBy` array replaces the adders; one adder joins them. */
   add(
-    input: Omit<PackageEntry, "addedBy" | "addedAt"> & { addedBy: AddedBy },
+    input: Omit<PackageEntry, "addedBy" | "addedAt"> & {
+      addedBy: AddedBy | AddedBy[];
+    },
   ): PackageEntry {
     const { addedBy, ...rest } = input;
+    const adders = (list: AddedBy[]) =>
+      Array.isArray(addedBy) ? [...addedBy] : mergeAddedBy(list, addedBy);
     const plugins = rest.plugins.map(rename);
     const previous = this.#entries.get(rest.key);
     const sameVersion = previous?.version === rest.version;
     if (previous && sameVersion && !plugins.some(isLive)) {
-      mergeAddedBy(previous.addedBy, addedBy);
+      previous.addedBy = adders(previous.addedBy);
       this.#save(previous);
       return previous;
     }
     const entry: PackageEntry = {
       ...rest,
       plugins,
-      addedBy: previous && sameVersion
-        ? mergeAddedBy([...previous.addedBy], addedBy)
-        : [addedBy],
+      addedBy: adders(previous && sameVersion ? [...previous.addedBy] : []),
       addedAt: Date.now(),
     };
     this.#entries.delete(entry.key);

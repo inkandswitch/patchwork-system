@@ -26,10 +26,6 @@ function isAsyncFunction(fn: unknown) {
   );
 }
 
-// Each register and remove is a new version, so the database never merges it
-// into the one before.
-let versions = 0;
-
 /**
  * The plugins of one type in the package database.
  *
@@ -49,7 +45,7 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
     packages.on("removed", (entry) => {
       const ids = this.#ids(entry);
       if (!ids.length) return;
-      for (const id of ids) this.#events.emit("removed", id);
+      this.#dropped(ids);
       this.#events.emit("changed");
     });
     packages.on("loaded", (view) => {
@@ -70,8 +66,18 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
         this.#events.emit("registered", view as unknown as Plugin<D, I>);
       }
     }
-    for (const id of dropped) this.#events.emit("removed", id);
+    this.#dropped(dropped);
     this.#events.emit("changed");
+  }
+
+  // An id another package still provides is that package's now.
+  #dropped(ids: string[]) {
+    const views = this.#views();
+    for (const id of ids) {
+      const view = views.get(id);
+      if (view) this.#events.emit("registered", view as unknown as Plugin<D, I>);
+      else this.#events.emit("removed", id);
+    }
   }
 
   #ids(entry: PackageEntry): string[] {
@@ -86,21 +92,32 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
     return new Map(packages.plugins(this.#type).map((view) => [view.id, view]));
   }
 
+  /**
+   * Add or replace a plugin in the package `importUrl` is a version of,
+   * keeping its other plugins and whoever added it.
+   */
   register(plugin: LoadablePlugin<D, I>, importUrl: string) {
-    this.#type ??= plugin.type;
-    const key = sourceOf(importUrl)!;
+    const type = (this.#type ??= plugin.type);
+    const url = importUrl || plugin.importUrl || "";
+    const key = sourceOf(url)!;
+    const existing = this.#views().get(plugin.id);
+    if (existing && sourceOf(existing.importUrl) !== key) {
+      console.warn(
+        `overriding "${plugin.id}" provided by "${existing.importUrl}" with new plugin provided by "${url}"`
+      );
+    }
     const entry = packages.get(key);
-    const others = entry?.addedBy.every((added) => added.by === "js")
-      ? entry.plugins.filter(
-          (p) => !(p.type === plugin.type && p.id === plugin.id)
-        )
-      : [];
+    const others = (entry?.plugins ?? []).filter(
+      (p) => !(p.type === type && p.id === plugin.id)
+    );
+    // The plugin is live, so this is never merged into the entry it replaces.
     packages.add({
+      ...entry,
       key,
-      version: `${importUrl}#${++versions}`,
-      importUrl,
-      plugins: [...others, plugin as unknown as LivePlugin],
-      addedBy: { by: "js", url: importUrl, stack: new Error().stack ?? "" },
+      version: entry?.version ?? url,
+      importUrl: entry?.importUrl ?? url,
+      plugins: [...others, { ...plugin, type } as unknown as LivePlugin],
+      addedBy: { by: "js", url, stack: new Error().stack ?? "" },
     });
   }
 
@@ -212,12 +229,12 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
       (p) => !(p.type === this.#type && p.id === id)
     );
     if (!plugins.length) return packages.remove(entry.key);
-    const url = entry.importUrl;
+    // A version of its own, so it isn't merged away, keeping who added it.
     packages.add({
       ...entry,
-      version: `${url}#${++versions}`,
+      version: `${entry.version}-${id}`,
       plugins,
-      addedBy: { by: "js", url, stack: new Error().stack ?? "" },
+      addedBy: entry.addedBy,
     });
     return true;
   }
