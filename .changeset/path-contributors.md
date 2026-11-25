@@ -1,0 +1,5 @@
+---
+"@inkandswitch/patchwork-filesystem": minor
+---
+
+`resolvePath` walks documents through path contributors. A `PathContributor` says how one kind of document is walked: `lookup(node, names)` finds a child and reports how many names it used, and `list(node)` gives every child. Following a link to the next document is the walker's job, so a contributor only ever reads the node it is given. `directoryContributor` and `folderContributor` replace the two built-in folder strategies and resolve the same paths as before, with one difference: a folder entry that is not an object is skipped, where it used to throw. `PathContributor`, `Child`, `Lookup`, `contributorFor`, `CONTRIBUTORS` and `asLink` are exported from `@inkandswitch/patchwork-filesystem`; `FolderStrategy` stays as a deprecated alias of `PathContributor`. This changes the public `FolderStrategy` shape: it no longer exposes `resolve`. Existing implementations must import `PathContributor` and provide `kind`, `lookup(node, names)` and `list(node)` instead, leaving link traversal to the walker.
