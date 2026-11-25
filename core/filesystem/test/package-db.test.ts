@@ -5,17 +5,19 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+type Added = Parameters<PackageDatabase["add"]>[0];
+
 function entry(
   version: string,
   plugins: PackageEntry["plugins"] = [],
-  more: Partial<PackageEntry> = {},
-) {
+  more: Partial<Added> = {},
+): Added {
   return {
     key: "https://x.test/p/",
     version,
     importUrl: "https://x.test/p/",
     plugins,
-    addedBy: { by: "package-url" } as const,
+    addedBy: { by: "package-url" },
     ...more,
   };
 }
