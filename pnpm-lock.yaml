@@ -138,7 +138,7 @@ importers:
         version: link:../filesystem
       '@inkandswitch/patchwork-plugins':
         specifier: workspace:^
-        version: link:../plugins
+        version: link:../../packages/plugins
       '@inkandswitch/patchwork-providers':
         specifier: workspace:^
         version: link:../../packages/providers/core
@@ -316,9 +316,6 @@ importers:
       '@inkandswitch/patchwork-filesystem':
         specifier: workspace:^
         version: link:../filesystem
-      '@inkandswitch/patchwork-plugins':
-        specifier: workspace:^
-        version: link:../plugins
       '@inkandswitch/patchwork-providers':
         specifier: workspace:^
         version: link:../../packages/providers/core
@@ -347,49 +344,6 @@ importers:
       vite:
         specifier: ^7.3.5
         version: 7.3.6(@types/node@24.13.3)
-
-  core/plugins:
-    dependencies:
-      '@automerge/automerge-repo':
-        specifier: npm:@chee/automerge-repo@2.6.0-rabbit.2
-        version: '@chee/automerge-repo@2.6.0-rabbit.2'
-      '@inkandswitch/patchwork-providers':
-        specifier: workspace:^
-        version: link:../../packages/providers/core
-      '@types/debug':
-        specifier: ^4.1.13
-        version: 4.1.13
-      '@types/node':
-        specifier: ^20.19.41
-        version: 20.19.43
-      debug:
-        specifier: ^4.4.3
-        version: 4.4.3
-      eventemitter3:
-        specifier: ^5.0.4
-        version: 5.0.4
-      resolve.exports:
-        specifier: ^2.0.3
-        version: 2.0.3
-    devDependencies:
-      '@automerge/automerge':
-        specifier: 3.5.0
-        version: 3.5.0
-      '@automerge/automerge-repo-keyhive':
-        specifier: 0.8.0-alpha.1
-        version: 0.8.0-alpha.1(ws@8.21.1)
-      '@inkandswitch/patchwork-elements':
-        specifier: workspace:^
-        version: link:../elements
-      '@inkandswitch/patchwork-filesystem':
-        specifier: workspace:^
-        version: link:../filesystem
-      '@types/react':
-        specifier: 'catalog:'
-        version: 18.3.1
-      happy-dom:
-        specifier: ^20.0.0
-        version: 20.11.0
 
   packages/e2e:
     dependencies:
@@ -422,6 +376,49 @@ importers:
       vitest:
         specifier: ^3.2.6
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(@vitest/ui@3.2.7)(happy-dom@20.11.0)
+
+  packages/plugins:
+    dependencies:
+      '@automerge/automerge-repo':
+        specifier: npm:@chee/automerge-repo@2.6.0-rabbit.2
+        version: '@chee/automerge-repo@2.6.0-rabbit.2'
+      '@inkandswitch/patchwork-providers':
+        specifier: workspace:^
+        version: link:../providers/core
+      '@types/debug':
+        specifier: ^4.1.13
+        version: 4.1.13
+      '@types/node':
+        specifier: ^20.19.41
+        version: 20.19.43
+      debug:
+        specifier: ^4.4.3
+        version: 4.4.3
+      eventemitter3:
+        specifier: ^5.0.4
+        version: 5.0.4
+      resolve.exports:
+        specifier: ^2.0.3
+        version: 2.0.3
+    devDependencies:
+      '@automerge/automerge':
+        specifier: 3.5.0
+        version: 3.5.0
+      '@automerge/automerge-repo-keyhive':
+        specifier: 0.8.0-alpha.1
+        version: 0.8.0-alpha.1(ws@8.21.1)
+      '@inkandswitch/patchwork-elements':
+        specifier: workspace:^
+        version: link:../../core/elements
+      '@inkandswitch/patchwork-filesystem':
+        specifier: workspace:^
+        version: link:../../core/filesystem
+      '@types/react':
+        specifier: 'catalog:'
+        version: 18.3.1
+      happy-dom:
+        specifier: ^20.0.0
+        version: 20.11.0
 
   packages/providers/core:
     dependencies:

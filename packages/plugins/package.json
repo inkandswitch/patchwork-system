@@ -3,7 +3,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/inkandswitch/patchwork-system.git",
-    "directory": "core/plugins"
+    "directory": "packages/plugins"
   },
   "type": "module",
   "version": "1.2.9",

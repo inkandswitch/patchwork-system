@@ -5,7 +5,7 @@ export default defineConfig({
     workspace: [
       "core/bootloader",
       "core/filesystem",
-      "core/plugins",
+      "packages/plugins",
       "core/patchwork",
       "packages/edge-handles",
       "packages/providers/core",

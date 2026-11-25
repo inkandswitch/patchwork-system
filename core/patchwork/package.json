@@ -95,7 +95,6 @@
     "@inkandswitch/patchwork-bootloader": "workspace:^",
     "@inkandswitch/patchwork-elements": "workspace:^",
     "@inkandswitch/patchwork-filesystem": "workspace:^",
-    "@inkandswitch/patchwork-plugins": "workspace:^",
     "@inkandswitch/patchwork-providers": "workspace:^",
     "@types/debug": "^4.1.13",
     "debug": "^4.4.3",
