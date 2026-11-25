@@ -1396,6 +1396,32 @@ describe("ModuleWatcher package database", () => {
     }
   });
 
+  it("a site list that fails to read doesn't prune its saved packages", async () => {
+    stubFetchManifest({});
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const watcher = new ModuleWatcher(
+      {} as unknown as Repo,
+      { system: "http://example.test/modules.json" },
+      () => {}
+    );
+    const database = new PackageDatabase();
+    watcher.database = database;
+    database.add({
+      ...at("automerge:saved#v"),
+      key: "automerge:saved",
+      plugins: [],
+      addedBy: { by: "package-list", entry: "automerge:saved" },
+    });
+    try {
+      await watcher.doneLoading;
+      await watcher.forgetUnlisted();
+      expect(database.get("automerge:saved")).toBeDefined();
+    } finally {
+      warn.mockRestore();
+      watcher.dispose();
+    }
+  });
+
   it("a module url isn't added", async () => {
     const manifestUrl = "http://example.test/modules.json";
     const moduleUrl = dataModule(

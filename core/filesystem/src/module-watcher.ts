@@ -230,6 +230,8 @@ export class ModuleWatcher extends EventTarget {
   #sourcesRead = gate();
   // Module urls already warned about having no package.json.
   #warnedModuleUrls = new Set<string>();
+  // A source failed to read, so the list isn't whole: nothing is pruned.
+  #incomplete = false;
 
   /**
    * Told the url the module was imported from (pinned to heads, for an
@@ -305,6 +307,7 @@ export class ModuleWatcher extends EventTarget {
           `module settings source "${name}" (${url}) failed to load; skipping`,
           result.reason
         );
+        this.#incomplete = true;
         continue;
       }
       const value = result.value;
@@ -662,9 +665,10 @@ export class ModuleWatcher extends EventTarget {
    */
   async forgetUnlisted(): Promise<void> {
     const database = this.database;
-    if (!database) return;
+    if (!database || this.#incomplete) return;
     // A removal before hydration finishes wouldn't stick.
     await database.ready.catch(() => {});
+    if (this.#disposed) return;
     for (const entry of database.all()) {
       const unlisted = entry.addedBy.every(
         (added) =>
