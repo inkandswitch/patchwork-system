@@ -16,7 +16,7 @@ export const defaultImportConditions = ["patchwork", "browser", "import"];
 // same URL can never be retried in this realm. Retrying under a distinct URL
 // gets a fresh entry; the heads-pinned URLs make it safe, since the content at
 // a given set of heads can't change.
-async function importModule(entryPointUrl: string) {
+export async function importModule(entryPointUrl: string): Promise<any> {
   try {
     return await import(/* @vite-ignore */ entryPointUrl);
   } catch (cause) {
@@ -35,12 +35,14 @@ export async function importPackageFromFolderDocUrl(
   folderDocUrl: AutomergeUrl,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions,
+  importer: (url: string) => Promise<any> = importModule,
 ) {
   log(`importPackage ${folderDocUrl}... (subpath: ${subpath})`);
   return importFromPackage(
     await locateFolderDocPackage(folderDocUrl),
     subpath,
     conditions,
+    importer,
   );
 }
 
@@ -48,8 +50,14 @@ export async function importPackageFromHttpUrl(
   url: string,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions,
+  importer: (url: string) => Promise<any> = importModule,
 ) {
-  return importFromPackage(await locateHttpPackage(url), subpath, conditions);
+  return importFromPackage(
+    await locateHttpPackage(url),
+    subpath,
+    conditions,
+    importer,
+  );
 }
 
 /**
@@ -60,10 +68,11 @@ export async function importPackage(
   url: string,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions,
+  importer: (url: string) => Promise<any> = importModule,
 ) {
   return isValidAutomergeUrl(url)
-    ? importPackageFromFolderDocUrl(url, subpath, conditions)
-    : importPackageFromHttpUrl(url, subpath, conditions);
+    ? importPackageFromFolderDocUrl(url, subpath, conditions, importer)
+    : importPackageFromHttpUrl(url, subpath, conditions, importer);
 }
 
 /**
@@ -187,10 +196,11 @@ async function importFromPackage(
   location: PackageLocation,
   subpath: string,
   conditions: string[],
+  importer: (url: string) => Promise<any>,
 ) {
   if (location.kind === "module") {
     log(`importing ${location.href.slice(-60)}`);
-    return importModule(location.href);
+    return importer(location.href);
   }
   const { base, pkgJson } = location;
   // A package that lists its plugins in package.json says what they are
@@ -205,7 +215,7 @@ async function importFromPackage(
     base,
   ).href;
   log(`importing ${entryPointUrl.slice(-60)}`);
-  return importModule(entryPointUrl);
+  return importer(entryPointUrl);
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -316,8 +326,9 @@ export async function importPluginFromPackage(
   pluginId: string,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions,
+  importer: (url: string) => Promise<any> = importModule,
 ) {
-  const mod = await importPackage(packageUrl, subpath, conditions);
+  const mod = await importPackage(packageUrl, subpath, conditions, importer);
   const plugins: any[] = Array.isArray(mod?.plugins) ? mod.plugins : [];
   const plugin = plugins.find(
     (p) => p?.type === pluginType && p?.id === pluginId,
@@ -331,7 +342,7 @@ export async function importPluginFromPackage(
     return plugin.load();
   }
   if (typeof plugin.import === "string") {
-    return import(/* @vite-ignore */ plugin.import);
+    return importer(plugin.import);
   }
   throw new Error(
     `Plugin "${pluginType}:${pluginId}" at ${packageUrl} has no load() function or import URL`,
