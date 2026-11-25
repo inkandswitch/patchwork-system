@@ -57,7 +57,12 @@ export class PackageDatabase {
     const plugins = rest.plugins.map(rename);
     const previous = this.#entries.get(rest.key);
     const sameVersion = previous?.version === rest.version;
-    if (previous && sameVersion && !plugins.some(isLive)) {
+    // Only an add of exactly what's there is merged into it.
+    const same = previous && sameVersion &&
+      previous.importUrl === rest.importUrl &&
+      JSON.stringify(previous.plugins) === JSON.stringify(plugins) &&
+      !plugins.some(isLive);
+    if (same) {
       previous.addedBy = adders(previous.addedBy);
       this.#save(previous);
       return previous;
@@ -90,10 +95,18 @@ export class PackageDatabase {
     return true;
   }
 
-  /** Hydrate from the database called `name`, and save to it from now on. */
-  open(name: string): Promise<void> {
+  /**
+   * Hydrate from the database called `name`, and save to it from now on.
+   * With `hydrate: false` nothing saved is loaded, and `ready` doesn't wait.
+   */
+  open(
+    name: string,
+    { hydrate = true }: { hydrate?: boolean } = {},
+  ): Promise<void> {
     if (typeof indexedDB === "undefined") return Promise.resolve();
-    return this.ready = this.#open(name);
+    const opened = this.#open(name, hydrate);
+    if (hydrate) this.ready = opened;
+    return opened;
   }
 
   /** Every saved version of a package, oldest first. */
@@ -134,14 +147,23 @@ export class PackageDatabase {
     );
   }
 
+  /**
+   * The newest plugin with this id, preferring one that something other than
+   * a `<patchwork-view package-url>` added.
+   */
   plugin(type: string, id: string): PluginView | undefined {
     const entries = this.all();
+    let fallback: PluginView | undefined;
     for (let i = entries.length - 1; i >= 0; i--) {
       const plugin = entries[i].plugins.find(
         (plugin) => plugin.type === type && plugin.id === id,
       );
-      if (plugin) return this.#view(entries[i], plugin);
+      if (!plugin) continue;
+      const view = this.#view(entries[i], plugin);
+      if (entries[i].addedBy.some((a) => a.by !== "package-url")) return view;
+      fallback ??= view;
     }
+    return fallback;
   }
 
   load(view: PluginView): Promise<unknown> {
@@ -183,9 +205,9 @@ export class PackageDatabase {
     };
   }
 
-  async #open(name: string) {
+  async #open(name: string, hydrate: boolean) {
     const db = await openSaved(name);
-    const hydrated = (await readCurrent(db))
+    const hydrated = (hydrate ? await readCurrent(db) : [])
       .filter((entry) => !this.#entries.has(entry.key))
       .sort((a, b) => a.addedAt - b.addedAt);
     // Saved entries are older than what was added meanwhile.
@@ -199,8 +221,10 @@ export class PackageDatabase {
     await this.#writes;
   }
 
+  // Only what a package list added comes back next visit.
   #save(entry: PackageEntry) {
-    if (entry.plugins.some(isLive)) return;
+    const listed = entry.addedBy.some((a) => a.by === "package-list");
+    if (!listed || entry.plugins.some(isLive)) return;
     this.#write(() => writeCurrent(this.#saved!, entry));
   }
 

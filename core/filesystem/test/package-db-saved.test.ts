@@ -1,5 +1,5 @@
 import "fake-indexeddb/auto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { PackageDatabase } from "../src/package-db/index.js";
 
 type Added = Parameters<PackageDatabase["add"]>[0];
@@ -10,7 +10,7 @@ function entry(version: string, more: Partial<Added> = {}): Added {
     version,
     importUrl: "https://x.test/p/",
     plugins: [{ type: "patchwork:tool", id: "t" }],
-    addedBy: { by: "package-url" },
+    addedBy: { by: "package-list", entry: "x" },
     ...more,
   };
 }
@@ -34,7 +34,7 @@ describe("saved package database", () => {
     await second.ready;
     expect(second.get("https://x.test/p/")?.version).toBe("v2");
     expect(second.get("https://x.test/p/")?.addedBy).toEqual([
-      { by: "package-url" },
+      { by: "package-list", entry: "x" },
     ]);
     expect(added).toEqual(["v2"]);
   });
@@ -58,6 +58,47 @@ describe("saved package database", () => {
     const second = new PackageDatabase();
     await second.open(dbName);
     expect(second.all()).toEqual([]);
+  });
+
+  it("only listed entries are saved", async () => {
+    const dbName = name();
+    const first = new PackageDatabase();
+    await first.open(dbName);
+    const at = (path: string) => ({
+      key: `https://x.test/${path}/`,
+      importUrl: `https://x.test/${path}/`,
+    });
+    first.add(entry("v1", { ...at("viewed"), addedBy: { by: "package-url" } }));
+    first.add(entry("v1", { ...at("suggested"), addedBy: { by: "suggested" } }));
+    first.add(entry("v1", at("listed")));
+    await first.versions("https://x.test/listed/");
+    const second = new PackageDatabase();
+    await second.open(dbName);
+    expect(second.all().map((e) => e.key)).toEqual(["https://x.test/listed/"]);
+  });
+
+  it("open with hydrate false saves but doesn't load saved entries", async () => {
+    const dbName = name();
+    const first = new PackageDatabase();
+    await first.open(dbName);
+    first.add(entry("v1"));
+    await first.versions("https://x.test/p/");
+
+    const second = new PackageDatabase();
+    const added = vi.fn();
+    second.on("added", added);
+    const opened = second.open(dbName, { hydrate: false });
+    await second.ready;
+    await opened;
+    expect(second.all()).toEqual([]);
+    expect(added).not.toHaveBeenCalled();
+    second.add(entry("v2"));
+    expect((await second.versions("https://x.test/p/")).map((e) => e.version))
+      .toEqual(["v1", "v2"]);
+
+    const third = new PackageDatabase();
+    await third.open(dbName);
+    expect(third.get("https://x.test/p/")?.version).toBe("v2");
   });
 
   it("removed packages aren't current but keep their versions", async () => {

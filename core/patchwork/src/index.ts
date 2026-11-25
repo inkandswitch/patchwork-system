@@ -255,10 +255,15 @@ async function doSetup(
 
   moduleWatcher.database = packages;
   packages.onNews((key) => moduleWatcher.recheck(key));
-  // Saved by account. One that can't be opened stays in memory.
+  const fromLastVisit = bootFromLastVisit(
+    options.bootFromLastVisit,
+    localStorage
+  );
+  // Saved by account. One that can't be opened stays in memory. Last visit's
+  // entries are only read back when they're booted from.
   const openPackages = (accountUrl: string) =>
     packages
-      .open(`patchwork-packages ${accountUrl}`)
+      .open(`patchwork-packages ${accountUrl}`, { hydrate: fromLastVisit })
       .catch((error) =>
         console.warn("couldn't open the saved package database", error)
       );
@@ -346,10 +351,6 @@ async function doSetup(
     // Last visit's packages, as soon as they're read back, and newer versions
     // replace them as they load. Or, with none saved (a first visit) to pick
     // a frame tool from, this visit's.
-    const fromLastVisit = bootFromLastVisit(
-      options.bootFromLastVisit,
-      localStorage
-    );
     if (fromLastVisit) await packages.ready.catch(() => {});
     if (!fromLastVisit || !packages.all().length) await firstToolsLoaded;
     router = createRouter({

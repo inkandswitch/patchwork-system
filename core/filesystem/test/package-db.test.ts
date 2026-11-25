@@ -74,6 +74,34 @@ describe("PackageDatabase", () => {
     ]);
   });
 
+  it("a reload at a new importUrl with the same version replaces", () => {
+    const db = new PackageDatabase();
+    db.add(entry("a", [{ type: "t", id: "x" }]));
+    const replaced = vi.fn();
+    db.on("replaced", replaced);
+
+    const added = db.add(
+      entry("a", [{ type: "t", id: "x" }], {
+        importUrl: "https://x.test/p/?v=2",
+        base: "https://x.test/p/",
+      }),
+    );
+    expect(replaced).toHaveBeenCalledOnce();
+    expect(db.get("https://x.test/p/")).toBe(added);
+    expect(db.plugin("t", "x")!.importUrl).toBe("https://x.test/p/?v=2");
+  });
+
+  it("same version and importUrl but different plugins replaces", () => {
+    const db = new PackageDatabase();
+    db.add(entry("a", [{ type: "t", id: "x" }]));
+    const replaced = vi.fn();
+    db.on("replaced", replaced);
+
+    db.add(entry("a", [{ type: "t", id: "x" }, { type: "t", id: "y" }]));
+    expect(replaced).toHaveBeenCalledOnce();
+    expect(db.plugin("t", "y")).toBeDefined();
+  });
+
   it("a live add at the same version replaces", async () => {
     const db = new PackageDatabase();
     db.add(entry("a", [{ type: "t", id: "x", load: async () => "old" }]));
@@ -141,6 +169,23 @@ describe("PackageDatabase", () => {
     expect(view.package).toBe(db.get("https://x.test/two/"));
     expect(db.plugins("t").map((p) => p.name)).toEqual(["one", "two"]);
     expect(db.plugins("other")).toEqual([]);
+  });
+
+  it("plugin() prefers a listed entry over a package-url one with the same id", () => {
+    const db = new PackageDatabase();
+    const one = { key: "https://x.test/one/", importUrl: "https://x.test/one/" };
+    const two = { key: "https://x.test/two/", importUrl: "https://x.test/two/" };
+    db.add(
+      entry("a", [{ type: "t", id: "x", name: "listed" }], {
+        ...one,
+        addedBy: { by: "package-list", entry: "site" },
+      }),
+    );
+    db.add(entry("a", [{ type: "t", id: "x", name: "viewed" }], two));
+    expect(db.plugin("t", "x")!.name).toBe("listed");
+
+    db.remove(one.key);
+    expect(db.plugin("t", "x")!.name).toBe("viewed");
   });
 
   it("legacy names are renamed", () => {
