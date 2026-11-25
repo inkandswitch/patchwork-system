@@ -124,7 +124,7 @@ async function packageJson(url: string): Promise<unknown> {
 // unless url is a different pinned version
 function knownPackageJson(url: string): Record<string, unknown> | undefined {
   const entry = packages.get(sourceOf(url) ?? url);
-  if (!entry || (entry.importUrl !== url && url.includes("#"))) return undefined;
+  if (!entry || (entry.importUrl !== url && /#|%23/i.test(url))) return undefined;
   return entry.packageJson as Record<string, unknown> | undefined;
 }
 

@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Repo } from "@automerge/automerge-repo/slim";
+import {
+  encodeHeads,
+  generateAutomergeUrl,
+  parseAutomergeUrl,
+  stringifyAutomergeUrl,
+  type Repo,
+} from "@automerge/automerge-repo/slim";
 import * as Automerge from "@automerge/automerge";
 import {
   bareAutomergeUrl,
@@ -87,6 +93,33 @@ describe("readClaims and the package database", () => {
     add({ name: "from-db" });
     expect(await readClaims(key + "#abc")).toBeUndefined();
     expect(fetch).toHaveBeenCalled();
+  });
+
+  it("fetches for a different pinned version in a service-worker url", async () => {
+    const bare = generateAutomergeUrl();
+    const heads = Automerge.getHeads(Automerge.change(Automerge.init(), (d: any) => { d.a = 1; }));
+    const doc = encodeURIComponent(bare);
+    const key = `https://host.example.com/${doc}/index.js`;
+    const fetch = vi.fn(async () => new Response("", { status: 404 }));
+    vi.stubGlobal("fetch", fetch);
+    packages.add({
+      key,
+      version: "1",
+      importUrl: key,
+      packageJson: { name: "from-db" },
+      plugins: [],
+      addedBy: { by: "js", url: key, stack: "" },
+    } as any);
+    try {
+      const pinned = `https://host.example.com/${encodeURIComponent(
+        stringifyAutomergeUrl({ documentId: parseAutomergeUrl(bare).documentId, heads: encodeHeads(heads) }),
+      )}/index.js`;
+      expect(await readClaims(pinned)).toBeUndefined();
+      expect(fetch).toHaveBeenCalled();
+      expect(await readClaims(key)).toMatchObject({ name: "from-db" });
+    } finally {
+      packages.remove(key);
+    }
   });
 
   it("readClaims lists patchwork.plugins", async () => {
