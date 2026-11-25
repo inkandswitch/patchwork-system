@@ -168,7 +168,7 @@ function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
  * A package's plugins as plain data: a manifest's, with their `export`, or an
  * entry point's without their code, which the database imports again itself.
  */
-function pluginRecords(
+export function pluginRecords(
   plugins: any[],
   packageJson: Record<string, any>,
   base: string

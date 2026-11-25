@@ -79,6 +79,19 @@ describe("PackageDatabase", () => {
     expect(await db.load(db.plugin("t", "x")!)).toBe("new");
   });
 
+  it("a js add from the same url again keeps one js record, the newest", () => {
+    const db = new PackageDatabase();
+    const js = (stack: string) => ({
+      ...entry("a", [{ type: "t", id: "x", load: async () => stack }]),
+      addedBy: { by: "js" as const, url: "https://x.test/p/", stack },
+    });
+    db.add(js("first"));
+    const second = db.add(js("second"));
+    expect(second.addedBy).toEqual([
+      { by: "js", url: "https://x.test/p/", stack: "second" },
+    ]);
+  });
+
   it("remove fires removed", () => {
     const db = new PackageDatabase();
     const added = db.add(entry("a"));

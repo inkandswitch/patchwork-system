@@ -10,8 +10,14 @@ import {
   getSuggestedImportUrl,
   getType,
   importPackage,
+  packages,
+  pluginRecords,
+  readPackageJson,
+  sourceOf,
   trackPackagesInRepo,
+  type AddedBy,
   type HasPatchworkMetadata,
+  type PackageJsonAt,
   type PackageTracker,
 } from "@inkandswitch/patchwork-filesystem";
 import {
@@ -177,6 +183,26 @@ function importPackageOnce(url: string): Promise<unknown> {
   return load;
 }
 
+// The database entry for the package.json at `pkg.importUrl`.
+function entryOf(pkg: PackageJsonAt, plugins: unknown[], addedBy: AddedBy) {
+  return {
+    key: sourceOf(pkg.importUrl)!,
+    version: pkg.version,
+    importUrl: pkg.importUrl,
+    base: pkg.base,
+    packageJson: pkg.packageJson,
+    plugins: pluginRecords(plugins, pkg.packageJson, pkg.base),
+    addedBy,
+  };
+}
+
+// A `package-url`'s package goes in the database if nothing else put it there.
+async function addPackageUrl(url: string, plugins: unknown[]) {
+  const pkg = await readPackageJson(url);
+  if (!pkg || packages.get(sourceOf(url)!)) return;
+  packages.add(entryOf(pkg, plugins, { by: "package-url" }));
+}
+
 // One pushwork sync is a burst of changes to a package's doc, so wait for its
 // heads to stop moving this long before importing the new version, as the
 // ModuleWatcher does.
@@ -228,6 +254,11 @@ async function loadPackageTool(
   const mod = (await importPackageOnce(pinned)) as { plugins?: unknown };
   if (!Array.isArray(mod?.plugins)) {
     throw new Error("it doesn't export any plugins");
+  }
+  if (!packages.get(sourceOf(pinned)!)) {
+    addPackageUrl(pinned, mod.plugins).catch((error) =>
+      console.warn(`couldn't add ${pinned} to the package database`, error)
+    );
   }
   const tools = (mod.plugins as PackagePlugin[]).filter(
     (plugin) => plugin?.type === "patchwork:tool"
@@ -1280,6 +1311,8 @@ export class LegacyImpl {
         this.#reportImportFailed(epoch, url, "it doesn't export any plugins");
         return;
       }
+      const pkg = await readPackageJson(url);
+      if (pkg) packages.add(entryOf(pkg, mod.plugins, { by: "suggested" }));
       registerPlugins(mod.plugins, url);
       // Once its tool registers, the registry listeners swap the card for it.
       // A package that brings none would leave the card saying "loading…".

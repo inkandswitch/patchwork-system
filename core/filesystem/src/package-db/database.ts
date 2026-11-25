@@ -263,9 +263,15 @@ function isLive(plugin: LivePlugin) {
     plugin.module !== undefined;
 }
 
+// One record per adder; for js, one per url, with the newest stack.
 function mergeAddedBy(list: AddedBy[], addedBy: AddedBy): AddedBy[] {
-  const json = JSON.stringify(addedBy);
-  if (!list.some((a) => JSON.stringify(a) === json)) list.push(addedBy);
+  const same = (a: AddedBy) =>
+    a.by === "js" && addedBy.by === "js"
+      ? a.url === addedBy.url
+      : JSON.stringify(a) === JSON.stringify(addedBy);
+  const i = list.findIndex(same);
+  if (i === -1) list.push(addedBy);
+  else list[i] = addedBy;
   return list;
 }
 

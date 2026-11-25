@@ -4,6 +4,7 @@ import {
   type DocumentId,
   type UrlHeads,
 } from "@automerge/automerge-repo/slim";
+import { packages, sourceOf } from "@inkandswitch/patchwork-filesystem";
 import { describe, expect, it } from "vitest";
 import { PluginRegistry } from "../src/registry/registry.js";
 import {
@@ -130,6 +131,59 @@ describe("registerPlugins and unregisterPlugins", () => {
 
     expect(registry.get("shared")?.importUrl).toBe(at(OTHER, v1));
     unregisterPlugins(`automerge:${OTHER}`);
+  });
+});
+
+describe("registerPlugins and the package database", () => {
+  it("registerPlugins adds a js entry with a stack", () => {
+    const url = "https://example.test/js-entry.js";
+    registerPlugins([plugin("test:db-js", "a")], url);
+
+    const entry = packages.get(sourceOf(url)!)!;
+    expect(entry.importUrl).toBe(url);
+    expect(entry.version).toBe(url);
+    expect(entry.plugins.map((p) => p.id)).toEqual(["a"]);
+    expect(entry.addedBy).toHaveLength(1);
+    expect(entry.addedBy[0]).toMatchObject({ by: "js", url });
+    expect((entry.addedBy[0] as { stack: string }).stack).toContain("Error");
+    unregisterPlugins(url);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("registerPlugins after the watcher's add at the same url leaves the entry alone", () => {
+    const url = at(ID, v1);
+    const key = sourceOf(url)!;
+    const listed = packages.add({
+      key,
+      version: "a1",
+      importUrl: url,
+      plugins: [{ type: "test:db-listed", id: "a" }],
+      addedBy: { by: "package-list", entry: `automerge:${ID}` },
+    });
+
+    registerPlugins([plugin("test:db-listed", "a")], url);
+
+    const entry = packages.get(key)!;
+    expect(entry).toBe(listed);
+    expect(entry.addedBy).toEqual([
+      { by: "package-list", entry: `automerge:${ID}` },
+    ]);
+    expect(entry.plugins[0].load).toBeUndefined();
+    unregisterPlugins(url);
+    packages.remove(key);
+  });
+
+  it("registerPlugins twice from js at one url: the second wins", () => {
+    const url = "https://example.test/twice.js";
+    registerPlugins([plugin("test:db-twice", "first")], url);
+    registerPlugins([plugin("test:db-twice", "second")], url);
+
+    const entry = packages.get(sourceOf(url)!)!;
+    expect(entry.plugins.map((p) => p.id)).toEqual(["second"]);
+    expect(entry.addedBy).toHaveLength(1);
+    expect(entry.addedBy[0]).toMatchObject({ by: "js", url });
+    unregisterPlugins(url);
+    packages.remove(sourceOf(url)!);
   });
 });
 

@@ -1,3 +1,4 @@
+import { type LivePlugin, packages } from "@inkandswitch/patchwork-filesystem";
 import type { Tool } from "../tools.js";
 import { PluginRegistry } from "./registry.js";
 import { sourceOf } from "./source.js";
@@ -89,8 +90,29 @@ export function registerPlugins<D extends PluginDescription, I>(
     importUrl,
     new Set(typed.map((plugin) => `${plugin.type} ${plugin.id}`))
   );
+  addToDatabase(typed as LivePlugin[], importUrl);
   typed.forEach((plugin) => {
     getRegistry(plugin.type).register(plugin, importUrl);
+  });
+}
+
+/**
+ * Add what some js registered to the package database, unless a package list
+ * or a suggestion already added that package at that url, without its code.
+ */
+function addToDatabase(plugins: LivePlugin[], importUrl: string) {
+  const key = sourceOf(importUrl)!;
+  const entry = packages.get(key);
+  const added =
+    entry?.importUrl === importUrl &&
+    entry.addedBy.some((a) => a.by === "package-list" || a.by === "suggested");
+  if (added) return;
+  packages.add({
+    key,
+    version: importUrl,
+    importUrl,
+    plugins,
+    addedBy: { by: "js", url: importUrl, stack: new Error().stack ?? "" },
   });
 }
 

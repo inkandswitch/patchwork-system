@@ -1,5 +1,10 @@
 import { Repo } from "@automerge/automerge-repo";
-import { importPackage } from "@inkandswitch/patchwork-filesystem";
+import {
+  importPackage,
+  packages,
+  readPackageJson,
+  sourceOf,
+} from "@inkandswitch/patchwork-filesystem";
 import { getRegistry } from "@inkandswitch/patchwork-plugins";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +16,7 @@ vi.mock("@inkandswitch/patchwork-filesystem", async (importOriginal) => ({
   importPackage: vi.fn(async () => {
     throw new Error("importPackage not stubbed for this test");
   }),
+  readPackageJson: vi.fn(async () => undefined),
 }));
 
 import {
@@ -540,6 +546,8 @@ describe("patchwork-view (legacy mode)", () => {
 
     afterEach(() => {
       vi.mocked(importPackage).mockReset();
+      vi.mocked(readPackageJson).mockReset();
+      vi.mocked(readPackageJson).mockResolvedValue(undefined);
     });
 
     function mountWith(doc: unknown, attrs: Record<string, string>) {
@@ -661,6 +669,61 @@ describe("patchwork-view (legacy mode)", () => {
         expect(live()).toHaveLength(0);
       }
     );
+
+    // The package.json the database is given for a package at `url`.
+    function servePackageJson() {
+      vi.mocked(readPackageJson).mockImplementation(async (url: string) => ({
+        importUrl: url,
+        base: url,
+        packageJson: { name: "served" },
+        version: "v1",
+      }));
+    }
+
+    it("package-url adds the package when there's no entry", async () => {
+      servePackage({ added: ["pkg-type"] });
+      servePackageJson();
+      const url = "http://example.invalid/added-pkg/";
+      mountWith(
+        { "@patchwork": { type: "pkg-type" } },
+        { "tool-id": "added", "package-url": url }
+      );
+      await vi.waitFor(() => expect(packages.get(sourceOf(url)!)).toBeTruthy());
+
+      const entry = packages.get(sourceOf(url)!)!;
+      expect(entry.addedBy).toEqual([{ by: "package-url" }]);
+      expect(entry.version).toBe("v1");
+      expect(entry.packageJson).toEqual({ name: "served" });
+      expect(entry.plugins.map((p) => [p.id, p.load])).toEqual([
+        ["added", undefined],
+      ]);
+      packages.remove(sourceOf(url)!);
+    });
+
+    it("package-url leaves an existing one alone", async () => {
+      servePackage({ listed: ["pkg-type"] });
+      servePackageJson();
+      const url = "http://example.invalid/listed-pkg/";
+      const listed = packages.add({
+        key: sourceOf(url)!,
+        version: "v0",
+        importUrl: url,
+        plugins: [],
+        addedBy: { by: "package-list", entry: url },
+      });
+      mountWith(
+        { "@patchwork": { type: "pkg-type" } },
+        { "tool-id": "listed", "package-url": url }
+      );
+      await vi.waitFor(() => expect(live()).toHaveLength(1));
+      await settle();
+
+      expect(packages.get(sourceOf(url)!)).toBe(listed);
+      expect(listed.addedBy).toEqual([
+        { by: "package-list", entry: url },
+      ]);
+      packages.remove(sourceOf(url)!);
+    });
 
     it("follows an automerge package without heads to its new heads", async () => {
       servePackage({ followed: ["pkg-type"] });

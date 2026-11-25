@@ -25,6 +25,7 @@ import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerg
 
 import {
   ModuleWatcher,
+  packages,
   trackPackagesViaServiceWorker,
 } from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
@@ -258,6 +259,20 @@ async function doSetup(
     )
   );
 
+  moduleWatcher.database = packages;
+  packages.onNews((key) => moduleWatcher.recheck(key));
+  // Saved by account. One that can't be opened stays in memory.
+  const openPackages = (accountUrl: string) =>
+    packages
+      .open(`patchwork-packages ${accountUrl}`)
+      .catch((error) =>
+        console.warn("couldn't open the saved package database", error)
+      );
+  const storedAccountUrl = localStorage.getItem(accountKey);
+  const accountKnown =
+    !!storedAccountUrl && AutomergeRepo.isValidAutomergeUrl(storedAccountUrl);
+  if (accountKnown) void openPackages(storedAccountUrl);
+
   // What the last visit had on screen loads first: the hash's tools, then
   // the root view's, then the views inside it, and so on.
   const loadBatches = planLoadOrder(
@@ -285,6 +300,7 @@ async function doSetup(
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
+  if (!accountKnown) void openPackages(accountDocHandle.url);
 
   followThemePreferences(repo, accountDocHandle);
 
