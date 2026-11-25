@@ -26,7 +26,6 @@ import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerg
 import {
   type AccountDoc,
   ModuleWatcher,
-  createDocOfDatatype2,
   packages,
   resolveAccountHandle,
   trackPackagesViaServiceWorker,
@@ -36,12 +35,10 @@ import {
   followThemePreferences,
   registerPatchworkViewElement,
   startThemes,
+  tools,
 } from "@inkandswitch/patchwork-elements";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import {
-  type DatatypeDescription,
-  type LoadedDatatype,
-  getRegistry,
   registerPlugins,
   unregisterPlugins,
 } from "@inkandswitch/patchwork-plugins";
@@ -64,7 +61,7 @@ import type {
 import { createRepo, initWasm } from "./repo.js";
 import { gatePublicDocsOnReader } from "./public-access.js";
 import { watchDocument } from "./watch-document.js";
-import { createRouter, type Router } from "./router.js";
+import { createDocOfType, createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 import { showBootStatus } from "./boot-status.js";
 import { loadFolderTree } from "./folder-tree.js";
@@ -330,9 +327,7 @@ async function doSetup(
     () =>
       log(
         "doneLoading, tools registered:",
-        getRegistry("patchwork:tool")
-          .all()
-          .map((t: any) => t.id)
+        tools().map((tool) => tool.id)
       ),
     (err: unknown) => console.error("doneLoading rejected:", err)
   );
@@ -383,20 +378,8 @@ async function doSetup(
         subscribeSyncState(repo, documentId, listener),
     },
 
-    async create<D>(type: string, init?: (doc: D) => void) {
-      const datatype =
-        await getRegistry<DatatypeDescription>("patchwork:datatype").load(type);
-      if (!datatype) {
-        throw new Error(
-          `patchwork.create: no datatype registered for "${type}"`
-        );
-      }
-      return createDocOfDatatype2(
-        datatype as unknown as LoadedDatatype<D>,
-        repo,
-        init,
-        hive
-      );
+    create<D>(type: string, init?: (doc: D) => void) {
+      return createDocOfType(repo, type, init, hive);
     },
     open(url: AutomergeUrl, openOptions: OpenOptions = {}) {
       rootElement.dispatchEvent(

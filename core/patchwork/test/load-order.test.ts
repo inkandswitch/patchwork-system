@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 //
 // Boot loads first the packages behind what was on screen last visit.
-import { getRegistry } from "@inkandswitch/patchwork-plugins";
+import { packages } from "@inkandswitch/patchwork-filesystem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -247,27 +247,33 @@ describe("recordLoadOrder", () => {
 });
 
 describe("preloadPlugins", () => {
-  it("loads a planned plugin as soon as it registers, until told to stop", async () => {
-    const registry = getRegistry("patchwork:tool");
+  const add = (version: string, load: () => Promise<unknown>) =>
+    packages.add({
+      key: "test://preload",
+      version,
+      importUrl: `test://preload#${version}`,
+      plugins: [{ type: "patchwork:tool", id: "preload-early", load }],
+      addedBy: { by: "js", url: "test://preload", stack: "" },
+    });
+
+  afterEach(() => {
+    packages.remove("test://preload");
+  });
+
+  it("loads a planned plugin as soon as a package brings it, until told to stop", async () => {
     const load = vi.fn(async () => () => () => {});
     let stop!: () => void;
     preloadPlugins(
       [{ pkg: [tool("preload-early")] }],
       new Promise<void>((resolve) => (stop = resolve))
     );
-    registry.register(
-      { type: "patchwork:tool", id: "preload-early", name: "Early", load } as any,
-      "pkg"
-    );
+    add("1", load);
     await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(1));
 
     stop();
     await new Promise((r) => setTimeout(r, 0));
     const late = vi.fn(async () => () => () => {});
-    registry.register(
-      { type: "patchwork:tool", id: "preload-early", name: "Early", load: late } as any,
-      "pkg"
-    );
+    add("2", late);
     await new Promise((r) => setTimeout(r, 0));
     expect(late).not.toHaveBeenCalled();
   });

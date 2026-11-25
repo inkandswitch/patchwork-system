@@ -8,13 +8,13 @@ import {
   type DocumentId,
   type Repo,
 } from "@automerge/vanillajs/slim";
-import type { AccountDoc } from "@inkandswitch/patchwork-filesystem";
 import {
-  type DatatypeDescription,
-  type DatatypeImplementation,
-  type ToolDescription,
-  getRegistry,
-} from "@inkandswitch/patchwork-plugins";
+  createDocOfDatatype2,
+  packages,
+  type AccountDoc,
+  type PluginView,
+} from "@inkandswitch/patchwork-filesystem";
+import { tools } from "@inkandswitch/patchwork-elements";
 
 // Legacy big-patchwork hash shape: `<slug>--<documentId>[?…]`. The slug can
 // contain characters we don't otherwise permit (e.g. `drawing-(branch-1)`), so
@@ -75,10 +75,56 @@ export interface Router {
   route(): Promise<void>;
 }
 
+const DATATYPE = "patchwork:datatype";
+
 function registeredFrameToolId(): string | undefined {
-  return getRegistry<ToolDescription>("patchwork:tool")
-    .filter((tool) => !!tool.tags?.includes("frame-tool") && !tool.unlisted)
-    .at(0)?.id;
+  return tools().find(
+    (tool) => !!tool.tags?.includes("frame-tool") && !tool.unlisted
+  )?.id;
+}
+
+/**
+ * Calls `cb` once an added or replaced package brings the plugin, then stops
+ * listening. Returns a function that stops listening sooner.
+ */
+function whenPlugin(
+  type: string,
+  id: string,
+  cb: (view: PluginView) => void
+): () => void {
+  const check = () => {
+    const view = packages.plugin(type, id);
+    if (!view) return;
+    stop();
+    cb(view);
+  };
+  const offs = [packages.on("added", check), packages.on("replaced", check)];
+  const stop = () => offs.forEach((off) => off());
+  return stop;
+}
+
+/**
+ * A new document of datatype `type`, waiting for a package to bring the
+ * datatype if none has yet.
+ */
+export async function createDocOfType<D>(
+  repo: Repo,
+  type: string,
+  change?: (doc: D) => void,
+  hive?: { addSyncServerRelayToDoc(url: AutomergeUrl): Promise<unknown> }
+) {
+  const view =
+    packages.plugin(DATATYPE, type) ??
+    (await new Promise<PluginView>((resolve) =>
+      whenPlugin(DATATYPE, type, resolve)
+    ));
+  const module = (await packages.load(view)) as
+    | { init(doc: D, repo: Repo): void }
+    | undefined;
+  if (!module) {
+    throw new Error(`patchwork.create: the "${type}" datatype has no code`);
+  }
+  return createDocOfDatatype2({ ...view, module }, repo, change, hive);
 }
 
 export function createRouter({
@@ -275,25 +321,26 @@ function createTitle(repo: Repo, siteTitle: string) {
         const handle = await repo.find<TitledDoc>(url);
         if (!isCurrent()) return;
         const docType = type || handle.doc()?.["@patchwork"]?.type;
-        const registry = getRegistry<DatatypeDescription>("patchwork:datatype");
         const title = async () => {
-          const datatype = docType ? await registry.load(docType) : undefined;
+          const view = docType ? packages.plugin(DATATYPE, docType) : undefined;
+          const datatype = view
+            ? ((await packages.load(view)) as
+                | { getTitle(doc: unknown): string }
+                | undefined)
+            : undefined;
           if (!isCurrent()) return;
           if (!datatype) {
             show();
             // Its package may still be loading: boot opens the first view
             // before every package is in.
-            if (docType && !registry.has(docType)) {
-              const off = registry.on("registered", (plugin) => {
-                if (plugin.id !== docType) return;
-                off();
+            if (docType && !view) {
+              stopFollowing = whenPlugin(DATATYPE, docType, () => {
                 if (isCurrent()) title().catch(failed);
               });
-              stopFollowing = off;
             }
             return;
           }
-          const { getTitle } = datatype.module as DatatypeImplementation;
+          const { getTitle } = datatype;
           const update = () => {
             try {
               show(getTitle(handle.doc()));

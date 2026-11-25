@@ -5,8 +5,11 @@
  * hash's `tool` and `frame` first, then the root view's, then those inside
  * it, and so on, then everything else (see `ModuleWatcher.prioritize`).
  */
-import type { LoadBatch, PluginRef } from "@inkandswitch/patchwork-filesystem";
-import { getRegistry } from "@inkandswitch/patchwork-plugins";
+import {
+  packages,
+  type LoadBatch,
+  type PluginRef,
+} from "@inkandswitch/patchwork-filesystem";
 
 const VERSION = 1;
 const VIEW_TAG = "patchwork-view";
@@ -114,8 +117,8 @@ export function planLoadOrder(
 }
 
 /**
- * Starts loading each planned plugin as soon as it registers, rather than
- * once a view asks, so a view nested three deep doesn't wait on the three
+ * Starts loading each planned plugin as soon as a package brings it, rather
+ * than once a view asks, so a view nested three deep doesn't wait on the three
  * above it to mount first. Stops listening once `until` settles.
  */
 export function preloadPlugins(
@@ -123,18 +126,18 @@ export function preloadPlugins(
   until: Promise<unknown>
 ): void {
   const started = new Set<string>();
-  const stops = batches
-    .flatMap((batch) => Object.values(batch).flat())
-    .map((ref) => {
-      const registry = getRegistry(ref.type);
-      return registry.on("registered", (plugin) => {
-        if (plugin.id !== ref.id || started.has(refKey(ref))) return;
-        started.add(refKey(ref));
-        // The registry reports a failure, and the view that wanted it shows
-        // it.
-        registry.load(ref.id).catch(() => {});
-      });
-    });
+  const wanted = batches.flatMap((batch) => Object.values(batch).flat());
+  const check = () => {
+    for (const ref of wanted) {
+      if (started.has(refKey(ref))) continue;
+      const view = packages.plugin(ref.type, ref.id);
+      if (!view) continue;
+      started.add(refKey(ref));
+      // The view that wanted it loads it again, and shows a failure.
+      packages.load(view).catch(() => {});
+    }
+  };
+  const stops = [packages.on("added", check), packages.on("replaced", check)];
   void until.finally(() => {
     for (const stop of stops) stop();
   });
