@@ -1,13 +1,29 @@
 // @vitest-environment happy-dom
-// @vitest-environment-options {"settings":{"disableCSSFileLoading":true}}
+// @vitest-environment-options {"settings":{"disableCSSFileLoading":true,"handleDisabledFileLoadingAsSuccess":true}}
 import EventEmitter from "eventemitter3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 type Themes = typeof import("../src/themes.js");
-type Registry = typeof import("../src/registry/index.js");
+type Packages = typeof import("@inkandswitch/patchwork-filesystem");
 
 let themes: Themes;
-let registry: Registry;
+let fs: Packages;
+const added: string[] = [];
+let n = 0;
+// Put themes in the package database, as a package at `importUrl` would.
+function addThemes(plugins: any[], importUrl: string, base?: string) {
+  const key = `${importUrl}#${n++}`;
+  fs.packages.add({
+    key,
+    version: "1",
+    importUrl,
+    base,
+    plugins,
+    addedBy: { by: "js", url: "test", stack: "" },
+  });
+  added.push(key);
+  return key;
+}
 let stops: (() => void)[] = [];
 
 // The computer's mode, switchable mid-test.
@@ -28,11 +44,12 @@ beforeEach(async () => {
   document.documentElement.removeAttribute("data-theme-dark");
   document.head.innerHTML = "";
   themes = await import("../src/themes.js");
-  registry = await import("../src/registry/index.js");
+  fs = await import("@inkandswitch/patchwork-filesystem");
 });
 
 afterEach(() => {
   for (const stop of stops.splice(0)) stop();
+  for (const key of added.splice(0)) fs.packages.remove(key);
   vi.unstubAllGlobals();
 });
 
@@ -101,21 +118,15 @@ describe("themeDefaults", () => {
 
 describe("themeStylesheetUrl", () => {
   it("resolves a theme's stylesheet from its id or its description", () => {
-    registry.registerPlugins(
+    addThemes(
       [
         {
           type: "patchwork:theme",
           id: "warm",
           name: "Warm",
           style: "./warm.css",
-          load: async () => ({}),
         },
-        {
-          type: "patchwork:theme",
-          id: "plain",
-          name: "Plain",
-          load: async () => ({}),
-        },
+        { type: "patchwork:theme", id: "plain", name: "Plain" },
       ],
       "https://example.com/pkg"
     );
@@ -132,6 +143,24 @@ describe("themeStylesheetUrl", () => {
     ).toBe("https://cdn.example.com/absolute.css");
     expect(themes.themeStylesheetUrl("plain")).toBeUndefined();
     expect(themes.themeStylesheetUrl("nobody")).toBeUndefined();
+  });
+
+  it("a relative style resolves against the package base", () => {
+    addThemes(
+      [
+        {
+          type: "patchwork:theme",
+          id: "warm",
+          name: "Warm",
+          style: "./themes/warm.css",
+        },
+      ],
+      "automerge:4NMNnkMhL8jXrdJ9jamS58PAVdXu",
+      "https://example.com/root/"
+    );
+    expect(themes.themeStylesheetUrl("warm")).toBe(
+      "https://example.com/root/themes/warm.css"
+    );
   });
 });
 
@@ -150,14 +179,13 @@ describe("startThemes", () => {
 
   it("keeps a stylesheet on the page for each registered theme", () => {
     start();
-    registry.registerPlugins(
+    const key = addThemes(
       [
         {
           type: "patchwork:theme",
           id: "warm",
           name: "Warm",
           style: "https://example.com/warm.css",
-          load: async () => ({}),
         },
       ],
       "https://example.com/pkg/"
@@ -168,33 +196,31 @@ describe("startThemes", () => {
       );
     expect(hrefs()).toEqual(["https://example.com/warm.css"]);
 
-    registry.unregisterPlugins("https://example.com/pkg/");
+    fs.packages.remove(key);
     expect(hrefs()).toEqual([]);
   });
 
   it("resolves a relative stylesheet against the package that registered it", () => {
     start();
     const folder = "automerge:4NMNnkMhL8jXrdJ9jamS58PAVdXu";
-    registry.registerPlugins(
+    addThemes(
       [
         {
           type: "patchwork:theme",
           id: "warm",
           name: "Warm",
           style: "./warm.css",
-          load: async () => ({}),
         },
       ],
       "https://example.com/pkg"
     );
-    registry.registerPlugins(
+    addThemes(
       [
         {
           type: "patchwork:theme",
           id: "cool",
           name: "Cool",
           style: "./themes/cool.css",
-          load: async () => ({}),
         },
       ],
       folder

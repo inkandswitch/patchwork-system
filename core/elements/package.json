@@ -68,6 +68,7 @@
     "@inkandswitch/patchwork-providers": "workspace:^",
     "@types/debug": "^4.1.13",
     "@types/node": "catalog:",
+    "eventemitter3": "^5.0.4",
     "@types/react": "catalog:",
     "happy-dom": "^20.0.0",
     "react": "^18.3.1",

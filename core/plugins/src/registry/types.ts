@@ -1,6 +1,6 @@
 import { DatatypeDescription } from "../datatypes.js";
 import { ToolDescription } from "../tools.js";
-import type { ThemeDescription } from "../themes.js";
+import type { ThemeDescription } from "@inkandswitch/patchwork-elements";
 
 export interface PluginRegistryEvents<D extends PluginDescription, I = any> {
   registered: (plugin: Plugin<D, I>) => void;

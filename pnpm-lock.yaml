@@ -207,6 +207,9 @@ importers:
       '@types/react':
         specifier: 'catalog:'
         version: 18.3.1
+      eventemitter3:
+        specifier: ^5.0.4
+        version: 5.0.4
       happy-dom:
         specifier: ^20.0.0
         version: 20.11.0
@@ -375,6 +378,9 @@ importers:
       '@automerge/automerge-repo-keyhive':
         specifier: 0.8.0-alpha.1
         version: 0.8.0-alpha.1(ws@8.21.1)
+      '@inkandswitch/patchwork-elements':
+        specifier: workspace:^
+        version: link:../elements
       '@inkandswitch/patchwork-filesystem':
         specifier: workspace:^
         version: link:../filesystem

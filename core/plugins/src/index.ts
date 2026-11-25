@@ -9,4 +9,23 @@ export {
   type AccountCreator,
   type AccountDoc,
 } from "@inkandswitch/patchwork-filesystem";
-export * from "./themes.js";
+export {
+  CURRENT_THEME_SELECTOR,
+  THEME_PREFERENCES_TOOL_ID,
+  currentThemeMode,
+  followCurrentTheme,
+  followThemePreferences,
+  getActiveTheme,
+  loadThemeStylesheets,
+  onActiveThemeChange,
+  resolveTheme,
+  serveCurrentTheme,
+  startThemes,
+  themeDefaults,
+  themeStylesheetUrl,
+  type ActiveTheme,
+  type Theme,
+  type ThemeDescription,
+  type ThemeMode,
+  type ThemePreferences,
+} from "@inkandswitch/patchwork-elements";

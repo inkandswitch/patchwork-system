@@ -32,15 +32,17 @@ import {
   trackPackagesViaServiceWorker,
 } from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
-import { registerPatchworkViewElement } from "@inkandswitch/patchwork-elements";
+import {
+  followThemePreferences,
+  registerPatchworkViewElement,
+  startThemes,
+} from "@inkandswitch/patchwork-elements";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import {
   type DatatypeDescription,
   type LoadedDatatype,
-  followThemePreferences,
   getRegistry,
   registerPlugins,
-  startThemes,
   unregisterPlugins,
 } from "@inkandswitch/patchwork-plugins";
 import * as plugins from "@inkandswitch/patchwork-plugins";
