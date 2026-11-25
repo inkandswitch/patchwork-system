@@ -12,10 +12,10 @@ describe("bootFromLastVisit", () => {
     expect(bootFromLastVisit(false, storage("off"))).toBe(false);
   });
 
-  it("without an override it's the option, off by default", () => {
+  it("without an override it's the option, on by default", () => {
     expect(bootFromLastVisit(true, storage())).toBe(true);
     expect(bootFromLastVisit(false, storage())).toBe(false);
-    expect(bootFromLastVisit(undefined, storage())).toBe(false);
+    expect(bootFromLastVisit(undefined, storage())).toBe(true);
     expect(bootFromLastVisit(true, undefined)).toBe(true);
   });
 });

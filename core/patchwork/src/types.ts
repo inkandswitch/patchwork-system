@@ -125,7 +125,7 @@ export interface PatchworkOptions {
   /**
    * Render views from last visit's packages straight away, and reload them in
    * place as newer versions come in, rather than wait for the package lists.
-   * Defaults to `false`. `localStorage["patchwork:boot-from-last-visit"]`,
+   * Defaults to `true`. `localStorage["patchwork:boot-from-last-visit"]`,
    * `"on"` or `"off"`, overrides it.
    */
   bootFromLastVisit?: boolean;

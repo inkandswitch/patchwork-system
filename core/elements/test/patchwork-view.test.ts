@@ -310,6 +310,30 @@ describe("patchwork-view (legacy mode)", () => {
     expect(view.querySelector(".patchwork-view-content")).toBe(content);
   });
 
+  it("another package with the same tool id doesn't remount the view", async () => {
+    const mounts: string[] = [];
+    const sameId = (from: string): LivePlugin => ({
+      id: "same-id",
+      type: "patchwork:tool",
+      name: "same-id",
+      supportedDatatypes: ["same-id-type"],
+      load: async () => () => {
+        mounts.push(from);
+      },
+    });
+    addPackage("test://listed", [sameId("listed")]);
+    const view = mount({ "@patchwork": { type: "same-id-type" } });
+    await vi.waitFor(() => expect(mounts).toEqual(["listed"]));
+    const content = view.querySelector(".patchwork-view-content");
+
+    addPackage("test://fork", [sameId("fork")], {
+      addedBy: { by: "package-url" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mounts).toEqual(["listed"]);
+    expect(view.querySelector(".patchwork-view-content")).toBe(content);
+  });
+
   it("the default tool ignores packages only js added", async () => {
     let mounts = 0;
     addPackage(

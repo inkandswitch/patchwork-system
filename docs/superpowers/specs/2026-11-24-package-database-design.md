@@ -101,3 +101,11 @@ one locally before the next:
 
 The IndexedDB schema, the exact API, when old versions get cleared out, and
 which tool to mount when several share an id.
+
+## Notes for later
+
+- Base's "open with" button could read the package database directly, and
+  show a submenu when several packages bring a tool with the same id.
+- Not settled: lookups by id prefer any other entry over one only
+  `<patchwork-view package-url>` added, and only entries a package list
+  added are saved. Revisit both.

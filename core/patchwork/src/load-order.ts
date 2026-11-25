@@ -45,7 +45,7 @@ const BOOT_FROM_LAST_VISIT_KEY = "patchwork:boot-from-last-visit";
 /**
  * Whether views render from last visit's packages straight away, rather than
  * wait for the package lists. `localStorage["patchwork:boot-from-last-visit"]`
- * (`"on"` or `"off"`) overrides the option, which defaults to off.
+ * (`"on"` or `"off"`) overrides the option, which defaults to on.
  */
 export function bootFromLastVisit(
   option: boolean | undefined,
@@ -59,7 +59,7 @@ export function bootFromLastVisit(
   }
   if (stored === "on") return true;
   if (stored === "off") return false;
-  return option ?? false;
+  return option ?? true;
 }
 
 export function readLoadOrder(

@@ -57,10 +57,12 @@ export class PackageDatabase {
     const plugins = rest.plugins.map(rename);
     const previous = this.#entries.get(rest.key);
     const sameVersion = previous?.version === rest.version;
-    // Only an add of exactly what's there is merged into it.
+    // Only an add of exactly what's there is merged into it. An automerge url
+    // with heads names exact content; an http url can change under itself.
     const same = previous && sameVersion &&
       previous.importUrl === rest.importUrl &&
-      JSON.stringify(previous.plugins) === JSON.stringify(plugins) &&
+      (rest.importUrl.startsWith("automerge:") ||
+        JSON.stringify(previous.plugins) === JSON.stringify(plugins)) &&
       !plugins.some(isLive);
     if (same) {
       previous.addedBy = adders(previous.addedBy);

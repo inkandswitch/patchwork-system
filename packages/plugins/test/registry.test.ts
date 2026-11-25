@@ -316,6 +316,34 @@ describe("the registry over a listed package", () => {
     expect(events).toEqual([`registered shared ${a}`]);
     unregisterPlugins(a);
   });
+
+  it("a package-url copy of a listed id isn't registered over it", () => {
+    const type = "test:preview";
+    const listed = "https://example.test/listed.js";
+    const preview = "https://example.test/preview.js";
+    const registry = getRegistry(type);
+    packages.add({
+      key: sourceOf(listed)!,
+      version: "1",
+      importUrl: listed,
+      plugins: [{ type, id: "shared" }],
+      addedBy: { by: "package-list", entry: listed },
+    });
+    const events: string[] = [];
+    registry.on("registered", (p) => void events.push(`registered ${p.id} ${p.importUrl}`));
+
+    packages.add({
+      key: sourceOf(preview)!,
+      version: "1",
+      importUrl: preview,
+      plugins: [{ type, id: "shared" }],
+      addedBy: { by: "package-url" },
+    });
+    expect(events).toEqual([]);
+    expect(registry.get("shared")?.importUrl).toBe(listed);
+    packages.remove(sourceOf(preview)!);
+    packages.remove(sourceOf(listed)!);
+  });
 });
 
 describe("PluginRegistry.loadWhenReady", () => {

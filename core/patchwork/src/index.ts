@@ -349,10 +349,14 @@ async function doSetup(
   if (routing !== false) {
     rootElement.style.visibility = "hidden";
     // Last visit's packages, as soon as they're read back, and newer versions
-    // replace them as they load. Or, with none saved (a first visit) to pick
-    // a frame tool from, this visit's.
+    // replace them as they load. Or, with no frame tool to start from (a
+    // first visit), this visit's.
     if (fromLastVisit) await packages.ready.catch(() => {});
-    if (!fromLastVisit || !packages.all().length) await firstToolsLoaded;
+    const knowsFrame =
+      options.frameToolId ??
+      accountDocHandle.doc().frameToolId ??
+      tools().some((t) => t.tags?.includes("frame-tool") && !t.unlisted);
+    if (!fromLastVisit || !knowsFrame) await firstToolsLoaded;
     router = createRouter({
       rootElement,
       repo,

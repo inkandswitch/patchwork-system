@@ -102,6 +102,26 @@ describe("PackageDatabase", () => {
     expect(db.plugin("t", "y")).toBeDefined();
   });
 
+  it("an automerge url with the same heads merges whatever its plugins", () => {
+    const db = new PackageDatabase();
+    const importUrl = "automerge:2Bf4DXiyyxoMRxNx5CMzaw9GHyNW#h1";
+    db.add(entry("h1", [{ type: "t", id: "x" }], { importUrl }));
+    const replaced = vi.fn();
+    db.on("replaced", replaced);
+
+    db.add(
+      entry("h1", [{ type: "t", id: "x", export: "./x.js" }], {
+        importUrl,
+        addedBy: { by: "suggested" },
+      }),
+    );
+    expect(replaced).not.toHaveBeenCalled();
+    expect(db.get(entry("h1").key)!.addedBy.map((a) => a.by)).toEqual([
+      "package-url",
+      "suggested",
+    ]);
+  });
+
   it("a live add at the same version replaces", async () => {
     const db = new PackageDatabase();
     db.add(entry("a", [{ type: "t", id: "x", load: async () => "old" }]));

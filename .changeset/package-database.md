@@ -28,4 +28,4 @@
 
 A listed module url with no `package.json` isn't supported. It is warned about and skipped.
 
-`@inkandswitch/patchwork` exports `bootFromLastVisit`, and `bootFromLastVisit` is a `setup()` option. It boots from the packages of the last visit. Override it with `localStorage["patchwork:boot-from-last-visit"]` set to `"on"` or `"off"`. The default is off. When it's off, last visit's packages aren't read back at all.
+`@inkandswitch/patchwork` exports `bootFromLastVisit`, and `bootFromLastVisit` is a `setup()` option. It boots from the packages of the last visit. Override it with `localStorage["patchwork:boot-from-last-visit"]` set to `"on"` or `"off"`. The default is on. When it's off, last visit's packages aren't read back at all.

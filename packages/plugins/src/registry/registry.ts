@@ -50,6 +50,7 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
     });
     packages.on("loaded", (view) => {
       if (view.type !== this.#type) return;
+      if (!this.#wins(view)) return;
       this.#events.emit("loaded", view as LoadedPlugin<D, I>);
       this.#events.emit("changed");
     });
@@ -62,7 +63,7 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
       : [];
     if (!ids.length && !dropped.length) return;
     for (const view of packages.plugins(this.#type!)) {
-      if (view.package === entry) {
+      if (view.package === entry && this.#wins(view)) {
         this.#events.emit("registered", view as unknown as Plugin<D, I>);
       }
     }
@@ -86,10 +87,17 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
       .map((plugin) => plugin.id);
   }
 
-  // One per id, the one added last winning.
+  // One per id: the one the database's lookup gives.
   #views(): Map<string, PluginView> {
-    if (this.#type === undefined) return new Map();
-    return new Map(packages.plugins(this.#type).map((view) => [view.id, view]));
+    const type = this.#type;
+    if (type === undefined) return new Map();
+    const ids = new Set(packages.plugins(type).map((view) => view.id));
+    return new Map([...ids].map((id) => [id, packages.plugin(type, id)!]));
+  }
+
+  // A plugin another package's copy of its id shadows isn't this registry's.
+  #wins(view: PluginView): boolean {
+    return packages.plugin(this.#type!, view.id)?.package === view.package;
   }
 
   /**

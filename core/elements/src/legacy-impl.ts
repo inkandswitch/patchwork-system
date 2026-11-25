@@ -466,7 +466,7 @@ export class LegacyImpl {
   #retryingToolId: string | null = null;
   #initEpoch = 0;
   #capturedParent: Element | null = null;
-  #fallbackId: string | undefined;
+  #fallback: ToolView | undefined;
   #teardowns = new Teardowns();
   #teardown = new Serialized(() => this.#runTeardown());
   // `unable` because the identity has no access yet; a grant mounts the view.
@@ -595,14 +595,21 @@ export class LegacyImpl {
       // the database has no say over a package's tool
       if (this.#packageUrl && !this.#peekToolId) return;
       const toolId = view.id;
-      const isChosenTool = toolId == this.#chosenToolId();
       if (event === "registered") {
         // defaultTool scans every tool: calling it on every registration is
         // O(N²) across a load burst.
         if (this.#handle && this.#couldChangeFallback(view)) {
-          this.#fallbackId = defaultTool(this.#handle.doc())?.id;
+          this.#fallback = defaultTool(this.#handle.doc());
         }
-        if (isChosenTool || toolId == this.#fallbackId) {
+      }
+      // Another package's tool with the same id isn't the one this view
+      // mounts, so it mustn't load or remount anything here.
+      const isChosenTool =
+        toolId == this.#chosenToolId() && this.#isPackageOf(tool(toolId), view);
+      const isFallbackTool =
+        toolId == this.#fallback?.id && this.#isPackageOf(this.#fallback, view);
+      if (event === "registered") {
+        if (isChosenTool || isFallbackTool) {
           this.#watchLoad(toolId, packages.load(view));
         } else if (
           this.#state === State.unable &&
@@ -614,7 +621,6 @@ export class LegacyImpl {
         }
         return;
       }
-      const isFallbackTool = toolId == this.#fallbackId;
       if (isChosenTool || isFallbackTool) {
         if (this.#state == "unable" || this.#state == "initializing") {
           this.#queueRender();
@@ -761,10 +767,15 @@ export class LegacyImpl {
     if (granted || revoked) void this.#restart();
   }
 
+  // By key, so a new version of the same package still counts.
+  #isPackageOf(mounted: ToolView | undefined, view: ToolView): boolean {
+    return mounted?.package.key === view.package.key;
+  }
+
   // Only when there's no fallback yet, or the new tool supports the doc's type
   // (a specific match sorts ahead of a wildcard).
   #couldChangeFallback(added: ToolView): boolean {
-    if (!this.#fallbackId) return true;
+    if (!this.#fallback) return true;
     const supported = added.supportedDatatypes;
     if (!supported) return false;
     if (supported === "*" || supported.includes("*")) return true;
@@ -846,7 +857,7 @@ export class LegacyImpl {
     const doc = this.#handle.doc();
     const type = getType(doc);
     const fallbackTool = defaultTool(doc);
-    this.#fallbackId = fallbackTool?.id;
+    this.#fallback = fallbackTool;
     const chosen = this.#chosenToolId();
     const fallingBack = !chosen;
     let toolId = chosen;
