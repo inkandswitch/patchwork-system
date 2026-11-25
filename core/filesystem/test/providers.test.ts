@@ -1,13 +1,102 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { ImmutableString } from "@automerge/automerge";
 import { generateAutomergeUrl } from "@automerge/automerge-repo";
 import {
+  accountBindings,
+  accountProvider,
   directoryProvider,
   folderProvider,
   providerFor,
 } from "../src/providers.js";
 
-const [A, B] = Array.from({ length: 2 }, generateAutomergeUrl);
+const [A, B, R, P1, P2] = Array.from({ length: 5 }, generateAutomergeUrl);
+const account = (rest: object) => ({
+  "@patchwork": { type: "account" as const },
+  ...rest,
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+describe("accountProvider", () => {
+  const doc = account({
+    namespace: {
+      "/": [{ url: R }],
+      "/packages": [{ url: P1 }, { url: P2 }],
+    },
+  });
+
+  it("looks a mount up by name and consumes it", () => {
+    expect(accountProvider.lookup(doc, ["packages", "foo"])).toEqual({
+      child: { name: "packages", union: [P1, P2] },
+      consumed: 1,
+    });
+  });
+
+  it("sends any other name to / without consuming it", () => {
+    expect(accountProvider.lookup(doc, ["Projects"])).toEqual({
+      child: { name: "", union: [R] },
+      consumed: 0,
+    });
+  });
+
+  it("falls back to rootFolderUrl with no namespace, or no / key", () => {
+    for (const d of [
+      account({ rootFolderUrl: R }),
+      account({ rootFolderUrl: R, namespace: { "/packages": [{ url: P1 }] } }),
+    ]) {
+      expect(accountProvider.lookup(d, ["Projects"])?.child).toEqual({
+        name: "",
+        union: [R],
+      });
+    }
+  });
+
+  it("finds nothing with neither namespace nor rootFolderUrl", () => {
+    expect(accountProvider.lookup(account({}), ["x"])).toBeUndefined();
+    expect(accountProvider.list(account({}))).toEqual([]);
+  });
+
+  it("skips malformed mounts and bindings with a warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bindings = accountBindings(
+      account({
+        namespace: {
+          "/": [{ url: R }, { url: "nope" }, null],
+          packages: [{ url: P1 }],
+          "/a/b": [{ url: P1 }],
+          "/x@y": [{ url: P1 }],
+          "/ok": "not an array",
+        },
+      }) as never
+    );
+    expect([...bindings]).toEqual([["/", [R]]]);
+    expect(warn).toHaveBeenCalled();
+  });
+
+  it("falls back to rootFolderUrl when every / binding is malformed", () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const bindings = accountBindings(
+      account({ rootFolderUrl: R, namespace: { "/": [{ url: "nope" }] } }) as never
+    );
+    expect(bindings.get("/")).toEqual([R]);
+  });
+
+  it("warns about a malformed mount once, however often it's read", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const doc = account({
+      namespace: { "/once@only": [{ url: R }], "/": [{ url: R }] },
+    });
+    for (let i = 0; i < 5; i++) accountProvider.lookup(doc, ["a"]);
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists every mount as a union child, / first", () => {
+    expect(accountProvider.list(doc)).toEqual([
+      { name: "", union: [R] },
+      { name: "packages", union: [P1, P2] },
+    ]);
+  });
+});
 
 describe("directoryProvider", () => {
   it("matches the longest prefix", () => {
@@ -91,7 +180,8 @@ describe("folderProvider", () => {
 });
 
 describe("providerFor", () => {
-  it("checks directory before folder", () => {
+  it("checks account, then directory, then folder", () => {
+    expect(providerFor(account({ docs: [] }))).toBe(accountProvider);
     expect(
       providerFor({ "@patchwork": { type: "directory" }, docs: [] })
     ).toBe(directoryProvider);

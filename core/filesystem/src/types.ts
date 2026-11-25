@@ -33,3 +33,18 @@ export type UnixFileEntry = {
   mimeType: string;
   name: string;
 };
+
+/** One document bound at a mount point. Only automerge documents can be bound. */
+export type NamespaceBinding = { url: AutomergeUrl };
+
+/**
+ * An account's mount table, after plan9: each mount point is `/` or a top-level `/<name>`, bound
+ * to an ordered union of documents. Lookup tries each binding in order; listing concatenates.
+ */
+export type Namespace = { [mountPoint: string]: NamespaceBinding[] };
+
+/** The parts of an account doc a path walk reads. */
+export type AccountNamespaceDoc = HasPatchworkMetadata<"account"> & {
+  namespace?: Namespace;
+  rootFolderUrl?: AutomergeUrl;
+};
