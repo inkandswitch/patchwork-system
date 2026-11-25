@@ -3,7 +3,11 @@ import {
   type Repo,
   isImmutableString,
 } from "@automerge/automerge-repo/slim";
-import { type PathProvider, asLink, providerFor } from "./providers.js";
+import {
+  type PathContributor,
+  asLink,
+  contributorFor,
+} from "./contributors.js";
 
 export type Resolved = {
   content: string | Uint8Array;
@@ -29,27 +33,28 @@ type Walk = {
 /** A URL carries heads when it has a fragment: `automerge:abc#heads`. */
 const hasHeads = (url: unknown): boolean => String(url).includes("#");
 
-/** @deprecated Use {@link PathProvider}, which replaces it. */
-export type FolderStrategy = PathProvider;
+/** @deprecated Use {@link PathContributor}, which replaces it. */
+export type FolderStrategy = PathContributor;
 
 /**
- * Resolve `parts` against `node`, a document or a value inside one, using the provider of the
- * document it belongs to. Following a link hands the rest to that document's own provider.
+ * Resolve `parts` against `node`, a document or a value inside one, using the contributor of the
+ * document it belongs to. Following a link hands the rest to that document's own contributor.
  */
 async function resolveIn(
   repo: Repo,
-  provider: PathProvider,
+  contributor: PathContributor,
   node: unknown,
   parts: string[],
   walk: Walk
 ): Promise<Resolved | undefined> {
   if (parts.length === 0) return materialize(repo, node, undefined, walk);
 
-  const found = provider.lookup(node, parts);
+  const found = contributor.lookup(node, parts);
   if (!found) return undefined;
   const { child, consumed } = found;
   const rest = parts.slice(consumed);
-  if ("value" in child) return resolveIn(repo, provider, child.value, rest, walk);
+  if ("value" in child)
+    return resolveIn(repo, contributor, child.value, rest, walk);
 
   // A step that consumes no parts can revisit the same url with the same remaining parts: a
   // cycle.
@@ -152,8 +157,10 @@ async function resolvePathInternal(
   }
 
   const doc = handle.doc();
-  const provider = providerFor(doc);
-  return provider ? resolveIn(repo, provider, doc, parts, walk) : undefined;
+  const contributor = contributorFor(doc);
+  return contributor
+    ? resolveIn(repo, contributor, doc, parts, walk)
+    : undefined;
 }
 
 export async function resolvePath(

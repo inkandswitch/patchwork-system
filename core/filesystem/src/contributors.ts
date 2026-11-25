@@ -7,12 +7,11 @@ import { type HasPatchworkMetadata, getType } from "./metadata.js";
 import type { FolderDoc } from "./types.js";
 
 /**
- * What a provider finds under a name: a link to another document, or a value inside the same
+ * What a contributor finds under a name: a link to another document, or a value inside the same
  * document (a nested directory, a file's bytes).
  */
 export type Child =
-  | { name: string; link: AutomergeUrl }
-  | { name: string; value: unknown };
+  { name: string; link: AutomergeUrl } | { name: string; value: unknown };
 
 /** A child and how many of the leading names it used. */
 export type Lookup = { child: Child; consumed: number };
@@ -23,7 +22,7 @@ export type Lookup = { child: Child; consumed: number };
  * one name. They read only the node they're given, so a walk at the same heads gives the same
  * answer.
  */
-export interface PathProvider {
+export interface PathContributor {
   readonly kind: string;
   matches(doc: unknown): boolean;
   lookup(node: unknown, names: string[]): Lookup | undefined;
@@ -52,7 +51,7 @@ function childOf(name: string, value: unknown): Child {
   return link ? { name, link } : { name, value };
 }
 
-export const directoryProvider: PathProvider = {
+export const directoryContributor: PathContributor = {
   kind: "directory",
   matches(doc) {
     return (
@@ -80,7 +79,7 @@ export const directoryProvider: PathProvider = {
   },
 };
 
-export const folderProvider: PathProvider = {
+export const folderContributor: PathContributor = {
   kind: "folder",
   matches(doc) {
     return (
@@ -91,7 +90,7 @@ export const folderProvider: PathProvider = {
     );
   },
   lookup(node, names) {
-    if (!folderProvider.matches(node)) return undefined;
+    if (!folderContributor.matches(node)) return undefined;
     const entry = (node as FolderDoc).docs.find(
       (doc) => doc && String(doc.name) === names[0]
     );
@@ -99,7 +98,7 @@ export const folderProvider: PathProvider = {
     return link ? { child: { name: names[0], link }, consumed: 1 } : undefined;
   },
   list(node) {
-    if (!folderProvider.matches(node)) return [];
+    if (!folderContributor.matches(node)) return [];
     return (node as FolderDoc).docs.flatMap((doc) => {
       const link = asLink(doc?.url);
       return link ? [{ name: String(doc.name), link }] : [];
@@ -108,11 +107,11 @@ export const folderProvider: PathProvider = {
 };
 
 /** Checked in order; the first that matches a document walks it. */
-export const PROVIDERS: readonly PathProvider[] = [
-  directoryProvider,
-  folderProvider,
+export const CONTRIBUTORS: readonly PathContributor[] = [
+  directoryContributor,
+  folderContributor,
 ];
 
-export function providerFor(doc: unknown): PathProvider | undefined {
-  return PROVIDERS.find((provider) => provider.matches(doc));
+export function contributorFor(doc: unknown): PathContributor | undefined {
+  return CONTRIBUTORS.find((contributor) => contributor.matches(doc));
 }

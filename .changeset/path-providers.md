@@ -1,5 +1,0 @@
----
-"@inkandswitch/patchwork-filesystem": minor
----
-
-`resolvePath` walks documents through path providers. A `PathProvider` says how one kind of document is walked: `lookup(node, names)` finds a child and reports how many names it used, and `list(node)` gives every child. Following a link to the next document is the walker's job, so a provider only ever reads the node it is given. `directoryProvider` and `folderProvider` replace the two built-in folder strategies and resolve the same paths as before, with one difference: a folder entry that is not an object is skipped, where it used to throw. `PathProvider`, `Child`, `Lookup`, `providerFor`, `PROVIDERS` and `asLink` are exported from `@inkandswitch/patchwork-filesystem`; `FolderStrategy` stays as a deprecated alias of `PathProvider`. This changes the public `FolderStrategy` shape: it no longer exposes `resolve`. Existing implementations must import `PathProvider` and provide `kind`, `lookup(node, names)` and `list(node)` instead, leaving link traversal to the walker.

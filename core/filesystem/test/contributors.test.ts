@@ -2,17 +2,17 @@ import { describe, it, expect } from "vitest";
 import { ImmutableString } from "@automerge/automerge";
 import { generateAutomergeUrl } from "@automerge/automerge-repo";
 import {
-  directoryProvider,
-  folderProvider,
-  providerFor,
-} from "../src/providers.js";
+  directoryContributor,
+  folderContributor,
+  contributorFor,
+} from "../src/contributors.js";
 
 const [A, B] = Array.from({ length: 2 }, generateAutomergeUrl);
 
-describe("directoryProvider", () => {
+describe("directoryContributor", () => {
   it("matches the longest prefix", () => {
     const doc = { dist: { other: A }, "dist/index.js": B };
-    expect(directoryProvider.lookup(doc, ["dist", "index.js"])).toEqual({
+    expect(directoryContributor.lookup(doc, ["dist", "index.js"])).toEqual({
       child: { name: "dist/index.js", link: B },
       consumed: 2,
     });
@@ -20,7 +20,7 @@ describe("directoryProvider", () => {
 
   it("returns a nested object as a value child", () => {
     const doc = { dist: { "index.js": A } };
-    expect(directoryProvider.lookup(doc, ["dist", "index.js"])).toEqual({
+    expect(directoryContributor.lookup(doc, ["dist", "index.js"])).toEqual({
       child: { name: "dist", value: { "index.js": A } },
       consumed: 1,
     });
@@ -28,11 +28,11 @@ describe("directoryProvider", () => {
 
   it("steps into a list by index", () => {
     const doc = { nested: [{ content: "ok" }, A] };
-    expect(directoryProvider.lookup(doc.nested, ["1"])).toEqual({
+    expect(directoryContributor.lookup(doc.nested, ["1"])).toEqual({
       child: { name: "1", link: A },
       consumed: 1,
     });
-    expect(directoryProvider.list(doc.nested)).toEqual([
+    expect(directoryContributor.list(doc.nested)).toEqual([
       { name: "0", value: { content: "ok" } },
       { name: "1", link: A },
     ]);
@@ -40,7 +40,7 @@ describe("directoryProvider", () => {
 
   it("reads ImmutableString links", () => {
     const doc = { "a.js": new ImmutableString(A) };
-    expect(directoryProvider.lookup(doc, ["a.js"])?.child).toEqual({
+    expect(directoryContributor.lookup(doc, ["a.js"])?.child).toEqual({
       name: "a.js",
       link: A,
     });
@@ -48,11 +48,11 @@ describe("directoryProvider", () => {
 
   it("does not list @patchwork", () => {
     const doc = { "@patchwork": { type: "directory" }, "a.js": A };
-    expect(directoryProvider.list(doc)).toEqual([{ name: "a.js", link: A }]);
+    expect(directoryContributor.list(doc)).toEqual([{ name: "a.js", link: A }]);
   });
 });
 
-describe("folderProvider", () => {
+describe("folderContributor", () => {
   it("first entry with the name wins", () => {
     const doc = {
       docs: [
@@ -60,7 +60,7 @@ describe("folderProvider", () => {
         { name: "a", type: "x", url: B },
       ],
     };
-    expect(folderProvider.lookup(doc, ["a", "b"])).toEqual({
+    expect(folderContributor.lookup(doc, ["a", "b"])).toEqual({
       child: { name: "a", link: A },
       consumed: 1,
     });
@@ -68,15 +68,15 @@ describe("folderProvider", () => {
 
   it("skips entries that aren't objects", () => {
     const doc = { docs: [null, { name: "a", type: "x", url: A }] };
-    expect(folderProvider.lookup(doc, ["a"])?.child).toEqual({
+    expect(folderContributor.lookup(doc, ["a"])?.child).toEqual({
       name: "a",
       link: A,
     });
-    expect(folderProvider.list(doc)).toEqual([{ name: "a", link: A }]);
+    expect(folderContributor.list(doc)).toEqual([{ name: "a", link: A }]);
   });
 
   it("misses an unknown name", () => {
-    expect(folderProvider.lookup({ docs: [] }, ["a"])).toBeUndefined();
+    expect(folderContributor.lookup({ docs: [] }, ["a"])).toBeUndefined();
   });
 
   it("lists the entries that link somewhere", () => {
@@ -86,18 +86,18 @@ describe("folderProvider", () => {
         { name: "broken", type: "x", url: "nope" },
       ],
     };
-    expect(folderProvider.list(doc)).toEqual([{ name: "a", link: A }]);
+    expect(folderContributor.list(doc)).toEqual([{ name: "a", link: A }]);
   });
 });
 
-describe("providerFor", () => {
+describe("contributorFor", () => {
   it("checks directory before folder", () => {
     expect(
-      providerFor({ "@patchwork": { type: "directory" }, docs: [] })
-    ).toBe(directoryProvider);
-    expect(providerFor({ docs: [] })).toBe(folderProvider);
+      contributorFor({ "@patchwork": { type: "directory" }, docs: [] })
+    ).toBe(directoryContributor);
+    expect(contributorFor({ docs: [] })).toBe(folderContributor);
     expect(
-      providerFor({ "@patchwork": { type: "file" }, content: "x" })
+      contributorFor({ "@patchwork": { type: "file" }, content: "x" })
     ).toBeUndefined();
   });
 });
