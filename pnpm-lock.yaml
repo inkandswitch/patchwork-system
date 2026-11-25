@@ -195,9 +195,6 @@ importers:
       '@inkandswitch/patchwork-filesystem':
         specifier: workspace:^
         version: link:../filesystem
-      '@inkandswitch/patchwork-plugins':
-        specifier: workspace:^
-        version: link:../plugins
       '@inkandswitch/patchwork-providers':
         specifier: workspace:^
         version: link:../../packages/providers/core

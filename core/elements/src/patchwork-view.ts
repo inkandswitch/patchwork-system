@@ -2,13 +2,11 @@ import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import { gateOnAccess } from "./keyhive-access.js";
 import {
-  getRegistry,
-  isLoadablePlugin,
-  type LoadablePlugin,
-  type LoadedPlugin,
-  type PluginDescription,
-} from "@inkandswitch/patchwork-plugins";
-import { isKeyhiveDoc } from "@inkandswitch/patchwork-filesystem";
+  isKeyhiveDoc,
+  packages,
+  type PackageEntry,
+  type PluginView,
+} from "@inkandswitch/patchwork-filesystem";
 import {
   OverlayRepo,
   registerPatchworkViewTag,
@@ -35,7 +33,7 @@ export type ComponentRender = (
   repo: Repo
 ) => () => void;
 
-export type ComponentDescription = PluginDescription & {
+export type ComponentDescription = {
   id: string;
   type: "patchwork:component";
   name: string;
@@ -43,12 +41,17 @@ export type ComponentDescription = PluginDescription & {
   tags?: string[];
 };
 
-export type LoadedComponent = LoadedPlugin<
-  ComponentDescription,
-  ComponentRender
->;
+export type LoadedComponent = ComponentDescription & {
+  module: ComponentRender;
+};
 
-export type Component = LoadablePlugin<ComponentDescription, ComponentRender>;
+export type Component = ComponentDescription &
+  ({ load: () => Promise<ComponentRender> } | { import: string });
+
+// A component in the package database.
+type ComponentView = PluginView & { module?: ComponentRender };
+
+const COMPONENT = "patchwork:component";
 
 const State = {
   none: "none",
@@ -89,7 +92,7 @@ export type PatchworkViewElementBase = HTMLElement & {
   docUrl?: AutomergeUrl | null;
   toolId?: string | null;
   /**
-   * A package to take the tool from, in place of the registry: its
+   * A package to take the tool from, in place of the database: its
    * `patchwork:tool` with the id `tool-id`, or with no `tool-id`, its tool
    * for the doc's type. An `automerge:` url without heads follows the
    * package doc, mounting the new version when its heads move; one with
@@ -129,7 +132,7 @@ export function registerPatchworkViewElement(
 
       #component: string | null = null;
       #url: AutomergeUrl | null = null;
-      #loaded: LoadedComponent | null = null;
+      #loaded: ComponentView | null = null;
       #state: State = State.none;
       #initEpoch = 0;
       #teardowns = new Teardowns();
@@ -347,10 +350,6 @@ export function registerPatchworkViewElement(
         if (this.#state != State.none) return;
         if (!this.component) return;
 
-        const registry = getRegistry<ComponentDescription>(
-          "patchwork:component"
-        );
-
         const epoch = ++this.#initEpoch;
         this.#state = State.initializing;
 
@@ -402,15 +401,18 @@ export function registerPatchworkViewElement(
 
         if (epoch !== this.#initEpoch) return;
 
-        const removeAddedListener = registry.on("registered", async (added) => {
-          if (added.id !== this.component) return;
-          if (isLoadablePlugin(added)) {
-            registry.load(added.id);
-          }
-        });
+        // A package that brings this component, or a new version of one.
+        const loadAdded = (entry: PackageEntry) => {
+          const view = this.component
+            ? packages.plugin(COMPONENT, this.component)
+            : undefined;
+          if (view?.package === entry) this.#load(view);
+        };
+        const removeAddedListener = packages.on("added", loadAdded);
+        const removeReplacedListener = packages.on("replaced", loadAdded);
 
-        const removeLoadedListener = registry.on("loaded", async (loaded) => {
-          if (loaded.id !== this.component) return;
+        const removeLoadedListener = packages.on("loaded", async (loaded) => {
+          if (loaded.type !== COMPONENT || loaded.id !== this.component) return;
 
           if (this.#state == "unable" || this.#state == "initializing") {
             this.#queueRender();
@@ -427,6 +429,7 @@ export function registerPatchworkViewElement(
 
         this.#teardowns.add(() => {
           removeAddedListener();
+          removeReplacedListener();
           removeLoadedListener();
         });
 
@@ -434,6 +437,16 @@ export function registerPatchworkViewElement(
 
         this.#queueRender();
       };
+
+      // Once it's in, the "loaded" listener renders it.
+      #load(view: PluginView) {
+        packages.load(view).catch((error) => {
+          console.warn(
+            `patchwork-view: failed to load component "${view.id}"`,
+            error
+          );
+        });
+      }
 
       // A failed load isn't final: the doc may just not have synced yet. The
       // restart runs through the normal teardown, so the epoch, the teardowns
@@ -522,7 +535,7 @@ export function registerPatchworkViewElement(
 
       // A render mustn't land during a teardown: its cleanup would join a set
       // the teardown already drained, and never run. The epoch bumps first
-      // thing, but registry listeners can queue a render (with the new epoch)
+      // thing, but database listeners can queue a render (with the new epoch)
       // until their own cleanup runs, hence the in-flight check.
       #mayRender(epoch: number) {
         return epoch === this.#initEpoch && !this.#teardown.pending;
@@ -536,8 +549,8 @@ export function registerPatchworkViewElement(
         }
 
         const componentId = this.component;
-        const registry = getRegistry<LoadedComponent>("patchwork:component");
-        this.#loaded = registry.get(componentId) ?? null;
+        this.#loaded =
+          (packages.plugin(COMPONENT, componentId) as ComponentView) ?? null;
 
         if (!this.#loaded) {
           this.#state = "unable";
@@ -548,16 +561,9 @@ export function registerPatchworkViewElement(
         }
 
         if (!this.#loaded.module) {
-          registry.load(this.#loaded.id);
-          if (registry.isLoading(this.#loaded.id)) {
-            this.#state = "unable";
-            log(`loading component "${componentId}"`);
-          } else {
-            this.#state = "unable";
-            console.warn(
-              `patchwork-view: failed to load component "${componentId}"`
-            );
-          }
+          this.#state = "unable";
+          log(`loading component "${componentId}"`);
+          this.#load(this.#loaded);
           return;
         }
 

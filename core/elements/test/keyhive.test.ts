@@ -5,14 +5,11 @@ import {
   type DocHandle,
 } from "@automerge/automerge-repo";
 import type { AutomergeRepoKeyhiveBase } from "@automerge/automerge-repo-keyhive";
-import { getRegistry } from "@inkandswitch/patchwork-plugins";
+import { packages, type LivePlugin } from "@inkandswitch/patchwork-filesystem";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  registerPatchworkViewElement,
-  type ComponentDescription,
-} from "../src/patchwork-view.js";
+import { registerPatchworkViewElement } from "../src/patchwork-view.js";
 
 type Counters = { mounts: number; cleanups: number };
 
@@ -71,8 +68,17 @@ function fakeHive(initialAccess: boolean) {
   };
 }
 
-const components = getRegistry<ComponentDescription>("patchwork:component");
-const tools = getRegistry("patchwork:tool");
+// A package a package list added, with one plugin.
+function addPackage(plugin: LivePlugin) {
+  const key = `test://${plugin.id}`;
+  packages.add({
+    key,
+    version: "1",
+    importUrl: key,
+    plugins: [plugin],
+    addedBy: { by: "package-list", entry: key },
+  });
+}
 
 function registerComponent(): Counters & { id: string } {
   const id = `kh-component-${++seq}`;
@@ -83,16 +89,13 @@ function registerComponent(): Counters & { id: string } {
       counters.cleanups++;
     };
   };
-  components.register(
-    {
-      id,
-      type: "patchwork:component",
-      name: id,
-      load: async () => render,
-      module: render,
-    } as never,
-    `test://${id}`
-  );
+  addPackage({
+    id,
+    type: "patchwork:component",
+    name: id,
+    load: async () => render,
+    module: render,
+  });
   return counters;
 }
 
@@ -206,7 +209,7 @@ describe("keyhive access (legacy mode)", () => {
   afterEach(() => {
     // Gone before the next test, so no retry of theirs lands in it.
     document.body.replaceChildren();
-    for (const id of registered) tools.remove(id);
+    for (const id of registered) packages.remove(`test://${id}`);
     registered.length = 0;
   });
 
@@ -224,17 +227,14 @@ describe("keyhive access (legacy mode)", () => {
       tool.mounts++;
       return () => {};
     };
-    tools.register(
-      {
-        id: toolId,
-        type: "patchwork:tool",
-        name: toolId,
-        supportedDatatypes: ["kh-type"],
-        load: async () => render,
-        module: render,
-      } as never,
-      `test://${toolId}`
-    );
+    addPackage({
+      id: toolId,
+      type: "patchwork:tool",
+      name: toolId,
+      supportedDatatypes: ["kh-type"],
+      load: async () => render,
+      module: render,
+    });
     registered.push(toolId);
     backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
     available = true;
@@ -315,17 +315,14 @@ describe("keyhive access (legacy mode)", () => {
       tool.mounts++;
       return () => {};
     };
-    tools.register(
-      {
-        id: toolId,
-        type: "patchwork:tool",
-        name: toolId,
-        supportedDatatypes: ["kh-type"],
-        load: async () => render,
-        module: render,
-      } as never,
-      `test://${toolId}`
-    );
+    addPackage({
+      id: toolId,
+      type: "patchwork:tool",
+      name: toolId,
+      supportedDatatypes: ["kh-type"],
+      load: async () => render,
+      module: render,
+    });
     registered.push(toolId);
 
     backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
@@ -373,17 +370,14 @@ describe("keyhive access (legacy mode)", () => {
       tool.mounts++;
       return () => {};
     };
-    tools.register(
-      {
-        id: toolId,
-        type: "patchwork:tool",
-        name: toolId,
-        supportedDatatypes: ["kh-type"],
-        load: async () => render,
-        module: render,
-      } as never,
-      `test://${toolId}`
-    );
+    addPackage({
+      id: toolId,
+      type: "patchwork:tool",
+      name: toolId,
+      supportedDatatypes: ["kh-type"],
+      load: async () => render,
+      module: render,
+    });
     registered.push(toolId);
 
     backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
@@ -435,17 +429,14 @@ describe("keyhive access (legacy mode)", () => {
       tool.mounts++;
       return () => {};
     };
-    tools.register(
-      {
-        id: toolId,
-        type: "patchwork:tool",
-        name: toolId,
-        supportedDatatypes: ["kh-type"],
-        load: async () => render,
-        module: render,
-      } as never,
-      `test://${toolId}`
-    );
+    addPackage({
+      id: toolId,
+      type: "patchwork:tool",
+      name: toolId,
+      supportedDatatypes: ["kh-type"],
+      load: async () => render,
+      module: render,
+    });
     registered.push(toolId);
 
     backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
@@ -496,17 +487,14 @@ describe("keyhive access (legacy mode)", () => {
       tool.mounts++;
       return () => {};
     };
-    tools.register(
-      {
-        id: toolId,
-        type: "patchwork:tool",
-        name: toolId,
-        supportedDatatypes: ["kh-type"],
-        load: async () => render,
-        module: render,
-      } as never,
-      `test://${toolId}`
-    );
+    addPackage({
+      id: toolId,
+      type: "patchwork:tool",
+      name: toolId,
+      supportedDatatypes: ["kh-type"],
+      load: async () => render,
+      module: render,
+    });
     registered.push(toolId);
 
     backing = realRepo.create({ "@patchwork": { type: "kh-type" } });
@@ -546,17 +534,14 @@ describe("keyhive access (legacy mode)", () => {
       tool.mounts++;
       return () => {};
     };
-    tools.register(
-      {
-        id: toolId,
-        type: "patchwork:tool",
-        name: toolId,
-        supportedDatatypes: ["kh-type"],
-        load: async () => render,
-        module: render,
-      } as never,
-      `test://${toolId}`
-    );
+    addPackage({
+      id: toolId,
+      type: "patchwork:tool",
+      name: toolId,
+      supportedDatatypes: ["kh-type"],
+      load: async () => render,
+      module: render,
+    });
     registered.push(toolId);
 
     const handle = realRepo.create({ "@patchwork": { type: "kh-type" } });

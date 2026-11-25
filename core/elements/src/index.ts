@@ -1,4 +1,5 @@
 export * from "./patchwork-view.js";
+export * from "./tools.js";
 export * from "./events.js";
 export {
   hasActiveAccess,

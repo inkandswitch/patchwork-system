@@ -21,17 +21,6 @@ import {
   type PackageJsonAt,
   type PackageTracker,
 } from "@inkandswitch/patchwork-filesystem";
-import {
-  getFallbackTool,
-  getRegistry,
-  isLoadablePlugin,
-  registerPlugins,
-  type DatatypeDescription,
-  type LoadedTool,
-  type ToolDescription,
-  type ToolElement,
-  type ToolRender,
-} from "@inkandswitch/patchwork-plugins";
 import debug from "debug";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 import {
@@ -51,6 +40,15 @@ import { loadRetryDelay, resyncBeforeRetry } from "./load-retry.js";
 import { importSource, presentableImportUrl } from "./import-url.js";
 import { readClaims } from "./package-info.js";
 import {
+  defaultTool,
+  onToolsChange,
+  tool,
+  tools,
+  type ToolElement,
+  type ToolRender,
+  type ToolView,
+} from "./tools.js";
+import {
   dispatchFromNearestConnected,
   Serialized,
   Teardowns,
@@ -58,12 +56,14 @@ import {
 
 const log = debug("patchwork:elements:legacy");
 
+type Supports = { supportedDatatypes?: "*" | string[] };
+
 /**
  * Whether `tool` takes `type` only through a `*`: a generic fallback like a
  * raw viewer, not a tool built for that datatype.
  */
 function isWildcardOnlyMatch(
-  tool: Pick<Partial<ToolDescription>, "supportedDatatypes">,
+  tool: Supports,
   type: string | undefined
 ): boolean {
   const datatypes = tool.supportedDatatypes;
@@ -76,7 +76,7 @@ function isWildcardOnlyMatch(
  * when there is one, else the first listed `*` tool.
  */
 function anythingTool(): Anything | undefined {
-  const wildcards = getRegistry<ToolDescription>("patchwork:tool").filter(
+  const wildcards = tools().filter(
     (tool) => !tool.unlisted && isWildcardOnlyMatch(tool, undefined)
   );
   const tool = wildcards.find((t) => t.id === "raw") ?? wildcards[0];
@@ -89,7 +89,7 @@ function anythingTool(): Anything | undefined {
  * frame says it's a frame.
  */
 function toolKinds(toolId: string, doc: HasPatchworkMetadata | undefined): string[] {
-  const tags = getRegistry<ToolDescription>("patchwork:tool").get(toolId)?.tags;
+  const tags = tool(toolId)?.tags;
   if (tags?.length) return tags;
   const frameToolId = (doc as { frameToolId?: unknown } | undefined)?.frameToolId;
   const type = doc ? getType(doc) : undefined;
@@ -104,7 +104,7 @@ function toolKinds(toolId: string, doc: HasPatchworkMetadata | undefined): strin
 function otherTools(doc: HasPatchworkMetadata | undefined, except: string): Anything[] {
   const type = doc ? getType(doc) : undefined;
   const kinds = toolKinds(except, doc);
-  let tools = getRegistry<ToolDescription>("patchwork:tool").filter(
+  let others = tools().filter(
     (tool) =>
       !tool.unlisted &&
       !tool.forTitleBar &&
@@ -112,28 +112,26 @@ function otherTools(doc: HasPatchworkMetadata | undefined, except: string): Anyt
       (isWildcardOnlyMatch(tool, undefined) ||
         (!!type && !!tool.supportedDatatypes?.includes(type)))
   );
-  const sameKind = tools.filter((tool) => tool.tags?.some((tag) => kinds.includes(tag)));
-  if (sameKind.length) tools = sameKind;
-  tools.sort(
+  const sameKind = others.filter((tool) => tool.tags?.some((tag) => kinds.includes(tag)));
+  if (sameKind.length) others = sameKind;
+  others.sort(
     (a, b) =>
       Number(isWildcardOnlyMatch(a, type)) - Number(isWildcardOnlyMatch(b, type))
   );
-  return tools.map((tool) => ({ id: tool.id, name: tool.name ?? tool.id }));
+  return others.map((tool) => ({ id: tool.id, name: tool.name ?? tool.id }));
 }
 
 /** The types something here opens, to suggest when giving a doc a type. */
 function knownTypes(): { id: string; name?: string }[] {
   const names = new Map<string, string | undefined>();
-  for (const tool of getRegistry<ToolDescription>("patchwork:tool").all()) {
+  for (const tool of tools()) {
     const supported = tool.supportedDatatypes;
     if (!supported || supported === "*") continue;
     for (const type of supported) if (type !== "*") names.set(type, undefined);
   }
-  for (const datatype of getRegistry<DatatypeDescription>(
-    "patchwork:datatype"
-  ).all()) {
+  for (const datatype of packages.plugins("patchwork:datatype")) {
     if (datatype.unlisted) continue;
-    names.set(datatype.id, datatype.name);
+    names.set(datatype.id, datatype.name as string | undefined);
   }
   return [...names]
     .map(([id, name]) => ({ id, name }))
@@ -216,14 +214,16 @@ type PackageTool = {
   render: ToolRender;
 };
 
-// A plugin as a package exports it, not yet through the registry.
-type PackagePlugin = Partial<ToolDescription> & {
+// A plugin as a package exports it, not yet through the database.
+type PackagePlugin = Supports & {
+  id?: string;
+  type?: string;
   module?: unknown;
   load?: () => Promise<unknown>;
   import?: string;
 };
 
-const supports = (tool: Partial<ToolDescription>, type: string) => {
+const supports = (tool: Supports, type: string) => {
   const supported = tool.supportedDatatypes;
   return (
     supported === "*" ||
@@ -245,7 +245,7 @@ class MissingPackageToolError extends Error {
 /**
  * The tool `toolId` names in the package at `pinned`, or with no `toolId`,
  * the package's tool for `type` (one made for it ahead of one for anything).
- * Taken from the package's own `plugins`, not the registry.
+ * Taken from the package's own `plugins`, not the database.
  */
 async function loadPackageTool(
   pinned: string,
@@ -275,7 +275,7 @@ async function loadPackageTool(
       toolId ?? `a tool for ${type ?? "a doc with no type"}`
     );
   }
-  // as the registry loads a plugin
+  // as the database loads a plugin
   const render =
     tool.module ??
     (typeof tool.load === "function"
@@ -443,7 +443,7 @@ export class LegacyImpl {
   #disposed = false;
   #docUrl: AutomergeUrl | null = null;
   #toolId: string | null = null;
-  // The package the tool comes from, in place of the registry: its tool for
+  // The package the tool comes from, in place of the database: its tool for
   // `tool-id`, or for the doc's type.
   #packageUrl: string | null = null;
   // That tool, once loaded for this mount.
@@ -456,7 +456,7 @@ export class LegacyImpl {
   // the asked-for tool changes.
   #peekToolId: string | null = null;
   #handle: DocHandle<HasPatchworkMetadata> | null = null;
-  #tool: LoadedTool | null = null;
+  #tool: ToolView | null = null;
   // The id the mount events gave the mounted tool.
   #mountedToolId: string | null = null;
   #state: State = State.none;
@@ -574,7 +574,6 @@ export class LegacyImpl {
   }
 
   #init = async () => {
-    const toolRegistry = getRegistry<ToolDescription>("patchwork:tool");
     if (this.#disposed) return;
     if (this.#state != State.none) return;
     if (!this.#docUrl) return;
@@ -598,62 +597,47 @@ export class LegacyImpl {
       return;
     }
 
-    const removeAddedListener = toolRegistry.on(
-      "registered",
-      async (addedTool) => {
-        // the registry has no say over a package's tool
-        if (this.#packageUrl && !this.#peekToolId) return;
-        const toolId = addedTool.id;
-        const isChosenTool = toolId == this.#chosenToolId();
-        // getFallbackTool scans the whole registry: calling it on every
-        // registration is O(N²) across a load burst.
-        if (this.#handle && this.#couldChangeFallback(addedTool)) {
-          this.#fallbackId = getFallbackTool(this.#handle.doc())?.id;
+    const removeToolsListener = onToolsChange(async (event, view) => {
+      // the database has no say over a package's tool
+      if (this.#packageUrl && !this.#peekToolId) return;
+      const toolId = view.id;
+      const isChosenTool = toolId == this.#chosenToolId();
+      if (event === "registered") {
+        // defaultTool scans every tool: calling it on every registration is
+        // O(N²) across a load burst.
+        if (this.#handle && this.#couldChangeFallback(view)) {
+          this.#fallbackId = defaultTool(this.#handle.doc())?.id;
         }
-        const isFallbackTool = toolId == this.#fallbackId;
-        if (isChosenTool || isFallbackTool) {
-          if (isLoadablePlugin(addedTool)) {
-            this.#watchLoad(toolId, toolRegistry.load(addedTool.id));
-          }
+        if (isChosenTool || toolId == this.#fallbackId) {
+          this.#watchLoad(toolId, packages.load(view));
         } else if (
           this.#state === State.unable &&
           this.#handle &&
-          isWildcardOnlyMatch(addedTool, undefined)
+          isWildcardOnlyMatch(view, undefined)
         ) {
           // a card that could offer a look with it now
           this.#queueRender();
         }
+        return;
       }
-    );
-
-    const removeLoadedListener = toolRegistry.on(
-      "loaded",
-      async (loadedTool) => {
-        if (this.#packageUrl && !this.#peekToolId) return;
-        const toolId = loadedTool.id;
-        const isChosenTool = toolId == this.#chosenToolId();
-        const isFallbackTool = toolId == this.#fallbackId;
-        if (isChosenTool || isFallbackTool) {
-          if (this.#state == "unable" || this.#state == "initializing") {
-            this.#queueRender();
-          }
-          if (
-            ((this.#state == "error" || this.#state == "rendered") &&
-              isChosenTool) ||
-            (this.#state == "fallback" && isFallbackTool)
-          ) {
-            if (loadedTool.importUrl !== this.#tool?.importUrl) {
-              await this.#restart();
-            }
+      const isFallbackTool = toolId == this.#fallbackId;
+      if (isChosenTool || isFallbackTool) {
+        if (this.#state == "unable" || this.#state == "initializing") {
+          this.#queueRender();
+        }
+        if (
+          ((this.#state == "error" || this.#state == "rendered") &&
+            isChosenTool) ||
+          (this.#state == "fallback" && isFallbackTool)
+        ) {
+          // a new version of its package
+          if (view.importUrl !== this.#tool?.importUrl) {
+            await this.#restart();
           }
         }
       }
-    );
-
-    this.#teardowns.add(() => {
-      removeAddedListener();
-      removeLoadedListener();
     });
+    this.#teardowns.add(removeToolsListener);
 
     const repo = this.#repo;
     this.#element.repo = repo;
@@ -785,7 +769,7 @@ export class LegacyImpl {
 
   // Only when there's no fallback yet, or the new tool supports the doc's type
   // (a specific match sorts ahead of a wildcard).
-  #couldChangeFallback(added: ToolDescription): boolean {
+  #couldChangeFallback(added: ToolView): boolean {
     if (!this.#fallbackId) return true;
     const supported = added.supportedDatatypes;
     if (!supported) return false;
@@ -843,7 +827,7 @@ export class LegacyImpl {
 
   // A render mustn't land during a teardown: the tool's cleanup would join a
   // set the teardown already drained, and never run. The epoch bumps first
-  // thing, but registry listeners can queue a render (with the new epoch)
+  // thing, but tool listeners can queue a render (with the new epoch)
   // until their own cleanup runs, hence the in-flight check.
   #mayRender(epoch: number): boolean {
     return (
@@ -867,7 +851,7 @@ export class LegacyImpl {
 
     const doc = this.#handle.doc();
     const type = getType(doc);
-    const fallbackTool = getFallbackTool(doc);
+    const fallbackTool = defaultTool(doc);
     this.#fallbackId = fallbackTool?.id;
     const chosen = this.#chosenToolId();
     const fallingBack = !chosen;
@@ -893,7 +877,7 @@ export class LegacyImpl {
       toolId = fallbackTool.id;
     }
 
-    this.#tool = getRegistry<LoadedTool>("patchwork:tool").get(toolId) ?? null;
+    this.#tool = (chosen ? tool(chosen) : fallbackTool) ?? null;
 
     if (!this.#tool) {
       this.#state = State.unable;
@@ -1013,12 +997,10 @@ export class LegacyImpl {
     }
   }
 
-  // Loads a registered tool's code, behind a loading dot; when it fails, a
-  // card says so, where the view would otherwise sit on the dot for good.
-  #loadTool(tool: LoadedTool): void {
-    this.#loadCode(tool.id, tool.name ?? tool.id, () =>
-      getRegistry("patchwork:tool").load(tool.id)
-    );
+  // Loads a tool's code, behind a loading dot; when it fails, a card says
+  // so, where the view would otherwise sit on the dot for good.
+  #loadTool(tool: ToolView): void {
+    this.#loadCode(tool.id, tool.name ?? tool.id, () => packages.load(tool));
   }
 
   // The loading dot and the load, or the card for a load of `id` that failed.
@@ -1059,7 +1041,7 @@ export class LegacyImpl {
   }
 
   // A load of the chosen or fallback tool that fails puts its card up; one
-  // that works is the registry's "loaded" listener's to mount.
+  // that works is the "loaded" listener's to mount.
   // One the reader asked to try again that fails again reloads the page.
   #watchLoad(id: string, load: Promise<unknown>, retrying = false): void {
     const epoch = this.#initEpoch;
@@ -1102,7 +1084,7 @@ export class LegacyImpl {
 
   #showNoTool(
     type: string,
-    fallbackTool: LoadedTool | undefined,
+    fallbackTool: ToolView | undefined,
     missingToolId?: string
   ): void {
     const suggestion = this.#suggestedImport();
@@ -1313,12 +1295,22 @@ export class LegacyImpl {
         return;
       }
       if (pkg) packages.add(entryOf(pkg, plugins, { by: "suggested" }));
-      registerPlugins(plugins, url);
-      // Once its tool registers, the registry listeners swap the card for it.
-      // A package that brings none would leave the card saying "loading…".
-      if (!this.#bringsTool(plugins)) {
+      // A package that brings no tool would leave the card saying "loading…".
+      const toolId = this.#toolIn(plugins);
+      if (!toolId) {
         this.#reportImportFailed(epoch, url, this.#noToolReason());
+        return;
       }
+      if (!pkg) {
+        console.warn(
+          `suggested module ${url} has no package.json, which isn't supported; skipping it`
+        );
+        this.#reportImportFailed(epoch, url, "it has no package.json");
+        return;
+      }
+      // The default tool only comes from a package list, so the reader's
+      // choice opens this view with the tool the package brought.
+      if (epoch === this.#initEpoch) this.#peek(toolId);
     } catch (error) {
       console.error(`Failed to import suggested module ${url}`, error);
       const message = (error as Error)?.message ?? String(error);
@@ -1326,19 +1318,18 @@ export class LegacyImpl {
     }
   }
 
-  // Whether `plugins` has a tool this view would open the doc with.
-  #bringsTool(plugins: unknown[]): boolean {
+  // The id of a tool in `plugins` this view would open the doc with.
+  #toolIn(plugins: unknown[]): string | undefined {
     const chosen = this.#chosenToolId();
     const type = this.#handle ? getType(this.#handle.doc()) : undefined;
-    return plugins.some((plugin) => {
-      const p = plugin as Partial<ToolDescription> | null;
+    return (plugins as (PackagePlugin | null)[]).find((p) => {
       if (p?.type !== "patchwork:tool") return false;
       if (chosen) return p.id === chosen;
       const supported = p.supportedDatatypes;
       return (
         !!type && !!supported && supported !== "*" && supported.includes(type)
       );
-    });
+    })?.id;
   }
 
   #noToolReason(): string {
