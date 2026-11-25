@@ -1,8 +1,9 @@
 // Turning a handoff request into a reply, given a Repo: find the automerge
-// URL's document, resolve the path in it, and either write the response into
-// the service worker's cache or hand it back inline. A tab answers the service
-// worker with its own Repo this way (see tab-resolver.ts), and the automerge
-// worker answers the broadcasts nobody else could (automerge-protocol-handler).
+// URL's document, resolve the path in it, and hand the response back inline.
+// What to keep is the service worker's call, never a resolver's. A tab answers
+// the service worker with its own Repo this way (see tab-resolver.ts), and the
+// automerge worker answers the broadcasts nobody else could
+// (automerge-protocol-handler).
 import { hasHeads } from "@automerge/automerge/slim";
 import {
   isValidAutomergeUrl,
@@ -23,8 +24,6 @@ import type {
 } from "./types.js";
 
 const RESOLVE_TIMEOUT_MS = 30_000;
-
-const CACHEABLE_STATUSES = [200, 203, 204];
 
 const CATCH_UP_MS = 3_000;
 
@@ -238,7 +237,7 @@ export function createResolver(
     }) satisfies HandoffReplyMessage;
 
   return {
-    async answer({ id, cachename, request }) {
+    async answer({ id, request }) {
       let handoff: URL;
       try {
         handoff = new URL(request.handoffURL);
@@ -266,41 +265,20 @@ export function createResolver(
       }
 
       try {
-        const immutable =
-          CACHEABLE_STATUSES.includes(response.status) &&
-          !/(^|,)\s*no-store(\s*,|$)/.test(
-            response.headers.get("cache-control") ?? ""
-          );
-        if (!immutable) {
-          // Errors, redirects and the like go back inline for the service
-          // worker to serve directly. Mutable responses aren't cached because
-          // the same URL can resolve to different content later.
-          log(`responding inline to ${request.url} with ${response.status}`);
-          return {
-            id,
-            type: "response",
-            response: {
-              status: response.status,
-              headers: Object.fromEntries(response.headers.entries()),
-              body: response.body
-                ? new Uint8Array(await response.arrayBuffer())
-                : undefined,
-            },
-          };
-        }
-
-        // Reconstruct the request the service worker is holding so the entry
-        // matches its cache.match. `destination` isn't constructible but
-        // doesn't participate in cache matching.
-        const cacheKey = new Request(request.url, {
-          method: request.method,
-          headers: request.headers,
-          referrer: request.referrer,
-        });
-        const cache = await caches.open(cachename);
-        await cache.put(cacheKey, response);
-        log(`cached ${cacheKey.url} in ${cachename}`);
-        return { id, type: "cached" };
+        // Everything goes back inline. The service worker keeps what's
+        // immutable (see its serveHandoff).
+        log(`responding inline to ${request.url} with ${response.status}`);
+        return {
+          id,
+          type: "response",
+          response: {
+            status: response.status,
+            headers: Object.fromEntries(response.headers.entries()),
+            body: response.body
+              ? new Uint8Array(await response.arrayBuffer())
+              : undefined,
+          },
+        };
       } catch (error) {
         console.error("failed to reply for %s", request.url, error);
         return inline(

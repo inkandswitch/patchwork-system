@@ -5,6 +5,8 @@
  * reintroduced when either of them restarts — and so tabs can listen in.
  */
 export const HANDOFF_CHANNEL = "@patchwork/handoff";
+export const HANDOFF_RELAY_PROBE_TIMEOUT_MS = 250;
+export const HANDOFF_RELAY_ACK_TIMEOUT_MS = 1_000;
 
 /**
  * The Web Lock the automerge worker holds for as long as it lives. The
@@ -60,30 +62,32 @@ export interface HandoffRequest {
 }
 
 /**
- * Service worker → automerge worker: please resolve this request and put
- * the response in my cache.
+ * Service worker → a resolver (a tab, or the automerge worker): please
+ * resolve this request and hand the response back.
  */
 export interface HandoffRequestMessage {
   id: string;
   type: "request";
-  /** the current name of the service worker cache */
+  /**
+   * the current name of the service worker cache. Resolvers from before they
+   * answered inline write their response into it.
+   */
   cachename: string;
   request: HandoffRequest;
 }
 
 /**
- * Automerge worker → service worker: the response is stored in the cache
- * under the request you're holding. Serve `cache.match`.
+ * Resolver → service worker: the response is stored in the cache under the
+ * request you're holding. Serve `cache.match`.
+ *
+ * @deprecated Sent only by resolvers from builds before they answered inline.
  */
 export interface HandoffCachedMessage {
   id: string;
   type: "cached";
 }
 
-/**
- * An inline response for things that shouldn't be cached: errors, redirects
- * &c.
- */
+/** A resolver's response, inline. The service worker decides whether to keep it. */
 export interface HandoffResponse {
   body?: string | Uint8Array<ArrayBuffer>;
   /** defaults to 200 */
@@ -92,8 +96,8 @@ export interface HandoffResponse {
 }
 
 /**
- * Automerge worker → service worker: don't cache anything, serve this
- * response directly.
+ * Resolver → service worker: serve this response, and keep it if it's
+ * immutable.
  */
 export interface HandoffResponseMessage {
   id: string;
@@ -118,6 +122,32 @@ export interface HandoffAbortMessage {
 
 export type HandoffReplyMessage =
   HandoffCachedMessage | HandoffResponseMessage | HandoffAbortMessage;
+
+/** Automerge worker → tab → service worker: relay a reply with transferable body bytes. */
+export interface HandoffRelayMessage {
+  type: "handoff-reply";
+  reply: HandoffReplyMessage;
+}
+
+export interface HandoffRelayProbeMessage {
+  type: "handoff-relay-probe";
+  id: string;
+}
+
+export interface HandoffRelayReadyMessage {
+  type: "handoff-relay-ready";
+  id: string;
+}
+
+export interface HandoffRelayDeliveredMessage {
+  type: "handoff-relay-delivered";
+  id: string;
+}
+
+export interface HandoffReceivedMessage {
+  type: "handoff-received";
+  id: string;
+}
 
 /**
  * Service worker → a tab, posted to it with a port to reply on: resolve this
