@@ -187,6 +187,57 @@ describe("registerPlugins and the package database", () => {
   });
 });
 
+describe("the registry over the package database", () => {
+  it("register emits registered then changed before it returns", () => {
+    const type = "test:view-register";
+    const url = "https://example.test/view-register.js";
+    const registry = getRegistry(type);
+    const events: string[] = [];
+    registry.on("registered", (p) => void events.push(`registered ${p.id}`));
+    registry.on("changed", () => void events.push("changed"));
+
+    registry.register(plugin(type, "a"), url);
+
+    expect(events).toEqual(["registered a", "changed"]);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("a package added to the database shows in getRegistry", () => {
+    const type = "test:view-listed";
+    const url = at(OTHER, v2);
+    packages.add({
+      key: sourceOf(url)!,
+      version: "b2",
+      importUrl: url,
+      plugins: [{ type, id: "a", name: "a" }],
+      addedBy: { by: "package-list", entry: `automerge:${OTHER}` },
+    });
+
+    expect(getRegistry(type).has("a")).toBe(true);
+    expect(getRegistry(type).get("a")?.importUrl).toBe(url);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("remove takes one plugin out of a js package", () => {
+    const type = "test:view-remove";
+    const url = "https://example.test/view-remove.js";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "a"), plugin(type, "b")], url);
+    const removed: string[] = [];
+    registry.on("removed", (id) => void removed.push(id));
+
+    expect(registry.remove("a")).toBe(true);
+
+    expect(removed).toEqual(["a"]);
+    expect(registry.has("a")).toBe(false);
+    expect(registry.has("b")).toBe(true);
+    expect(packages.get(sourceOf(url)!)!.plugins.map((p) => p.id)).toEqual([
+      "b",
+    ]);
+    packages.remove(sourceOf(url)!);
+  });
+});
+
 describe("PluginRegistry.loadWhenReady", () => {
   const description = (id: string, load: () => Promise<unknown>) =>
     ({ type: "test:when-ready", id, name: id, load }) as any;

@@ -8,10 +8,7 @@ import type {
   AccountCreator,
   AccountDoc,
 } from "@inkandswitch/patchwork-filesystem";
-import type * as pluginsNS from "@inkandswitch/patchwork-plugins";
 import type { PublicReaderStatus } from "@inkandswitch/patchwork-bootloader";
-
-export type PluginsApi = typeof pluginsNS;
 
 export type SignerIdentity = { peerId: string; verifyingKey: string };
 
@@ -193,6 +190,5 @@ export interface Patchwork {
   find<D>(url: AutomergeUrl): Promise<DocHandle<D>>;
 
   readonly packages: ModuleWatcher;
-  readonly plugins: PluginsApi;
   readonly sw: ServiceWorkerApi;
 }

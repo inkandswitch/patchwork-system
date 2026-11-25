@@ -1,4 +1,11 @@
 import EventEmitter from "eventemitter3";
+import {
+  packages,
+  sourceOf,
+  type LivePlugin,
+  type PackageEntry,
+  type PluginView,
+} from "@inkandswitch/patchwork-filesystem";
 import type {
   LoadedPlugin,
   PluginDescription,
@@ -7,13 +14,7 @@ import type {
   LoadablePlugin,
 } from "./types";
 import debug from "debug";
-import {
-  isLoadablePlugin,
-  isLoadedPlugin,
-  isPluginDescription,
-} from "./guards.js";
 import type { DatatypeImplementation } from "../datatypes.js";
-import { sourceOf } from "./source.js";
 
 const log = debug("patchwork:plugins");
 
@@ -25,45 +26,90 @@ function isAsyncFunction(fn: unknown) {
   );
 }
 
+// Each register and remove is a new version, so the database never merges it
+// into the one before.
+let versions = 0;
+
+/**
+ * The plugins of one type in the package database.
+ *
+ * @deprecated Use `packages` from `@inkandswitch/patchwork-filesystem`, or
+ * the tools from `@inkandswitch/patchwork-elements` (`tool`, `tools`,
+ * `toolsForType`, `defaultTool`, `onToolsChange`).
+ */
 export class PluginRegistry<D extends PluginDescription, I = any> {
-  #plugins = new Map<string, Plugin<D, I>>();
-  #loadPromises = new Map<string, Promise<LoadedPlugin<D, I> | undefined>>();
   #events = new EventEmitter<PluginRegistryEvents<D, I>>();
-  #loading = new Set<string>();
+  // A registry made without a type takes its first plugin's.
+  #type: string | undefined;
 
-  register(plugin: LoadablePlugin<D, I>, importUrl: string) {
-    if (importUrl && !plugin.importUrl) {
-      plugin.importUrl = importUrl;
-    }
+  constructor(type?: string) {
+    this.#type = type;
+    packages.on("added", (entry) => this.#changed(entry));
+    packages.on("replaced", (entry, previous) => this.#changed(entry, previous));
+    packages.on("removed", (entry) => {
+      const ids = this.#ids(entry);
+      if (!ids.length) return;
+      for (const id of ids) this.#events.emit("removed", id);
+      this.#events.emit("changed");
+    });
+    packages.on("loaded", (view) => {
+      if (view.type !== this.#type) return;
+      this.#events.emit("loaded", view as LoadedPlugin<D, I>);
+      this.#events.emit("changed");
+    });
+  }
 
-    const existing = this.#plugins.get(plugin.id);
-
-    if (existing) {
-      if (sourceOf(existing.importUrl) == sourceOf(importUrl)) {
-        log(`updating ${plugin.id} provided by "${existing.importUrl}"`);
-      } else {
-        console.warn(
-          `overriding "${plugin.id}" provided by "${existing.importUrl}" with new plugin provided by "${importUrl}"`
-        );
+  #changed(entry: PackageEntry, previous?: PackageEntry) {
+    const ids = this.#ids(entry);
+    const dropped = previous
+      ? this.#ids(previous).filter((id) => !ids.includes(id))
+      : [];
+    if (!ids.length && !dropped.length) return;
+    for (const view of packages.plugins(this.#type!)) {
+      if (view.package === entry) {
+        this.#events.emit("registered", view as unknown as Plugin<D, I>);
       }
     }
-
-    this.#plugins.set(plugin.id, plugin);
-
-    this.#loadPromises.delete(plugin.id);
-    this.#loading.delete(plugin.id);
-
-    this.#events.emit("registered", plugin);
+    for (const id of dropped) this.#events.emit("removed", id);
     this.#events.emit("changed");
   }
 
+  #ids(entry: PackageEntry): string[] {
+    return entry.plugins
+      .filter((plugin) => plugin.type === this.#type)
+      .map((plugin) => plugin.id);
+  }
+
+  // One per id, the one added last winning.
+  #views(): Map<string, PluginView> {
+    if (this.#type === undefined) return new Map();
+    return new Map(packages.plugins(this.#type).map((view) => [view.id, view]));
+  }
+
+  register(plugin: LoadablePlugin<D, I>, importUrl: string) {
+    this.#type ??= plugin.type;
+    const key = sourceOf(importUrl)!;
+    const entry = packages.get(key);
+    const others = entry?.addedBy.every((added) => added.by === "js")
+      ? entry.plugins.filter(
+          (p) => !(p.type === plugin.type && p.id === plugin.id)
+        )
+      : [];
+    packages.add({
+      key,
+      version: `${importUrl}#${++versions}`,
+      importUrl,
+      plugins: [...others, plugin as unknown as LivePlugin],
+      addedBy: { by: "js", url: importUrl, stack: new Error().stack ?? "" },
+    });
+  }
+
   get(id: string): Plugin<D, I> | undefined {
-    return this.#plugins.get(id);
+    return this.#views().get(id) as Plugin<D, I> | undefined;
   }
 
   all(): Plugin<D, I>[] {
-    const entries = Array.from(this.#plugins.values());
-    return entries as Plugin<D, I>[];
+    return [...this.#views().values()] as unknown as Plugin<D, I>[];
   }
 
   filter(filter: (plugin: Plugin<D, I>) => boolean): Plugin<D, I>[] {
@@ -99,105 +145,47 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
   }
 
   async load(id: string): Promise<LoadedPlugin<D, I> | undefined> {
-    log(`load called for: ${id}`, {});
-
-    const description = this.#plugins.get(id);
-    if (!description) {
+    const view = this.#views().get(id);
+    if (!view) {
       log(`Plugin not registered: ${id}`);
       return undefined;
     }
+    if ("module" in view) return view as LoadedPlugin<D, I>;
 
-    if (isLoadedPlugin<D, I>(description)) {
-      log(`Returning already loaded plugin: ${id}`);
-      return description;
+    let module: unknown;
+    try {
+      module = await packages.load(view);
+    } catch (error) {
+      console.error(`Failed to load plugin implementation: ${id}`, error);
+      throw error;
     }
 
-    const existingPromise = this.#loadPromises.get(id);
-    if (existingPromise) {
-      log(`Returning in-flight load for: ${id}`);
-      return existingPromise;
+    // If the plugin was removed or re-registered while loading, discard
+    if (this.#views().get(id)?.package !== view.package) {
+      log(`Plugin ${id} was replaced or removed during load, discarding`);
+      return undefined;
     }
 
-    if (!isLoadablePlugin(description)) {
-      throw new Error(`Plugin ${id} is not loadable`);
+    // TODO: remove this
+    if (view.type == "patchwork:datatype") {
+      const impl = module as DatatypeImplementation | undefined;
+      if (isAsyncFunction(impl?.getTitle)) {
+        console.warn(
+          view.id,
+          view.importUrl,
+          "getTitle should not be an async function"
+        );
+      }
+      if (isAsyncFunction(impl?.setTitle)) {
+        console.warn(
+          view.id,
+          view.importUrl,
+          "setTitle should not be an async function"
+        );
+      }
     }
 
-    log(`Loading plugin implementation: ${id}`);
-    this.#loading.add(id);
-
-    const loadPromise: Promise<LoadedPlugin<D, I> | undefined> = (
-      "load" in description
-        ? description.load()
-        : import(description.import)
-    )
-      .then((implementation) => {
-        const clearIfOurs = () => {
-          if (this.#loadPromises.get(id) === loadPromise) {
-            this.#loadPromises.delete(id);
-            this.#loading.delete(id);
-          }
-        };
-
-        // If the plugin was removed or re-registered while loading, discard
-        if (this.#plugins.get(id) !== description) {
-          log(`Plugin ${id} was replaced or removed during load, discarding`);
-          clearIfOurs();
-          return undefined;
-        }
-
-        log(`Successfully loaded implementation for: ${id}`, implementation);
-        // TODO: remove this
-        const desc = description as LoadablePlugin<D, I>;
-        if (desc.type == "patchwork:datatype") {
-          const impl = implementation as DatatypeImplementation;
-          if (isAsyncFunction(impl.getTitle)) {
-            console.warn(
-              desc.id,
-              desc.importUrl,
-              "getTitle should not be an async function"
-            );
-          }
-          if (isAsyncFunction(impl.setTitle)) {
-            console.warn(
-              desc.id,
-              desc.importUrl,
-              "setTitle should not be an async function"
-            );
-          }
-        }
-
-        const {
-          load: _load,
-          import: _import,
-          ...descriptionWithoutLoad
-        } = desc as Record<string, any>;
-        if (!isPluginDescription<D>(descriptionWithoutLoad)) {
-          throw new Error("Invalid plugin description");
-        }
-        const plugin = {
-          ...descriptionWithoutLoad,
-          module: implementation,
-        };
-
-        this.#plugins.set(id, plugin);
-        clearIfOurs();
-
-        this.#events.emit("loaded", plugin);
-        this.#events.emit("changed");
-
-        return plugin;
-      })
-      .catch((error) => {
-        console.error(`Failed to load plugin implementation: ${id}`, error);
-        if (this.#loadPromises.get(id) === loadPromise) {
-          this.#loadPromises.delete(id);
-          this.#loading.delete(id);
-        }
-        throw error;
-      });
-
-    this.#loadPromises.set(id, loadPromise);
-    return loadPromise;
+    return { ...view, module } as unknown as LoadedPlugin<D, I>;
   }
 
   async loadAll(plugins: Plugin<D, I>[]): Promise<LoadedPlugin<D, I>[]> {
@@ -212,30 +200,35 @@ export class PluginRegistry<D extends PluginDescription, I = any> {
   }
 
   /**
-   * Remove a plugin by ID. Emits "removed" and "changed" if the plugin existed.
-   * Returns true if the plugin was found and removed, false if it wasn't registered.
+   * Remove a plugin by ID: a new version of its package without it, or no
+   * package if it was the only plugin. Emits "removed" and "changed" if the
+   * plugin existed. Returns true if the plugin was found and removed, false
+   * if it wasn't registered.
    */
   remove(id: string): boolean {
-    if (!this.#plugins.has(id)) {
-      return false;
-    }
-
-    this.#plugins.delete(id);
-    this.#loadPromises.delete(id);
-    this.#loading.delete(id);
-
-    this.#events.emit("removed", id);
-    this.#events.emit("changed");
-
+    const entry = this.#views().get(id)?.package;
+    if (!entry) return false;
+    const plugins = entry.plugins.filter(
+      (p) => !(p.type === this.#type && p.id === id)
+    );
+    if (!plugins.length) return packages.remove(entry.key);
+    const url = entry.importUrl;
+    packages.add({
+      ...entry,
+      version: `${url}#${++versions}`,
+      plugins,
+      addedBy: { by: "js", url, stack: new Error().stack ?? "" },
+    });
     return true;
   }
 
   isLoading(id: string): boolean {
-    return this.#loading.has(id);
+    const view = this.#views().get(id);
+    return view ? packages.isLoading(view) : false;
   }
 
   has(id: string): boolean {
-    return this.#plugins.has(id);
+    return this.#views().has(id);
   }
 
   /** Subscribe to plugin events. Returns an unsubscribe function. */

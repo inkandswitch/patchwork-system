@@ -38,11 +38,6 @@ import {
   tools,
 } from "@inkandswitch/patchwork-elements";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
-import {
-  registerPlugins,
-  unregisterPlugins,
-} from "@inkandswitch/patchwork-plugins";
-import * as plugins from "@inkandswitch/patchwork-plugins";
 import setupServiceWorker, {
   connectClassicSync,
   onPublicReaderStatus,
@@ -241,12 +236,11 @@ async function doSetup(
         },
       });
     },
-    // Counted by settings entry; registered under the url that was loaded,
-    // which for a branch package is a different document.
-    (moduleKey, importUrl) => {
+    // Counted by settings entry. The watcher takes the package out of the
+    // database itself.
+    (moduleKey) => {
       loaded.delete(moduleKey);
       loadOrder.unloaded(moduleKey);
-      unregisterPlugins(importUrl);
     },
     options.importModulesInWorker === false
       ? undefined
@@ -381,7 +375,6 @@ async function doSetup(
     account: accountDocHandle,
     signer: signerIdentity,
     packages: moduleWatcher,
-    plugins,
     sw: {
       connectClassicSync: (server) => connectClassicSync(repo, server),
       subscribeSyncState: (documentId, listener) =>
@@ -495,16 +488,11 @@ function packageName(mod: any): string | undefined {
   return named?.name ?? plugins[0]?.id;
 }
 
+// The watcher adds the package to the database; this only says what's odd.
 function onModuleLoaded(name: string, mod: any): void {
   if (!Array.isArray(mod.plugins)) {
     console.warn(`module ${name} has no plugins array`, Object.keys(mod));
-    return;
   }
-  log(
-    `registering ${mod.plugins.length} plugin(s) from ${name}`,
-    mod.plugins.map((p: any) => `${p.type}:${p.id}`)
-  );
-  registerPlugins(mod.plugins, name);
 }
 
 /**

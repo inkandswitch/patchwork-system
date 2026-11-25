@@ -16,20 +16,24 @@ import { getRegistry } from "./registry/index.js";
 
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
+/** @deprecated Use `ToolRender` from `@inkandswitch/patchwork-elements`. */
 export type ToolImplementation<T = unknown> = ToolRender<T>;
 
 // todo(chee): repo and hive on here might be temporary, think about it
+/** @deprecated Use `ToolElement` from `@inkandswitch/patchwork-elements`. */
 export type ToolElement = HTMLElement & {
   repo: Repo;
   hive?: AutomergeRepoKeyhive;
 };
 
+/** @deprecated Use `ToolRender` from `@inkandswitch/patchwork-elements`. */
 export type ToolRender<T = unknown> = (
   handle: DocHandle<T>,
   element: ToolElement
 ) => () => void;
 
 // todo this will be in the package.json
+/** @deprecated Use `ToolView` from `@inkandswitch/patchwork-elements`. */
 export type ToolDescription = PluginDescription & {
   id: string;
   tags?: string[];
@@ -41,18 +45,22 @@ export type ToolDescription = PluginDescription & {
   forTitleBar?: boolean;
 };
 
+/** @deprecated Use `ToolView` from `@inkandswitch/patchwork-elements`. */
 export type LoadedTool<T = unknown> = LoadedPlugin<
   ToolDescription,
   ToolImplementation<T>
 >;
 
+/** @deprecated Use `ToolView` from `@inkandswitch/patchwork-elements`. */
 export type Tool<T = unknown> = LoadablePlugin<
   ToolDescription,
   ToolImplementation<T>
 >;
 
+/** @deprecated Use the tools from `@inkandswitch/patchwork-elements`. */
 export type LegacyEditorProps = { docUrl: AutomergeUrl };
 
+/** @deprecated Use `toolsForType` from `@inkandswitch/patchwork-elements`. */
 export function getSupportedToolsForType(type: string): LoadedTool[] {
   const plugins = getRegistry<ToolDescription>("patchwork:tool").filter(
     (desc) => {
@@ -66,12 +74,14 @@ export function getSupportedToolsForType(type: string): LoadedTool[] {
   return plugins as LoadedTool[];
 }
 
+/** @deprecated Use `toolsForType(getType(doc))` from `@inkandswitch/patchwork-elements`. */
 export function getSupportedTools(doc: HasPatchworkMetadata): LoadedTool[] {
   const type = getType(doc);
   if (!type) return [];
   return getSupportedToolsForType(type);
 }
 
+/** @deprecated Use `defaultTool` from `@inkandswitch/patchwork-elements`. */
 export function getFallbackTool(doc: HasPatchworkMetadata) {
   const type = getType(doc)!;
   const plugins = getSupportedTools(doc);

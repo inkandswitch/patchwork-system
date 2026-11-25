@@ -5,6 +5,7 @@ import type {
   Plugin,
 } from "./types";
 
+/** @deprecated Use `packages` from `@inkandswitch/patchwork-filesystem`. */
 export function isPluginDescription<D extends PluginDescription>(
   value: unknown
 ): value is D {
@@ -17,6 +18,7 @@ export function isPluginDescription<D extends PluginDescription>(
   );
 }
 
+/** @deprecated Use `packages` from `@inkandswitch/patchwork-filesystem`. */
 export function isLoadablePlugin<
   D extends PluginDescription = PluginDescription,
   I = any,
@@ -28,6 +30,7 @@ export function isLoadablePlugin<
   );
 }
 
+/** @deprecated Use `packages` from `@inkandswitch/patchwork-filesystem`. */
 export function isLoadedPlugin<
   D extends PluginDescription = PluginDescription,
   I = any,
@@ -35,6 +38,7 @@ export function isLoadedPlugin<
   return isPluginDescription<D>(value) && "module" in value;
 }
 
+/** @deprecated Use `packages` from `@inkandswitch/patchwork-filesystem`. */
 export function isPlugin<
   T extends PluginDescription = PluginDescription,
   I = any,
