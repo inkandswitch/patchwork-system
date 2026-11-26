@@ -1,5 +1,16 @@
 # @inkandswitch/patchwork-bootloader
 
+## 0.9.10
+
+### Patch Changes
+
+- abf884f: Move the `@chee/automerge-repo` packages (repo, the broadcastchannel/messagechannel/websocket network adapters, indexeddb/nodefs storage, react-hooks and vanillajs) from `2.6.0-rabbit.1` to `2.6.0-rabbit.2`, which can load v3-shaped document urls. The `@automerge/automerge` (3.5.0) and `@automerge/automerge-subduction` (0.21.0) pins stay the same.
+- 8d00c62: The service worker and resolvers no longer put a request's URL into a console format string, where a `%c` or `%s` in the URL was interpreted. Their error responses (503, 556, 557, 558) carry the error's message, not its stack; the stack goes to the console.
+- Updated dependencies [1a806dd]
+- Updated dependencies [6aa3aaf]
+- Updated dependencies [30b6eb2]
+  - @inkandswitch/patchwork-elements@6.2.4
+
 ## 0.9.9
 
 ### Patch Changes
