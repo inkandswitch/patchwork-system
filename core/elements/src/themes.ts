@@ -28,12 +28,14 @@ import {
   subscribe,
   type SubscribeEvent,
 } from "@inkandswitch/patchwork-providers";
-import type { AccountDoc } from "./account.js";
-import { getRegistry } from "./registry/index.js";
-import type { LoadablePlugin, PluginDescription } from "./registry/types.js";
+import { packages, type AccountDoc } from "@inkandswitch/patchwork-filesystem";
 
-export interface ThemeDescription extends PluginDescription {
+export interface ThemeDescription {
+  id: string;
   type: "patchwork:theme";
+  name: string;
+  icon?: string;
+  importUrl?: string;
   /**
    * The theme's stylesheet. Its rules are all under `[theme="<id>"]`. A
    * relative URL is relative to the package that registered the theme, so a
@@ -42,7 +44,8 @@ export interface ThemeDescription extends PluginDescription {
   style?: string;
 }
 
-export type Theme = LoadablePlugin<ThemeDescription, unknown>;
+export type Theme = ThemeDescription &
+  ({ load: () => Promise<unknown> } | { import: string });
 
 export type ThemeMode = "light" | "dark";
 
@@ -125,7 +128,7 @@ function setActive(next: ActiveTheme) {
     try {
       listener(next);
     } catch (error) {
-      console.error("[patchwork-plugins] theme listener threw:", error);
+      console.error("[patchwork-elements] theme listener threw:", error);
     }
   }
 }
@@ -183,43 +186,42 @@ function styleBase(importUrl: string | undefined): string {
 
 /**
  * A theme's stylesheet as an absolute URL, with a relative `style` resolved
- * against the package that registered it. Takes the theme's description, or
- * its id to look it up in the registry. Undefined for a theme that isn't
- * registered or has no `style`.
+ * against the package it came from. Takes the theme's description, or its id
+ * to look it up in the package database. Undefined for a theme that isn't
+ * there or has no `style`.
  */
 export function themeStylesheetUrl(
   theme: ThemeDescription | string
 ): string | undefined {
-  if (typeof theme === "string") {
-    const registered = getRegistry<ThemeDescription>("patchwork:theme").get(
-      theme
-    );
-    if (!registered) return undefined;
-    theme = registered;
-  }
-  if (!theme.style) return undefined;
+  const found =
+    typeof theme === "string"
+      ? packages.plugin("patchwork:theme", theme)
+      : theme;
+  if (!found) return undefined;
+  const { style, importUrl } = found as { style?: string; importUrl?: string };
+  if (!style) return undefined;
+  const base = (found as { package?: { base?: string } }).package?.base;
   try {
-    return new URL(theme.style, styleBase(theme.importUrl)).href;
+    return new URL(style, base ?? styleBase(importUrl)).href;
   } catch {
-    return theme.style;
+    return style;
   }
 }
 
 /**
- * Keep a `<link rel="stylesheet">` on the page for every registered theme's
- * `style`, and take it away when no registered theme uses it any more. A
- * relative `style` resolves against the package that registered the theme.
- * Returns a function that stops watching and removes them.
+ * Keep a `<link rel="stylesheet">` on the page for every theme's `style` in
+ * the package database, and take it away when no theme uses it any more. A
+ * relative `style` resolves against the package it came from. Returns a
+ * function that stops watching and removes them.
  */
 export function loadThemeStylesheets(): () => void {
-  const registry = getRegistry<ThemeDescription>("patchwork:theme");
   const links = new Map<string, HTMLLinkElement>();
 
   const sync = () => {
     const styles = new Set(
-      registry
-        .all()
-        .map((theme) => themeStylesheetUrl(theme))
+      packages
+        .plugins("patchwork:theme")
+        .map((theme) => themeStylesheetUrl(theme as unknown as ThemeDescription))
         .filter((style): style is string => Boolean(style))
     );
     for (const style of styles) {
@@ -238,9 +240,13 @@ export function loadThemeStylesheets(): () => void {
   };
 
   sync();
-  const stop = registry.on("changed", sync);
+  const stops = [
+    packages.on("added", sync),
+    packages.on("replaced", sync),
+    packages.on("removed", sync),
+  ];
   return () => {
-    stop();
+    for (const stop of stops) stop();
     for (const link of links.values()) link.remove();
     links.clear();
   };
@@ -342,7 +348,7 @@ export function followThemePreferences(
       },
       (error) => {
         // Best effort: the defaults stand.
-        console.warn("[patchwork-plugins] theme preferences:", error);
+        console.warn("[patchwork-elements] theme preferences:", error);
       }
     );
   };

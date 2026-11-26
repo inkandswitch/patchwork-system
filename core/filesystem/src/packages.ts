@@ -16,7 +16,7 @@ export const defaultImportConditions = ["patchwork", "browser", "import"];
 // same URL can never be retried in this realm. Retrying under a distinct URL
 // gets a fresh entry; the heads-pinned URLs make it safe, since the content at
 // a given set of heads can't change.
-async function importModule(entryPointUrl: string) {
+export async function importModule(entryPointUrl: string): Promise<any> {
   try {
     return await import(/* @vite-ignore */ entryPointUrl);
   } catch (cause) {
@@ -35,12 +35,14 @@ export async function importPackageFromFolderDocUrl(
   folderDocUrl: AutomergeUrl,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions,
+  importer: (url: string) => Promise<any> = importModule,
 ) {
   log(`importPackage ${folderDocUrl}... (subpath: ${subpath})`);
   return importFromPackage(
     await locateFolderDocPackage(folderDocUrl),
     subpath,
     conditions,
+    importer,
   );
 }
 
@@ -48,8 +50,14 @@ export async function importPackageFromHttpUrl(
   url: string,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions,
+  importer: (url: string) => Promise<any> = importModule,
 ) {
-  return importFromPackage(await locateHttpPackage(url), subpath, conditions);
+  return importFromPackage(
+    await locateHttpPackage(url),
+    subpath,
+    conditions,
+    importer,
+  );
 }
 
 /**
@@ -60,10 +68,66 @@ export async function importPackage(
   url: string,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions,
+  importer: (url: string) => Promise<any> = importModule,
 ) {
   return isValidAutomergeUrl(url)
-    ? importPackageFromFolderDocUrl(url, subpath, conditions)
-    : importPackageFromHttpUrl(url, subpath, conditions);
+    ? importPackageFromFolderDocUrl(url, subpath, conditions, importer)
+    : importPackageFromHttpUrl(url, subpath, conditions, importer);
+}
+
+/** A `package.json` as read from `importUrl`, at `version`. */
+export type PackageJsonAt = {
+  importUrl: string;
+  /** The package root, ending in `/`: what `exports` resolve against. */
+  base: string;
+  packageJson: Record<string, any>;
+  /** An automerge url's heads, or the SHA-256 of an http `package.json`. */
+  version: string;
+};
+
+/** `plugins` is undefined when the entry point exports no `plugins` array. */
+export type ImportedPackage = { plugins?: any[]; package?: PackageJsonAt };
+
+async function locate(url: string): Promise<PackageLocation> {
+  return isValidAutomergeUrl(url)
+    ? locateFolderDocPackage(url)
+    : locateHttpPackage(url);
+}
+
+function packageAt(
+  importUrl: string,
+  location: PackageLocation,
+): PackageJsonAt | undefined {
+  if (location.kind !== "package") return undefined;
+  const { base, pkgJson: packageJson, version } = location;
+  return { importUrl, base, packageJson, version };
+}
+
+/** The `package.json` at `url`, or `undefined` for a module url. */
+export async function readPackageJson(
+  url: string,
+): Promise<PackageJsonAt | undefined> {
+  return packageAt(url, await locate(url));
+}
+
+/**
+ * Like {@link importPackage} for the package's main entry, but also hands back
+ * the `package.json` it read (fetched once), if there was one.
+ */
+export async function importPackageWithJson(
+  url: string,
+): Promise<ImportedPackage> {
+  const location = await locate(url);
+  const mod = await importFromPackage(
+    location,
+    ".",
+    defaultImportConditions,
+    importModule,
+  );
+  return {
+    plugins: Array.isArray(mod?.plugins) ? mod.plugins : undefined,
+    package: packageAt(url, location),
+  };
 }
 
 /**
@@ -79,14 +143,10 @@ export async function readPluginManifest(
   url: string,
   conditions: string[] = defaultImportConditions,
 ): Promise<{ plugins: Array<Record<string, any>> } | undefined> {
-  const location = isValidAutomergeUrl(url)
-    ? await locateFolderDocPackage(url)
-    : await locateHttpPackage(url);
-  if (location.kind !== "package" || !hasPluginManifest(location.pkgJson)) {
-    return undefined;
-  }
+  const pkg = await readPackageJson(url);
+  if (!pkg || !hasPluginManifest(pkg.packageJson)) return undefined;
   return {
-    plugins: pluginsFromManifest(location.pkgJson, location.base, conditions),
+    plugins: pluginsFromManifest(pkg.packageJson, pkg.base, conditions),
   };
 }
 
@@ -100,7 +160,12 @@ const MODULE_FILE_EXTENSION = /\.(mjs|cjs|js|mts|cts|ts|jsx|tsx)$/;
  */
 type PackageLocation =
   | { kind: "module"; href: string }
-  | { kind: "package"; base: string; pkgJson: Record<string, any> };
+  | {
+    kind: "package";
+    base: string;
+    pkgJson: Record<string, any>;
+    version: string;
+  };
 
 async function locateHttpPackage(url: string): Promise<PackageLocation> {
   // Absolute URLs (http(s), data:, blob:) resolve on their own; only a relative
@@ -160,16 +225,23 @@ async function locateHttpPackage(url: string): Promise<PackageLocation> {
     return { kind: "module", href: resolved.href };
   }
 
+  const text = await response.text();
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  const version = Array.from(new Uint8Array(digest), (b) =>
+    b.toString(16).padStart(2, "0")).join("");
   let pkgJson: Record<string, any>;
   try {
-    pkgJson = await response.json();
+    pkgJson = JSON.parse(text);
   } catch (cause) {
     throw new Error(`Fetched ${packageJsonUrl} but couldn't parse it as JSON`, {
       cause,
     });
   }
 
-  return { kind: "package", base, pkgJson };
+  return { kind: "package", base, pkgJson, version };
 }
 
 async function locateFolderDocPackage(
@@ -180,17 +252,19 @@ async function locateFolderDocPackage(
     documentBaseOrigin(),
   ).href;
   const pkgJson = await packageJsonContentsFromFolderDocUrl(folderDocUrl);
-  return { kind: "package", base, pkgJson };
+  const version = folderDocUrl.split("#")[1] ?? "";
+  return { kind: "package", base, pkgJson, version };
 }
 
 async function importFromPackage(
   location: PackageLocation,
   subpath: string,
   conditions: string[],
+  importer: (url: string) => Promise<any>,
 ) {
   if (location.kind === "module") {
     log(`importing ${location.href.slice(-60)}`);
-    return importModule(location.href);
+    return importer(location.href);
   }
   const { base, pkgJson } = location;
   // A package that lists its plugins in package.json says what they are
@@ -205,7 +279,7 @@ async function importFromPackage(
     base,
   ).href;
   log(`importing ${entryPointUrl.slice(-60)}`);
-  return importModule(entryPointUrl);
+  return importer(entryPointUrl);
 }
 
 function isRecord(value: unknown): value is Record<string, any> {
@@ -316,8 +390,9 @@ export async function importPluginFromPackage(
   pluginId: string,
   subpath: string = ".",
   conditions: string[] = defaultImportConditions,
+  importer: (url: string) => Promise<any> = importModule,
 ) {
-  const mod = await importPackage(packageUrl, subpath, conditions);
+  const mod = await importPackage(packageUrl, subpath, conditions, importer);
   const plugins: any[] = Array.isArray(mod?.plugins) ? mod.plugins : [];
   const plugin = plugins.find(
     (p) => p?.type === pluginType && p?.id === pluginId,
@@ -331,7 +406,7 @@ export async function importPluginFromPackage(
     return plugin.load();
   }
   if (typeof plugin.import === "string") {
-    return import(/* @vite-ignore */ plugin.import);
+    return importer(plugin.import);
   }
   throw new Error(
     `Plugin "${pluginType}:${pluginId}" at ${packageUrl} has no load() function or import URL`,

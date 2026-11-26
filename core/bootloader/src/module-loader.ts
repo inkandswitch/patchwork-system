@@ -8,8 +8,11 @@
 // here, and each plugin's `load()` imports only its own export.
 
 import {
+  type ImportedPackage,
+  hasPluginManifest,
   importPluginFromPackage,
-  readPluginManifest,
+  pluginsFromManifest,
+  readPackageJson,
 } from "@inkandswitch/patchwork-filesystem";
 import { MODULE_LOADER_WORKER } from "./emitted.js";
 
@@ -112,9 +115,14 @@ function discoverDescriptors(urlAtHeads: string): Promise<Descriptor[]> {
 
 export async function importAutomergePackageViaWorker(
   url: string
-): Promise<{ plugins: Descriptor[] }> {
-  const fromManifest = await readPluginManifest(url);
-  if (fromManifest) return fromManifest;
+): Promise<ImportedPackage> {
+  const pkg = await readPackageJson(url);
+  if (pkg && hasPluginManifest(pkg.packageJson)) {
+    return {
+      plugins: pluginsFromManifest(pkg.packageJson, pkg.base),
+      package: pkg,
+    };
+  }
   const descriptors = await discoverDescriptors(url);
   const plugins = descriptors.map((descriptor) => {
     const { id, type } = descriptor;
@@ -126,5 +134,5 @@ export async function importAutomergePackageViaWorker(
       load: () => importPluginFromPackage(url, type, id),
     };
   });
-  return { plugins };
+  return { plugins, package: pkg };
 }

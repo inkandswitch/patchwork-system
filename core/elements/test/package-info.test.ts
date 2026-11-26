@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Repo } from "@automerge/automerge-repo/slim";
+import {
+  encodeHeads,
+  generateAutomergeUrl,
+  parseAutomergeUrl,
+  stringifyAutomergeUrl,
+  type Repo,
+} from "@automerge/automerge-repo/slim";
 import * as Automerge from "@automerge/automerge";
 import {
   bareAutomergeUrl,
@@ -7,6 +13,7 @@ import {
   readClaims,
   readHistory,
 } from "../src/package-info.js";
+import { packages } from "@inkandswitch/patchwork-filesystem";
 
 describe("automerge urls", () => {
   it("reads the heads a url is pinned to", () => {
@@ -53,6 +60,82 @@ describe("readClaims", () => {
   it("is undefined when there's no package.json", async () => {
     vi.stubGlobal("fetch", async () => new Response("", { status: 404 }));
     expect(await readClaims("https://example.com/a/index.js")).toBeUndefined();
+  });
+});
+
+describe("readClaims and the package database", () => {
+  const key = "https://db.example.com/pkg/index.js";
+  const add = (packageJson: any, importUrl = key) =>
+    packages.add({
+      key,
+      version: "1",
+      importUrl,
+      packageJson,
+      plugins: [],
+      addedBy: { by: "js", url: key, stack: "" },
+    } as any);
+  afterEach(() => {
+    packages.remove(key);
+    vi.unstubAllGlobals();
+  });
+
+  it("readClaims uses the database without fetching", async () => {
+    const fetch = vi.fn(async () => new Response("", { status: 404 }));
+    vi.stubGlobal("fetch", fetch);
+    add({ name: "from-db", version: "2.0.0" });
+    expect(await readClaims(key)).toMatchObject({ name: "from-db", version: "2.0.0" });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("fetches for a different pinned version", async () => {
+    const fetch = vi.fn(async () => new Response("", { status: 404 }));
+    vi.stubGlobal("fetch", fetch);
+    add({ name: "from-db" });
+    expect(await readClaims(key + "#abc")).toBeUndefined();
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it("fetches for a different pinned version in a service-worker url", async () => {
+    const bare = generateAutomergeUrl();
+    const heads = Automerge.getHeads(Automerge.change(Automerge.init(), (d: any) => { d.a = 1; }));
+    const doc = encodeURIComponent(bare);
+    const key = `https://host.example.com/${doc}/index.js`;
+    const fetch = vi.fn(async () => new Response("", { status: 404 }));
+    vi.stubGlobal("fetch", fetch);
+    packages.add({
+      key,
+      version: "1",
+      importUrl: key,
+      packageJson: { name: "from-db" },
+      plugins: [],
+      addedBy: { by: "js", url: key, stack: "" },
+    } as any);
+    try {
+      const pinned = `https://host.example.com/${encodeURIComponent(
+        stringifyAutomergeUrl({ documentId: parseAutomergeUrl(bare).documentId, heads: encodeHeads(heads) }),
+      )}/index.js`;
+      expect(await readClaims(pinned)).toBeUndefined();
+      expect(fetch).toHaveBeenCalled();
+      expect(await readClaims(key)).toMatchObject({ name: "from-db" });
+    } finally {
+      packages.remove(key);
+    }
+  });
+
+  it("readClaims lists patchwork.plugins", async () => {
+    add({
+      name: "p",
+      patchwork: {
+        plugins: {
+          "patchwork:tool": {
+            a: { name: "A", supportedDatatypes: ["x"], export: "./a" },
+          },
+        },
+      },
+    });
+    expect((await readClaims(key))?.plugins).toEqual([
+      { id: "a", name: "A", type: "patchwork:tool", supportedDatatypes: ["x"] },
+    ]);
   });
 });
 

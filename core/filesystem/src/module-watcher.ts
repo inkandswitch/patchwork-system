@@ -7,9 +7,14 @@ import {
   stringifyAutomergeUrl,
 } from "@automerge/automerge-repo/slim";
 import {
-  importPackage,
-  importPackageFromHttpUrl,
+  hasPluginManifest,
+  type ImportedPackage,
+  importPackageWithJson,
+  pluginsFromManifest,
 } from "./packages.js";
+import type { PackageDatabase } from "./package-db/database.js";
+import { sourceOf } from "./package-db/source.js";
+import type { PluginRecord } from "./package-db/types.js";
 import { type HasPatchworkMetadata } from "./metadata.js";
 import {
   DEFAULT_BRANCH,
@@ -159,6 +164,27 @@ function warnBranchesUnsupported(branchesDocUrl: AutomergeUrl) {
 // todo this can be a function that takes a plugin system and returns a change
 // handler
 
+/**
+ * A package's plugins as plain data: a manifest's, with their `export`, or an
+ * entry point's without their code, which the database imports again itself.
+ */
+export function pluginRecords(
+  plugins: any[],
+  packageJson: Record<string, any>,
+  base: string
+) {
+  if (hasPluginManifest(packageJson)) {
+    const byType = packageJson.patchwork.plugins;
+    return pluginsFromManifest(packageJson, base).map(({ load, ...plugin }) => ({
+      ...plugin,
+      export: byType[plugin.type][plugin.id].export,
+    })) as PluginRecord[];
+  }
+  return plugins.map(
+    ({ load, import: _import, module, ...plugin }) => plugin
+  ) as PluginRecord[];
+}
+
 /** How a package is doing: what a list of packages shows beside each one. */
 export type PackageStatus =
   | { state: "loading" }
@@ -202,6 +228,10 @@ export class ModuleWatcher extends EventTarget {
   #plan: LoadPlan | undefined;
   // The sources given to the constructor have been read.
   #sourcesRead = gate();
+  // Module urls already warned about having no package.json.
+  #warnedModuleUrls = new Set<string>();
+  // A source failed to read, so the list isn't whole: nothing is pruned.
+  #incomplete = false;
 
   /**
    * Told the url the module was imported from (pinned to heads, for an
@@ -224,7 +254,9 @@ export class ModuleWatcher extends EventTarget {
    * `onLoad` takes. By default it imports the entry point on this thread; the
    * browser bootloader runs it in a worker instead.
    */
-  importAutomergePackage: (urlAtHeads: string) => Promise<any>;
+  importAutomergePackage: (urlAtHeads: string) => Promise<ImportedPackage>;
+  /** Where the packages this watcher loads are added, if anywhere. */
+  database?: PackageDatabase;
   /**
    * How a package doc is looked up at its latest heads and watched for new
    * ones. Defaults to holding each one in `repo`; the browser passes
@@ -237,8 +269,9 @@ export class ModuleWatcher extends EventTarget {
     urls: Record<string, string>,
     callback: (name: string, mod: any, moduleKey: string) => void,
     onUnload?: (moduleKey: string, importUrl: string) => void,
-    importAutomergePackage: (urlAtHeads: string) => Promise<any> = (url) =>
-      importPackage(url),
+    importAutomergePackage: (
+      urlAtHeads: string
+    ) => Promise<ImportedPackage> = importPackageWithJson,
     tracker: PackageTracker = trackPackagesInRepo(repo)
   ) {
     super();
@@ -274,6 +307,7 @@ export class ModuleWatcher extends EventTarget {
           `module settings source "${name}" (${url}) failed to load; skipping`,
           result.reason
         );
+        this.#incomplete = true;
         continue;
       }
       const value = result.value;
@@ -426,6 +460,16 @@ export class ModuleWatcher extends EventTarget {
     return docs;
   }
 
+  /**
+   * The package lists `entry` is in, by name, with the url each is read from.
+   * `entry` is a package-list adder's `entry`, as the list has it.
+   */
+  listsWith(entry: string): Array<{ name: string; url: string }> {
+    return this.settingsDocs()
+      .filter(({ doc }) => (doc?.modules as string[] | undefined)?.includes(entry))
+      .map(({ name }) => ({ name, url: this.urls[name] }));
+  }
+
   async loadModules(modules: string[]) {
     await Promise.all(
       modules.map(async (importName) => {
@@ -496,7 +540,7 @@ export class ModuleWatcher extends EventTarget {
 
   private async importPackageSafe(
     importName: string
-  ): Promise<{ mod: any } | { error: unknown }> {
+  ): Promise<{ mod: ImportedPackage } | { error: unknown }> {
     try {
       if (isValidAutomergeUrl(importName)) {
         // Pin to heads so descriptor discovery and any later main-thread load
@@ -507,7 +551,7 @@ export class ModuleWatcher extends EventTarget {
           ),
         };
       }
-      return { mod: await importPackageFromHttpUrl(importName) };
+      return { mod: await importPackageWithJson(importName) };
     } catch (error) {
       console.error(
         `%c Failed to import ${importName}`,
@@ -575,6 +619,7 @@ export class ModuleWatcher extends EventTarget {
                 .filter((id: unknown): id is string => typeof id === "string")
             : [],
         });
+        this.#addToDatabase(mod, importUrl, moduleKey);
         this.onLoad(importUrl, mod, moduleKey);
         this.#noteLoaded(moduleKey, mod);
         return;
@@ -596,6 +641,60 @@ export class ModuleWatcher extends EventTarget {
       this.#retryTimers.set(moduleKey, timer);
     };
     await attempt(0);
+  }
+
+  #addToDatabase(mod: ImportedPackage, importUrl: string, moduleKey: string) {
+    const database = this.database;
+    if (!database) return;
+    if (!mod.package) {
+      if (this.#warnedModuleUrls.has(importUrl)) return;
+      this.#warnedModuleUrls.add(importUrl);
+      console.warn(
+        `${importUrl} has no package.json, which isn't supported; it's loaded, but not added to the package database`
+      );
+      return;
+    }
+    const { base, packageJson, version } = mod.package;
+    const key = sourceOf(mod.package.importUrl)!;
+    const isNew = database.get(key)?.version !== version;
+    database.add({
+      key,
+      version,
+      importUrl: mod.package.importUrl,
+      base,
+      packageJson,
+      plugins: pluginRecords(mod.plugins ?? [], packageJson, base),
+      addedBy: { by: "package-list", entry: moduleKey },
+    });
+    if (isNew) database.announce(key);
+  }
+
+  /**
+   * Remove the packages a package list added, last visit's included, that no
+   * list has any more. Call it once every list has been read.
+   */
+  async forgetUnlisted(): Promise<void> {
+    const database = this.database;
+    if (!database || this.#incomplete) return;
+    // A removal before hydration finishes wouldn't stick.
+    await database.ready.catch(() => {});
+    if (this.#disposed) return;
+    for (const entry of database.all()) {
+      const unlisted = entry.addedBy.every(
+        (added) =>
+          added.by === "package-list" && !this.#activeModules.has(added.entry)
+      );
+      if (unlisted && entry.addedBy.length) database.remove(entry.key);
+    }
+  }
+
+  /** Look the package docs at `key` up again: another tab has news of them. */
+  recheck(key: string): void {
+    for (const [importName, watched] of this.#watchedModules) {
+      if (isValidAutomergeUrl(importName) && watched.packageUrl === key) {
+        this.processModuleEntry(importName).catch(console.error);
+      }
+    }
   }
 
   // TODO: This is a bit janky and relies on a bunch of heuristics.
@@ -773,6 +872,7 @@ export class ModuleWatcher extends EventTarget {
       stripHeads(previous) !== stripHeads(importUrl)
     ) {
       this.onUnload?.(moduleKey, previous);
+      this.database?.remove(sourceOf(previous)!);
     }
   }
 
@@ -808,6 +908,7 @@ export class ModuleWatcher extends EventTarget {
       this.dispatchEvent(new Event("status"));
     }
     this.onUnload?.(entry, loadedUrl);
+    this.database?.remove(sourceOf(loadedUrl)!);
   }
 
   dispose() {

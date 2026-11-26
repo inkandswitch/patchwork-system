@@ -7,11 +7,8 @@ import type {
 import type {
   AccountCreator,
   AccountDoc,
-} from "@inkandswitch/patchwork-plugins";
-import type * as pluginsNS from "@inkandswitch/patchwork-plugins";
+} from "@inkandswitch/patchwork-filesystem";
 import type { PublicReaderStatus } from "@inkandswitch/patchwork-bootloader";
-
-export type PluginsApi = typeof pluginsNS;
 
 export type SignerIdentity = { peerId: string; verifyingKey: string };
 
@@ -38,6 +35,8 @@ export interface ServiceWorkerApi {
 
 export interface OpenOptions {
   tool?: string;
+  /** The package to take `tool` from, when several bring that id. */
+  package?: string;
   type?: string;
   title?: string;
 }
@@ -126,6 +125,14 @@ export interface PatchworkOptions {
   importModulesInWorker?: boolean;
 
   /**
+   * Render views from last visit's packages straight away, and reload them in
+   * place as newer versions come in, rather than wait for the package lists.
+   * Defaults to `true`. `localStorage["patchwork:boot-from-last-visit"]`,
+   * `"on"` or `"off"`, overrides it.
+   */
+  bootFromLastVisit?: boolean;
+
+  /**
    * Told what boot is doing, as it moves on, for a loading screen. Called
    * with a fresh object each time. Without it, Patchwork shows a small box in
    * the corner saying what boot is doing, if boot takes long enough to notice;
@@ -185,6 +192,5 @@ export interface Patchwork {
   find<D>(url: AutomergeUrl): Promise<DocHandle<D>>;
 
   readonly packages: ModuleWatcher;
-  readonly plugins: PluginsApi;
   readonly sw: ServiceWorkerApi;
 }

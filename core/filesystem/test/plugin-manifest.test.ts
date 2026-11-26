@@ -1,7 +1,14 @@
+import {
+  Repo,
+  parseAutomergeUrl,
+  stringifyAutomergeUrl,
+} from "@automerge/automerge-repo/slim";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   importPackageFromHttpUrl,
+  importPackageWithJson,
   pluginsFromManifest,
+  readPackageJson,
 } from "../src/packages.js";
 
 const manifest = {
@@ -44,7 +51,7 @@ describe("patchwork.plugins in package.json", () => {
     const fetch = vi.fn(async () => ({
       ok: true,
       status: 200,
-      json: async () => manifest,
+      text: async () => JSON.stringify(manifest),
     }));
     vi.stubGlobal("fetch", fetch);
 
@@ -159,10 +166,74 @@ describe("patchwork.plugins in package.json", () => {
     const { patchwork: _, ...plain } = manifest;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: true, status: 200, json: async () => plain }))
+      vi.fn(async () => ({ ok: true, status: 200, text: async () => JSON.stringify(plain) }))
     );
     await expect(
       importPackageFromHttpUrl("https://cdn.example.test/manifest-package/")
     ).rejects.toThrow();
+  });
+});
+
+describe("readPackageJson", () => {
+  const body = JSON.stringify(manifest);
+  const stubFetch = () => {
+    const fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => body,
+      json: async () => manifest,
+    }));
+    vi.stubGlobal("fetch", fetch);
+    return fetch;
+  };
+
+  it("http version is the sha-256 of the body", async () => {
+    stubFetch();
+    const url = "https://cdn.example.test/manifest-package/";
+    const pkg = await readPackageJson(url);
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(body)
+    );
+    expect(pkg).toEqual({
+      importUrl: url,
+      base: url,
+      packageJson: manifest,
+      version: Array.from(new Uint8Array(digest), (b) =>
+        b.toString(16).padStart(2, "0")
+      ).join(""),
+    });
+  });
+
+  it("automerge version is the url's heads", async () => {
+    stubFetch();
+    vi.stubGlobal("location", new URL("http://localhost/"));
+    const handle = await new Repo({ network: [] }).create2({ a: 1 });
+    const url = stringifyAutomergeUrl({
+      documentId: parseAutomergeUrl(handle.url).documentId,
+      heads: handle.heads()!,
+    });
+    const pkg = await readPackageJson(url);
+    expect(pkg?.version).toBe(url.split("#")[1]);
+    expect(pkg?.version).not.toBe("");
+    expect(pkg?.packageJson).toEqual(manifest);
+  });
+
+  it("a module url has no package.json", async () => {
+    const fetch = stubFetch();
+    expect(
+      await readPackageJson("https://cdn.example.test/x/main.js")
+    ).toBeUndefined();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("importPackageWithJson fetches package.json once", async () => {
+    const fetch = stubFetch();
+    const result = await importPackageWithJson(
+      "https://cdn.example.test/manifest-package/"
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(result.plugins).toHaveLength(3);
+    expect(result.package?.packageJson).toEqual(manifest);
   });
 });

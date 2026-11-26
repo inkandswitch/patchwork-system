@@ -2,39 +2,12 @@ import {
   isValidAutomergeUrl,
   parseAutomergeUrl,
   stringifyAutomergeUrl,
+  type AutomergeUrl,
   type DocHandle,
   type Repo,
 } from "@automerge/automerge-repo/slim";
-import type {
-  LoadablePlugin,
-  LoadedPlugin,
-  PluginDescription,
-} from "./registry/types.js";
-import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { HasPatchworkMetadata } from "./metadata.js";
 import { isKeyhiveDoc } from "./keyhive.js";
-
-export type DatatypeImplementation<D = unknown> = {
-  init(doc: D, repo: Repo): void;
-  getTitle(doc: D): string;
-  setTitle?(doc: D, title: string): void;
-};
-
-export interface DatatypeDescription extends PluginDescription {
-  type: "patchwork:datatype";
-  icon: string;
-  unlisted?: boolean;
-}
-
-export type Datatype<D = unknown> = LoadablePlugin<
-  DatatypeDescription,
-  DatatypeImplementation<D>
->;
-
-export type LoadedDatatype<D = unknown> = LoadedPlugin<
-  DatatypeDescription,
-  DatatypeImplementation<D>
->;
 
 const splitImportUrl = (
   importUrl: string | undefined
@@ -47,10 +20,15 @@ const splitImportUrl = (
 };
 
 export const createDocOfDatatype2 = async <D>(
-  datatype: LoadedDatatype<D>,
+  datatype: {
+    id: string;
+    importUrl?: string;
+    module: { init(doc: D, repo: Repo): void };
+  },
   repo: Repo,
   change?: (doc: D) => void,
-  hive?: AutomergeRepoKeyhive
+  // Structural, so filesystem takes no keyhive dependency.
+  hive?: { addSyncServerRelayToDoc(url: AutomergeUrl): Promise<unknown> }
 ): Promise<DocHandle<D & HasPatchworkMetadata>> => {
   const handle = await repo.create2<D & HasPatchworkMetadata>();
   if (hive && isKeyhiveDoc(handle.url)) {

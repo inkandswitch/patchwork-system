@@ -24,25 +24,20 @@ import * as AutomergeRepo from "@automerge/automerge-repo/slim";
 import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
 
 import {
+  type AccountDoc,
   ModuleWatcher,
+  packages,
+  resolveAccountHandle,
   trackPackagesViaServiceWorker,
 } from "@inkandswitch/patchwork-filesystem";
 import { importAutomergePackageViaWorker } from "@inkandswitch/patchwork-bootloader/module-loader";
-import { registerPatchworkViewElement } from "@inkandswitch/patchwork-elements";
-import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import {
-  type AccountDoc,
-  type DatatypeDescription,
-  type LoadedDatatype,
-  createDocOfDatatype2,
   followThemePreferences,
-  getRegistry,
-  registerPlugins,
-  resolveAccountHandle,
+  registerPatchworkViewElement,
   startThemes,
-  unregisterPlugins,
-} from "@inkandswitch/patchwork-plugins";
-import * as plugins from "@inkandswitch/patchwork-plugins";
+  tools,
+} from "@inkandswitch/patchwork-elements";
+import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import setupServiceWorker, {
   connectClassicSync,
   onPublicReaderStatus,
@@ -61,11 +56,12 @@ import type {
 import { createRepo, initWasm } from "./repo.js";
 import { gatePublicDocsOnReader } from "./public-access.js";
 import { watchDocument } from "./watch-document.js";
-import { createRouter, type Router } from "./router.js";
+import { createDocOfType, createRouter, type Router } from "./router.js";
 import { createDefaultAccount } from "./createAccount.js";
 import { showBootStatus } from "./boot-status.js";
 import { loadFolderTree } from "./folder-tree.js";
 import {
+  bootFromLastVisit,
   hashTools,
   planLoadOrder,
   preloadPlugins,
@@ -237,12 +233,11 @@ async function doSetup(
         },
       });
     },
-    // Counted by settings entry; registered under the url that was loaded,
-    // which for a branch package is a different document.
-    (moduleKey, importUrl) => {
+    // Counted by settings entry. The watcher takes the package out of the
+    // database itself.
+    (moduleKey) => {
       loaded.delete(moduleKey);
       loadOrder.unloaded(moduleKey);
-      unregisterPlugins(importUrl);
     },
     options.importModulesInWorker === false
       ? undefined
@@ -254,6 +249,25 @@ async function doSetup(
       watchDocument(repo, url, onChange)
     )
   );
+
+  moduleWatcher.database = packages;
+  packages.onNews((key) => moduleWatcher.recheck(key));
+  const fromLastVisit = bootFromLastVisit(
+    options.bootFromLastVisit,
+    localStorage
+  );
+  // Saved by account. One that can't be opened stays in memory. Last visit's
+  // entries are only read back when they're booted from.
+  const openPackages = (accountUrl: string) =>
+    packages
+      .open(`patchwork-packages ${accountUrl}`, { hydrate: fromLastVisit })
+      .catch((error) =>
+        console.warn("couldn't open the saved package database", error)
+      );
+  const storedAccountUrl = localStorage.getItem(accountKey);
+  const accountKnown =
+    !!storedAccountUrl && AutomergeRepo.isValidAutomergeUrl(storedAccountUrl);
+  if (accountKnown) void openPackages(storedAccountUrl);
 
   // What the last visit had on screen loads first: the hash's tools, then
   // the root view's, then the views inside it, and so on.
@@ -282,6 +296,7 @@ async function doSetup(
     hive,
     createAccount: options.createAccount ?? createDefaultAccount,
   })) as DocHandle<AccountDoc>;
+  if (!accountKnown) void openPackages(accountDocHandle.url);
 
   followThemePreferences(repo, accountDocHandle);
 
@@ -292,6 +307,7 @@ async function doSetup(
     moduleWatcher,
     () => {
       if (listed) loadOrder.keepOnly(listed);
+      void moduleWatcher.forgetUnlisted();
     }
   );
 
@@ -299,9 +315,7 @@ async function doSetup(
     () =>
       log(
         "doneLoading, tools registered:",
-        getRegistry("patchwork:tool")
-          .all()
-          .map((t: any) => t.id)
+        tools().map((tool) => tool.id)
       ),
     (err: unknown) => console.error("doneLoading rejected:", err)
   );
@@ -321,7 +335,15 @@ async function doSetup(
   let router: Router | undefined;
   if (routing !== false) {
     rootElement.style.visibility = "hidden";
-    await firstToolsLoaded;
+    // Last visit's packages, as soon as they're read back, and newer versions
+    // replace them as they load. Or, with no frame tool to start from (a
+    // first visit), this visit's.
+    if (fromLastVisit) await packages.ready.catch(() => {});
+    const knowsFrame =
+      options.frameToolId ??
+      accountDocHandle.doc().frameToolId ??
+      tools().some((t) => t.tags?.includes("frame-tool") && !t.unlisted);
+    if (!fromLastVisit || !knowsFrame) await firstToolsLoaded;
     router = createRouter({
       rootElement,
       repo,
@@ -355,27 +377,14 @@ async function doSetup(
     account: accountDocHandle,
     signer: signerIdentity,
     packages: moduleWatcher,
-    plugins,
     sw: {
       connectClassicSync: (server) => connectClassicSync(repo, server),
       subscribeSyncState: (documentId, listener) =>
         subscribeSyncState(repo, documentId, listener),
     },
 
-    async create<D>(type: string, init?: (doc: D) => void) {
-      const datatype =
-        await getRegistry<DatatypeDescription>("patchwork:datatype").load(type);
-      if (!datatype) {
-        throw new Error(
-          `patchwork.create: no datatype registered for "${type}"`
-        );
-      }
-      return createDocOfDatatype2(
-        datatype as unknown as LoadedDatatype<D>,
-        repo,
-        init,
-        hive
-      );
+    create<D>(type: string, init?: (doc: D) => void) {
+      return createDocOfType(repo, type, allLoaded, init, hive);
     },
     open(url: AutomergeUrl, openOptions: OpenOptions = {}) {
       rootElement.dispatchEvent(
@@ -383,6 +392,7 @@ async function doSetup(
           detail: {
             url,
             toolId: openOptions.tool,
+            packageUrl: openOptions.package,
             type: openOptions.type,
             title: openOptions.title,
           },
@@ -481,16 +491,11 @@ function packageName(mod: any): string | undefined {
   return named?.name ?? plugins[0]?.id;
 }
 
+// The watcher adds the package to the database; this only says what's odd.
 function onModuleLoaded(name: string, mod: any): void {
   if (!Array.isArray(mod.plugins)) {
     console.warn(`module ${name} has no plugins array`, Object.keys(mod));
-    return;
   }
-  log(
-    `registering ${mod.plugins.length} plugin(s) from ${name}`,
-    mod.plugins.map((p: any) => `${p.type}:${p.id}`)
-  );
-  registerPlugins(mod.plugins, name);
 }
 
 /**
@@ -562,6 +567,7 @@ function subscribeSyncState(
 export { createRepo, initWasm } from "./repo.js";
 export { watchDocument } from "./watch-document.js";
 export { createRouter } from "./router.js";
+export { bootFromLastVisit } from "./load-order.js";
 export {
   showLoadingAnimation,
   hideLoadingAnimation,

@@ -1,0 +1,410 @@
+import {
+  encodeHeads,
+  stringifyAutomergeUrl,
+  type DocumentId,
+  type UrlHeads,
+} from "@automerge/automerge-repo/slim";
+import { packages, sourceOf } from "@inkandswitch/patchwork-filesystem";
+import { describe, expect, it } from "vitest";
+import { PluginRegistry } from "../src/registry/registry.js";
+import {
+  getRegistry,
+  registerPlugins,
+  unregisterPlugins,
+} from "../src/registry/index.js";
+
+const ID = "2uZrhZ7G2NJxryZSMWSdDNFCke8C";
+const OTHER = "4NMNnkMhL8jXrdJ9jamS58PAVdXu";
+
+// Heads of two versions, shaped as automerge's are, to pin urls of the
+// documents above to.
+const v1 = encodeHeads(["a1".repeat(32)] as never);
+const v2 = encodeHeads(["b2".repeat(32)] as never);
+const at = (id: string, heads: UrlHeads) =>
+  stringifyAutomergeUrl({ documentId: id as DocumentId, heads });
+
+const plugin = (type: string, id: string) =>
+  ({ type, id, name: id, load: async () => ({}) }) as any;
+
+describe("registerPlugins and unregisterPlugins", () => {
+  it("unregisters a package's plugins at any heads", () => {
+    const type = "test:unregister-any-heads";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "a")], at(ID, v1));
+    registerPlugins([plugin(type, "b")], at(OTHER, v2));
+
+    unregisterPlugins(`automerge:${ID}`);
+
+    expect(registry.has("a")).toBe(false);
+    expect(registry.has("b")).toBe(true);
+    unregisterPlugins(`automerge:${OTHER}`);
+  });
+
+  it("unregisters by a url at heads too", () => {
+    const type = "test:unregister-with-heads";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "a")], at(ID, v1));
+
+    unregisterPlugins(at(ID, v2));
+
+    expect(registry.has("a")).toBe(false);
+  });
+
+  it("compares non-automerge urls exactly", () => {
+    const type = "test:unregister-exact";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "a")], "https://example.test/a.js");
+
+    unregisterPlugins("https://example.test/b.js");
+    expect(registry.has("a")).toBe(true);
+
+    unregisterPlugins("https://example.test/a.js");
+    expect(registry.has("a")).toBe(false);
+  });
+
+  it("treats service worker urls at different heads as one package", () => {
+    const type = "test:unregister-sw";
+    const registry = getRegistry(type);
+    registerPlugins(
+      [plugin(type, "a")],
+      `http://localhost/${encodeURIComponent(at(ID, v1))}/path/entry.js`
+    );
+
+    unregisterPlugins(`http://localhost/automerge%3A${ID}/path/entry.js`);
+
+    expect(registry.has("a")).toBe(false);
+  });
+
+  it("doesn't take a plain url with the document's id in it for the package", () => {
+    const type = "test:unregister-sw-plain";
+    const registry = getRegistry(type);
+    registerPlugins(
+      [plugin(type, "a")],
+      `http://localhost/${encodeURIComponent(at(ID, v1))}/path/entry.js`
+    );
+
+    unregisterPlugins(`http://localhost/${ID}/path/entry.js`);
+
+    expect(registry.has("a")).toBe(true);
+    unregisterPlugins(`http://localhost/automerge%3A${ID}/path/entry.js`);
+  });
+
+  it("drops a plugin the next version of the package no longer provides", () => {
+    const type = "test:reload-drops";
+    const registry = getRegistry(type);
+    registerPlugins(
+      [plugin(type, "kept"), plugin(type, "renamed-old")],
+      at(ID, v1)
+    );
+
+    registerPlugins(
+      [plugin(type, "kept"), plugin(type, "renamed-new")],
+      at(ID, v2)
+    );
+
+    expect(registry.has("renamed-old")).toBe(false);
+    expect(registry.has("renamed-new")).toBe(true);
+    expect(registry.get("kept")?.importUrl).toBe(at(ID, v2));
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("replaces plugins the new version still provides without removing them", () => {
+    const type = "test:reload-in-place";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "kept")], at(ID, v1));
+    const removed: string[] = [];
+    registry.on("removed", (id) => void removed.push(id));
+
+    registerPlugins([plugin(type, "kept")], at(ID, v2));
+
+    expect(removed).toEqual([]);
+    unregisterPlugins(`automerge:${ID}`);
+  });
+
+  it("leaves a plugin another package has since overridden", () => {
+    const type = "test:reload-overridden";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "shared")], at(ID, v1));
+    registerPlugins([plugin(type, "shared")], at(OTHER, v1));
+
+    registerPlugins([], at(ID, v2));
+
+    expect(registry.get("shared")?.importUrl).toBe(at(OTHER, v1));
+    unregisterPlugins(`automerge:${OTHER}`);
+  });
+});
+
+describe("registerPlugins and the package database", () => {
+  it("registerPlugins adds a js entry with a stack", () => {
+    const url = "https://example.test/js-entry.js";
+    registerPlugins([plugin("test:db-js", "a")], url);
+
+    const entry = packages.get(sourceOf(url)!)!;
+    expect(entry.importUrl).toBe(url);
+    expect(entry.version).toBe(url);
+    expect(entry.plugins.map((p) => p.id)).toEqual(["a"]);
+    expect(entry.addedBy).toHaveLength(1);
+    expect(entry.addedBy[0]).toMatchObject({ by: "js", url });
+    expect((entry.addedBy[0] as { stack: string }).stack).toContain("Error");
+    unregisterPlugins(url);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("registerPlugins after the watcher's add at the same url leaves the entry alone", () => {
+    const url = at(ID, v1);
+    const key = sourceOf(url)!;
+    const listed = packages.add({
+      key,
+      version: "a1",
+      importUrl: url,
+      plugins: [{ type: "test:db-listed", id: "a" }],
+      addedBy: { by: "package-list", entry: `automerge:${ID}` },
+    });
+
+    registerPlugins([plugin("test:db-listed", "a")], url);
+
+    const entry = packages.get(key)!;
+    expect(entry).toBe(listed);
+    expect(entry.addedBy).toEqual([
+      { by: "package-list", entry: `automerge:${ID}` },
+    ]);
+    expect(entry.plugins[0].load).toBeUndefined();
+    unregisterPlugins(url);
+    packages.remove(key);
+  });
+
+  it("registerPlugins at a new url keeps the package-list adder", () => {
+    const key = sourceOf(at(ID, v1))!;
+    packages.add({
+      key,
+      version: "a1",
+      importUrl: at(ID, v1),
+      plugins: [{ type: "test:db-relisted", id: "a" }],
+      addedBy: { by: "package-list", entry: `automerge:${ID}` },
+    });
+
+    registerPlugins([plugin("test:db-relisted", "a")], at(ID, v2));
+
+    const entry = packages.get(key)!;
+    expect(entry.importUrl).toBe(at(ID, v2));
+    expect(entry.addedBy.map((a) => a.by)).toEqual(["package-list", "js"]);
+    packages.remove(key);
+  });
+
+  it("registerPlugins twice from js at one url: the second wins", () => {
+    const url = "https://example.test/twice.js";
+    registerPlugins([plugin("test:db-twice", "first")], url);
+    registerPlugins([plugin("test:db-twice", "second")], url);
+
+    const entry = packages.get(sourceOf(url)!)!;
+    expect(entry.plugins.map((p) => p.id)).toEqual(["second"]);
+    expect(entry.addedBy).toHaveLength(1);
+    expect(entry.addedBy[0]).toMatchObject({ by: "js", url });
+    unregisterPlugins(url);
+    packages.remove(sourceOf(url)!);
+  });
+});
+
+describe("the registry over the package database", () => {
+  it("register emits registered then changed before it returns", () => {
+    const type = "test:view-register";
+    const url = "https://example.test/view-register.js";
+    const registry = getRegistry(type);
+    const events: string[] = [];
+    registry.on("registered", (p) => void events.push(`registered ${p.id}`));
+    registry.on("changed", () => void events.push("changed"));
+
+    registry.register(plugin(type, "a"), url);
+
+    expect(events).toEqual(["registered a", "changed"]);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("a package added to the database shows in getRegistry", () => {
+    const type = "test:view-listed";
+    const url = at(OTHER, v2);
+    packages.add({
+      key: sourceOf(url)!,
+      version: "b2",
+      importUrl: url,
+      plugins: [{ type, id: "a", name: "a" }],
+      addedBy: { by: "package-list", entry: `automerge:${OTHER}` },
+    });
+
+    expect(getRegistry(type).has("a")).toBe(true);
+    expect(getRegistry(type).get("a")?.importUrl).toBe(url);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("remove takes one plugin out of a js package", () => {
+    const type = "test:view-remove";
+    const url = "https://example.test/view-remove.js";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "a"), plugin(type, "b")], url);
+    const removed: string[] = [];
+    registry.on("removed", (id) => void removed.push(id));
+
+    expect(registry.remove("a")).toBe(true);
+
+    expect(removed).toEqual(["a"]);
+    expect(registry.has("a")).toBe(false);
+    expect(registry.has("b")).toBe(true);
+    expect(packages.get(sourceOf(url)!)!.plugins.map((p) => p.id)).toEqual([
+      "b",
+    ]);
+    packages.remove(sourceOf(url)!);
+  });
+});
+
+describe("the registry over a listed package", () => {
+  const listed = (type: string, url: string, ids: string[]) =>
+    packages.add({
+      key: sourceOf(url)!,
+      version: "c3",
+      importUrl: url,
+      plugins: ids.map((id) => ({ type, id, name: id })),
+      addedBy: { by: "package-list", entry: `automerge:${ID}` },
+    });
+
+  it("register on a listed package keeps its other plugins and its package-list origin", () => {
+    const type = "test:listed-register";
+    const url = at(ID, v1);
+    listed(type, url, ["a", "b"]);
+
+    getRegistry(type).register(plugin(type, "extra"), url);
+
+    const entry = packages.get(sourceOf(url)!)!;
+    expect(entry.plugins.map((p) => p.id)).toEqual(["a", "b", "extra"]);
+    expect(entry.addedBy.map((a) => a.by)).toEqual(["package-list", "js"]);
+    expect(getRegistry(type).has("a")).toBe(true);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("remove on a listed package keeps its package-list origin", () => {
+    const type = "test:listed-remove";
+    const url = at(ID, v1);
+    listed(type, url, ["a", "b"]);
+
+    expect(getRegistry(type).remove("a")).toBe(true);
+
+    const entry = packages.get(sourceOf(url)!)!;
+    expect(entry.plugins.map((p) => p.id)).toEqual(["b"]);
+    expect(entry.addedBy).toEqual([
+      { by: "package-list", entry: `automerge:${ID}` },
+    ]);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("an id another package still provides is registered again, not removed", () => {
+    const type = "test:shadowed";
+    const a = "https://example.test/shadow-a.js";
+    const b = "https://example.test/shadow-b.js";
+    const registry = getRegistry(type);
+    registerPlugins([plugin(type, "shared")], a);
+    registerPlugins([plugin(type, "shared"), plugin(type, "own")], b);
+    const events: string[] = [];
+    registry.on("registered", (p) => void events.push(`registered ${p.id} ${p.importUrl}`));
+    registry.on("removed", (id) => void events.push(`removed ${id}`));
+
+    registerPlugins([plugin(type, "own")], b);
+    expect(events).toEqual([`registered own ${b}`, `registered shared ${a}`]);
+
+    events.length = 0;
+    registerPlugins([plugin(type, "shared")], b);
+    events.length = 0;
+    unregisterPlugins(b);
+    expect(events).toEqual([`registered shared ${a}`]);
+    unregisterPlugins(a);
+  });
+
+  it("a package-url copy of a listed id isn't registered over it", () => {
+    const type = "test:preview";
+    const listed = "https://example.test/listed.js";
+    const preview = "https://example.test/preview.js";
+    const registry = getRegistry(type);
+    packages.add({
+      key: sourceOf(listed)!,
+      version: "1",
+      importUrl: listed,
+      plugins: [{ type, id: "shared" }],
+      addedBy: { by: "package-list", entry: listed },
+    });
+    const events: string[] = [];
+    registry.on("registered", (p) => void events.push(`registered ${p.id} ${p.importUrl}`));
+
+    packages.add({
+      key: sourceOf(preview)!,
+      version: "1",
+      importUrl: preview,
+      plugins: [{ type, id: "shared" }],
+      addedBy: { by: "package-url" },
+    });
+    expect(events).toEqual([]);
+    expect(registry.get("shared")?.importUrl).toBe(listed);
+    packages.remove(sourceOf(preview)!);
+    packages.remove(sourceOf(listed)!);
+  });
+});
+
+describe("PluginRegistry.loadWhenReady", () => {
+  const description = (id: string, load: () => Promise<unknown>) =>
+    ({ type: "test:when-ready", id, name: id, load }) as any;
+
+  it("waits for a plugin that is not registered yet", async () => {
+    const registry = new PluginRegistry<any>();
+    const ready = registry.loadWhenReady("late");
+
+    registry.register(
+      description("late", async () => "impl"),
+      "u"
+    );
+
+    expect((await ready).module).toBe("impl");
+  });
+
+  it("keeps trying when the plugin is re-registered while it loads", async () => {
+    const registry = new PluginRegistry<any>();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    registry.register(
+      description("swapped", async () => {
+        await gate;
+        return "v1";
+      }),
+      "u1"
+    );
+
+    const ready = registry.loadWhenReady("swapped");
+    registry.register(
+      description("swapped", async () => "v2"),
+      "u2"
+    );
+    release();
+
+    expect((await ready).module).toBe("v2");
+  });
+
+  it("waits for a registration when the plugin is removed while it loads", async () => {
+    const registry = new PluginRegistry<any>();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    registry.register(
+      description("gone", async () => {
+        await gate;
+        return "v1";
+      }),
+      "u1"
+    );
+
+    const ready = registry.loadWhenReady("gone");
+    registry.remove("gone");
+    release();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    registry.register(
+      description("gone", async () => "v2"),
+      "u2"
+    );
+
+    expect((await ready).module).toBe("v2");
+  });
+});

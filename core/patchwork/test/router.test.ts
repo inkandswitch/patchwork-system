@@ -2,26 +2,46 @@
 //
 // The router keeps the root view and the tab's title in step with the hash.
 import { Repo, type AutomergeUrl } from "@automerge/automerge-repo";
-import { getRegistry } from "@inkandswitch/patchwork-plugins";
+import {
+  packages,
+  type LivePlugin,
+} from "@inkandswitch/patchwork-filesystem";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { createRouter } from "../src/router.js";
+import { createDocOfType, createRouter } from "../src/router.js";
 
 const SITE = "Site";
 type Note = { "@patchwork": { type: string }; title: string };
 
-getRegistry("patchwork:datatype").register(
-  {
-    type: "patchwork:datatype",
-    id: "router-test-note",
-    name: "Note",
-    load: async () => ({
-      init() {},
-      getTitle: (doc: Note) => doc.title,
-    }),
-  } as any,
-  "router-test"
-);
+// The database is global, so each test takes out what it added.
+const added: string[] = [];
+
+function addPackage(key: string, plugins: LivePlugin[]) {
+  added.push(key);
+  packages.add({
+    key,
+    version: "1",
+    importUrl: key,
+    plugins,
+    addedBy: { by: "js", url: key, stack: "" },
+  });
+}
+
+function addNote(id: string) {
+  addPackage(`test://${id}`, [
+    {
+      type: "patchwork:datatype",
+      id,
+      name: "Note",
+      load: async () => ({
+        init(doc: Note) {
+          doc.title = "Untitled";
+        },
+        getTitle: (doc: Note) => doc.title,
+      }),
+    },
+  ]);
+}
 
 const ticks = async (n = 5) => {
   for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0));
@@ -53,7 +73,8 @@ function hold(url: AutomergeUrl): () => void {
   return release;
 }
 
-function start() {
+// `null` names no frame tool, so the router picks one.
+function start(frameToolId: string | null = "home-frame") {
   const lookups = {
     async find(url: AutomergeUrl) {
       await held.get(url);
@@ -65,7 +86,7 @@ function start() {
     repo: lookups as any,
     accountDocHandle: { url: account, doc: () => ({}) } as any,
     siteTitle: SITE,
-    frameToolId: "home-frame",
+    frameToolId: frameToolId ?? undefined,
   });
   // The frame has mounted: from here on the router opens the hash's document.
   void router.route();
@@ -80,6 +101,7 @@ function open(url: AutomergeUrl) {
 
 beforeEach(async () => {
   await go("");
+  addNote("router-test-note");
   document.title = SITE;
   repo = new Repo();
   account = repo.create({}).url;
@@ -96,6 +118,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const key of added.splice(0)) packages.remove(key);
   vi.restoreAllMocks();
   for (const [type, listener] of listeners.splice(0)) {
     window.removeEventListener(type, listener);
@@ -163,7 +186,7 @@ describe("the tab's title", () => {
     expect(document.title).toBe(`Pears | ${SITE}`);
   });
 
-  it("names a document whose datatype registers after it opened", async () => {
+  it("names a document whose datatype is added after it opened", async () => {
     start();
     const plum = repo.create({
       "@patchwork": { type: "router-test-late" },
@@ -172,18 +195,7 @@ describe("the tab's title", () => {
     open(plum);
     await ticks(20);
     expect(document.title).toBe(SITE);
-    getRegistry("patchwork:datatype").register(
-      {
-        type: "patchwork:datatype",
-        id: "router-test-late",
-        name: "Late",
-        load: async () => ({
-          init() {},
-          getTitle: (doc: Note) => doc.title,
-        }),
-      } as any,
-      "router-test-late"
-    );
+    addNote("router-test-late");
     await vi.waitFor(() => expect(document.title).toBe(`Plum | ${SITE}`));
   });
 
@@ -208,11 +220,74 @@ describe("the root view", () => {
     expect(root.getAttribute("doc-url")).toBe(account);
   });
 
+  it("mounts the first listed frame tool when nothing names one", async () => {
+    addPackage("test://frames", [
+      { type: "patchwork:tool", id: "hidden-frame", tags: ["frame-tool"], unlisted: true },
+      { type: "patchwork:tool", id: "plain-tool" },
+      { type: "patchwork:tool", id: "listed-frame", tags: ["frame-tool"] },
+    ]);
+    start(null);
+    expect(root.getAttribute("tool-id")).toBe("listed-frame");
+  });
+
+  it("keeps the package a tool comes from in the hash, and opens with it", async () => {
+    start();
+    const apples = note("Apples");
+    const opened: unknown[] = [];
+    root.addEventListener("patchwork:open-document", (event) =>
+      opened.push((event as CustomEvent).detail)
+    );
+    const packageUrl = "https://x.test/p/?a=1&b=2";
+    root.dispatchEvent(
+      new CustomEvent("patchwork:open-document", {
+        detail: { url: apples, toolId: "md", packageUrl },
+      })
+    );
+    await ticks();
+    const params = new URLSearchParams(location.hash.slice(1));
+    expect(params.get("tool")).toBe("md");
+    expect(params.get("package")).toBe(packageUrl);
+    expect(opened.at(-1)).toMatchObject({ url: apples, toolId: "md", packageUrl });
+
+    open(apples);
+    await ticks();
+    expect(new URLSearchParams(location.hash.slice(1)).has("package")).toBe(false);
+  });
+
   it("rewrites a bare automerge url to a doc= link", async () => {
     start();
     const apples = note("Apples");
     await go(apples);
     await vi.waitFor(() => expect(location.hash).toBe(`#doc=${apples}`));
     await vi.waitFor(() => expect(document.title).toBe(`Apples | ${SITE}`));
+  });
+});
+
+describe("createDocOfType", () => {
+  type Fruit = Note & { colour?: string };
+  const never = new Promise<void>(() => {});
+
+  it("waits for a datatype added later", async () => {
+    let made: Awaited<ReturnType<typeof createDocOfType<Fruit>>> | undefined;
+    void createDocOfType<Fruit>(repo, "router-test-later", never, (doc) => {
+      doc.colour = "yellow";
+    }).then((handle) => (made = handle));
+    await ticks(20);
+    expect(made).toBeUndefined();
+    addNote("router-test-later");
+    await vi.waitFor(() => expect(made).toBeDefined());
+    expect(made!.doc()).toMatchObject({
+      "@patchwork": { type: "router-test-later" },
+      title: "Untitled",
+      colour: "yellow",
+    });
+  });
+
+  it("rejects for a datatype that never arrives once loading is done", async () => {
+    let done!: () => void;
+    const loaded = new Promise<void>((resolve) => (done = resolve));
+    const made = createDocOfType(repo, "router-test-nowhere", loaded);
+    done();
+    await expect(made).rejects.toThrow('no datatype "router-test-nowhere"');
   });
 });

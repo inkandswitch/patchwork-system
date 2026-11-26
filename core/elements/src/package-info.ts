@@ -15,7 +15,11 @@
 
 import type { AutomergeUrl, Repo } from "@automerge/automerge-repo/slim";
 import * as Automerge from "@automerge/automerge/slim";
-import { getImportableUrlFromAutomergeUrl } from "@inkandswitch/patchwork-filesystem";
+import {
+  getImportableUrlFromAutomergeUrl,
+  packages,
+  sourceOf,
+} from "@inkandswitch/patchwork-filesystem";
 
 export const isAutomergeUrl = (url: string): boolean =>
   url.startsWith("automerge:");
@@ -116,9 +120,31 @@ async function packageJson(url: string): Promise<unknown> {
   }
 }
 
+// the database already holds the package.json of the version it has: use it
+// unless url is a different pinned version
+function knownPackageJson(url: string): Record<string, unknown> | undefined {
+  const entry = packages.get(sourceOf(url) ?? url);
+  if (!entry || (entry.importUrl !== url && /#|%23/i.test(url))) return undefined;
+  return entry.packageJson as Record<string, unknown> | undefined;
+}
+
+// the plugins `patchwork.plugins` lists (by type, then id), or top-level `plugins`
+function pluginClaims(pkg: Record<string, any>): PluginClaim[] | undefined {
+  const byType = pkg.patchwork?.plugins;
+  if (byType && typeof byType === "object" && !Array.isArray(byType))
+    return Object.entries(byType).flatMap(([type, byId]) =>
+      Object.entries((byId ?? {}) as Record<string, any>).map(([id, entry]) =>
+        pluginClaim({ ...entry, type, id }),
+      ),
+    );
+  return Array.isArray(pkg.plugins) ? pkg.plugins.map(pluginClaim) : undefined;
+}
+
 /** What the package's package.json says, read without running anything. */
 export async function readClaims(url: string): Promise<PackageClaims | undefined> {
-  const pkg = (await packageJson(url)) as Record<string, unknown> | undefined;
+  const pkg = (knownPackageJson(url) ?? (await packageJson(url))) as
+    | Record<string, any>
+    | undefined;
   if (!pkg) return undefined;
   return {
     name: text(pkg.name),
@@ -126,7 +152,7 @@ export async function readClaims(url: string): Promise<PackageClaims | undefined
     version: text(pkg.version),
     description: text(pkg.description),
     author: author(pkg.author),
-    plugins: Array.isArray(pkg.plugins) ? pkg.plugins.map(pluginClaim) : undefined,
+    plugins: pluginClaims(pkg),
   };
 }
 

@@ -4,8 +4,7 @@ import {
   type DocHandle,
   type Repo,
 } from "@automerge/automerge-repo/slim";
-import type { HasPatchworkMetadata } from "@inkandswitch/patchwork-filesystem";
-import type { AutomergeRepoKeyhiveBase as AutomergeRepoKeyhive } from "@automerge/automerge-repo-keyhive";
+import type { HasPatchworkMetadata } from "./metadata.js";
 import { isKeyhiveDoc } from "./keyhive.js";
 
 /**
@@ -26,6 +25,11 @@ export type AccountDoc = {
   /** A private doc per tool id, made on first use by the frame's
       `patchwork:tool-storage` provider. */
   toolStorage?: Record<string, AutomergeUrl>;
+};
+
+// Structural, so filesystem takes no keyhive dependency.
+type AutomergeRepoKeyhive = {
+  addSyncServerRelayToDoc(url: AutomergeUrl): Promise<unknown>;
 };
 
 export type AccountCreator<D = AccountDoc> = (

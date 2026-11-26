@@ -3,7 +3,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/inkandswitch/patchwork-system.git",
-    "directory": "core/plugins"
+    "directory": "packages/plugins"
   },
   "type": "module",
   "version": "1.2.9",
@@ -20,6 +20,7 @@
   "peerDependencies": {
     "@automerge/automerge": "*",
     "@automerge/automerge-repo": "*",
+    "@inkandswitch/patchwork-elements": "workspace:^",
     "@inkandswitch/patchwork-filesystem": "workspace:^"
   },
   "dependencies": {
@@ -34,6 +35,7 @@
     "@automerge/automerge": "catalog:",
     "@automerge/automerge-repo": "catalog:",
     "@automerge/automerge-repo-keyhive": "catalog:",
+    "@inkandswitch/patchwork-elements": "workspace:^",
     "@inkandswitch/patchwork-filesystem": "workspace:^",
     "@types/react": "catalog:",
     "happy-dom": "^20.0.0"

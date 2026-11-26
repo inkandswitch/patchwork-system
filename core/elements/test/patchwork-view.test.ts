@@ -1,6 +1,12 @@
 import { Repo } from "@automerge/automerge-repo";
-import { importPackage } from "@inkandswitch/patchwork-filesystem";
-import { getRegistry } from "@inkandswitch/patchwork-plugins";
+import { pathToFileURL } from "node:url";
+import {
+  importPackageWithJson,
+  packages,
+  sourceOf,
+  type AddedBy,
+  type LivePlugin,
+} from "@inkandswitch/patchwork-filesystem";
 import { registerRepoProviderElement } from "@inkandswitch/patchwork-providers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,18 +14,36 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // should reach the network.
 vi.mock("@inkandswitch/patchwork-filesystem", async (importOriginal) => ({
   ...(await importOriginal<object>()),
-  importPackage: vi.fn(async () => {
-    throw new Error("importPackage not stubbed for this test");
+  importPackageWithJson: vi.fn(async () => {
+    throw new Error("importPackageWithJson not stubbed for this test");
   }),
 }));
 
-import {
-  registerPatchworkViewElement,
-  type ComponentDescription,
-} from "../src/patchwork-view.js";
+import { registerPatchworkViewElement } from "../src/patchwork-view.js";
 
-const registry = getRegistry<ComponentDescription>("patchwork:component");
-const toolRegistry = getRegistry("patchwork:tool");
+// The database is global, so each test takes out what it added: otherwise a
+// previous test's wildcard tool would be the one a later default picks.
+const added: string[] = [];
+
+afterEach(() => {
+  for (const key of added) packages.remove(key);
+  added.length = 0;
+});
+
+function addPackage(
+  key: string,
+  plugins: LivePlugin[],
+  options: { addedBy?: AddedBy; version?: string; importUrl?: string } = {}
+) {
+  added.push(key);
+  return packages.add({
+    key,
+    version: options.version ?? "1",
+    importUrl: options.importUrl ?? key,
+    plugins,
+    addedBy: options.addedBy ?? { by: "package-list", entry: key },
+  });
+}
 
 type Counters = { mounts: number; cleanups: number };
 
@@ -31,16 +55,15 @@ function registerComponent(id: string): Counters {
       counters.cleanups++;
     };
   };
-  registry.register(
+  addPackage(`test://${id}`, [
     {
       id,
       type: "patchwork:component",
       name: id,
       load: async () => render,
       module: render,
-    } as never,
-    `test://${id}`
-  );
+    },
+  ]);
   return counters;
 }
 
@@ -132,20 +155,37 @@ describe("patchwork-view (component mode)", () => {
 
     expect(counters.mounts).toBe(counters.cleanups);
   });
+
+  it("a component renders from the database", async () => {
+    let mounts = 0;
+    addPackage("test://db-component", [
+      {
+        id: "db-component",
+        type: "patchwork:component",
+        name: "db-component",
+        load: async () => () => {
+          mounts++;
+          return () => {};
+        },
+      },
+    ]);
+
+    const view = document.createElement("patchwork-view");
+    view.setAttribute("component", "db-component");
+    a.append(view);
+    await vi.waitFor(() => expect(mounts).toBe(1));
+  });
 });
 
 // A `supportedDatatypes: "*"` tool (the raw viewer) matches every doc, so it is
-// what a doc with no editor of its own falls back to. The registry is global, so
-// tests take it in turns: `afterEach` unregisters, or the previous test's
-// wildcard would be the one a later fallback picks.
-const registeredTools: string[] = [];
-
+// what a doc with no editor of its own falls back to.
 function registerWildcardTool() {
   return registerTool("*");
 }
 
 function registerTool(
-  supportedDatatypes: "*" | string[]
+  supportedDatatypes: "*" | string[],
+  extra: Record<string, unknown> = {}
 ): Counters & { id: string } {
   const id = `test-tool-${++seq}`;
   const counters = { id, mounts: 0, cleanups: 0 };
@@ -155,7 +195,7 @@ function registerTool(
       counters.cleanups++;
     };
   };
-  toolRegistry.register(
+  addPackage(`test://${id}`, [
     {
       id,
       type: "patchwork:tool",
@@ -163,10 +203,9 @@ function registerTool(
       supportedDatatypes,
       load: async () => render,
       module: render,
-    } as never,
-    `test://${id}`
-  );
-  registeredTools.push(id);
+      ...extra,
+    },
+  ]);
   return counters;
 }
 
@@ -187,8 +226,6 @@ describe("patchwork-view (legacy mode)", () => {
   });
 
   afterEach(() => {
-    for (const id of registeredTools) toolRegistry.remove(id);
-    registeredTools.length = 0;
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -219,6 +256,136 @@ describe("patchwork-view (legacy mode)", () => {
     expect(button, `a "${label}" button`).toBeTruthy();
     return button!;
   }
+
+  it("a view mounts a tool from the database", async () => {
+    let mounts = 0;
+    addPackage("test://db-tool", [
+      {
+        id: "db-tool",
+        type: "patchwork:tool",
+        name: "db-tool",
+        supportedDatatypes: ["db-type"],
+        load: async () => () => {
+          mounts++;
+          return () => {};
+        },
+      },
+    ]);
+
+    mount({ "@patchwork": { type: "db-type" } });
+    await vi.waitFor(() => expect(mounts).toBe(1));
+  });
+
+  it("a new version of its package remounts in place", async () => {
+    const mounts: string[] = [];
+    const cleanups: string[] = [];
+    const addVersion = (version: string) =>
+      addPackage(
+        "test://versioned",
+        [
+          {
+            id: "versioned",
+            type: "patchwork:tool",
+            name: "versioned",
+            supportedDatatypes: ["versioned-type"],
+            load: async () => () => {
+              mounts.push(version);
+              return () => {
+                cleanups.push(version);
+              };
+            },
+          },
+        ],
+        { version, importUrl: `test://versioned#${version}` }
+      );
+
+    addVersion("v1");
+    const view = mount({ "@patchwork": { type: "versioned-type" } });
+    await vi.waitFor(() => expect(mounts).toEqual(["v1"]));
+    const content = view.querySelector(".patchwork-view-content");
+
+    addVersion("v2");
+    await vi.waitFor(() => expect(mounts).toEqual(["v1", "v2"]));
+    expect(cleanups).toEqual(["v1"]);
+    expect(view.querySelector(".patchwork-view-content")).toBe(content);
+  });
+
+  it("another package with the same tool id doesn't remount the view", async () => {
+    const mounts: string[] = [];
+    const sameId = (from: string): LivePlugin => ({
+      id: "same-id",
+      type: "patchwork:tool",
+      name: "same-id",
+      supportedDatatypes: ["same-id-type"],
+      load: async () => () => {
+        mounts.push(from);
+      },
+    });
+    addPackage("test://listed", [sameId("listed")]);
+    const view = mount({ "@patchwork": { type: "same-id-type" } });
+    await vi.waitFor(() => expect(mounts).toEqual(["listed"]));
+    const content = view.querySelector(".patchwork-view-content");
+
+    addPackage("test://fork", [sameId("fork")], {
+      addedBy: { by: "package-url" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(mounts).toEqual(["listed"]);
+    expect(view.querySelector(".patchwork-view-content")).toBe(content);
+  });
+
+  it("the default tool ignores packages only js added", async () => {
+    let mounts = 0;
+    addPackage(
+      "test://js-only",
+      [
+        {
+          id: "js-only",
+          type: "patchwork:tool",
+          name: "js-only",
+          supportedDatatypes: ["js-type"],
+          module: () => {
+            mounts++;
+            return () => {};
+          },
+        },
+      ],
+      { addedBy: { by: "js", url: "test://js-only", stack: "" } }
+    );
+
+    const view = mount({ "@patchwork": { type: "js-type" } });
+    await settle();
+    expect(mounts).toBe(0);
+    expect(card(view, "no-tool")).toBeTruthy();
+
+    // asked for by id, it opens
+    view.setAttribute("tool-id", "js-only");
+    await vi.waitFor(() => expect(mounts).toBe(1));
+  });
+
+  it("same tool id in two packages: the one added last mounts", async () => {
+    const mounted: string[] = [];
+    for (const key of ["test://first-dup", "test://last-dup"]) {
+      addPackage(key, [
+        {
+          id: "dup",
+          type: "patchwork:tool",
+          name: "dup",
+          supportedDatatypes: ["dup-type"],
+          module: () => {
+            mounted.push(key);
+            return () => {};
+          },
+        },
+      ]);
+    }
+
+    // as the default tool, and by id
+    mount({ "@patchwork": { type: "dup-type" } });
+    mount({ "@patchwork": { type: "dup-type" } }).setAttribute("tool-id", "dup");
+    await vi.waitFor(() => expect(mounted).toHaveLength(2));
+    expect(mounted).toEqual(["test://last-dup", "test://last-dup"]);
+  });
 
   it("offers a suggested package instead of the wildcard stopgap", async () => {
     const raw = registerWildcardTool();
@@ -348,7 +515,7 @@ describe("patchwork-view (legacy mode)", () => {
     let fail = true;
     const render = () => () => {};
     let mounts = 0;
-    toolRegistry.register(
+    addPackage(`test://${id}`, [
       {
         id,
         type: "patchwork:tool",
@@ -361,10 +528,8 @@ describe("patchwork-view (legacy mode)", () => {
             return render();
           };
         },
-      } as never,
-      `test://${id}`
-    );
-    registeredTools.push(id);
+      },
+    ]);
     vi.spyOn(console, "error").mockImplementation(() => {});
 
     const view = mount({ "@patchwork": { type: "failing-type" } });
@@ -381,7 +546,7 @@ describe("patchwork-view (legacy mode)", () => {
 
   it("reloads the page when trying a tool again fails again", async () => {
     const id = `failing-tool-${++seq}`;
-    toolRegistry.register(
+    addPackage(`test://${id}`, [
       {
         id,
         type: "patchwork:tool",
@@ -390,10 +555,8 @@ describe("patchwork-view (legacy mode)", () => {
         load: async () => {
           throw new Error("the file didn't arrive");
         },
-      } as never,
-      `test://${id}`
-    );
-    registeredTools.push(id);
+      },
+    ]);
     vi.spyOn(console, "error").mockImplementation(() => {});
     const reload = vi
       .spyOn(window.location, "reload")
@@ -410,7 +573,7 @@ describe("patchwork-view (legacy mode)", () => {
 
   it("offers other tools when the asked-for one doesn't load", async () => {
     const id = `failing-tool-${++seq}`;
-    toolRegistry.register(
+    addPackage(`test://${id}`, [
       {
         id,
         type: "patchwork:tool",
@@ -419,10 +582,8 @@ describe("patchwork-view (legacy mode)", () => {
         load: async () => {
           throw new Error("the file didn't arrive");
         },
-      } as never,
-      `test://${id}`
-    );
-    registeredTools.push(id);
+      },
+    ]);
     const other = registerTool(["open-with-type"]);
     const elsewhere = registerTool(["unrelated-type"]);
     vi.spyOn(console, "error").mockImplementation(() => {});
@@ -455,8 +616,7 @@ describe("patchwork-view (legacy mode)", () => {
   });
 
   it("offers the other frames when an account's frame tool isn't there", async () => {
-    const frame = registerTool(["account"]);
-    (toolRegistry.get(frame.id) as { tags?: string[] }).tags = ["frame-tool"];
+    const frame = registerTool(["account"], { tags: ["frame-tool"] });
     const sidebar = registerTool(["account"]);
     const missing = `missing-frame-${++seq}`;
 
@@ -512,9 +672,19 @@ describe("patchwork-view (legacy mode)", () => {
     let mounts: Mounts;
 
     // Each import of a package gives tools that note which url they came
-    // from, so a test can see which version is mounted.
-    function servePackage(toolIds: Record<string, string[] | "*">) {
-      vi.mocked(importPackage).mockImplementation(async (url: string) => ({
+    // from, so a test can see which version is mounted. With `packageJson`,
+    // the import hands back that package.json too.
+    function servePackage(
+      toolIds: Record<string, string[] | "*">,
+      packageJson?: Record<string, unknown>
+    ) {
+      vi.mocked(importPackageWithJson).mockImplementation(async (url) => ({
+        package: packageJson && {
+          importUrl: url,
+          base: url,
+          packageJson,
+          version: "v1",
+        },
         plugins: Object.entries(toolIds).map(([id, supportedDatatypes]) => ({
           id,
           type: "patchwork:tool",
@@ -539,7 +709,7 @@ describe("patchwork-view (legacy mode)", () => {
     });
 
     afterEach(() => {
-      vi.mocked(importPackage).mockReset();
+      vi.mocked(importPackageWithJson).mockReset();
     });
 
     function mountWith(doc: unknown, attrs: Record<string, string>) {
@@ -625,7 +795,7 @@ describe("patchwork-view (legacy mode)", () => {
     });
 
     it("blames the package when it doesn't import", async () => {
-      vi.mocked(importPackage).mockRejectedValue(new Error("not json"));
+      vi.mocked(importPackageWithJson).mockRejectedValue(new Error("not json"));
       const view = mountWith(
         { "@patchwork": { type: "pkg-type" } },
         {
@@ -645,7 +815,7 @@ describe("patchwork-view (legacy mode)", () => {
       async (failure) => {
         const other = registerTool(["pkg-type"]);
         if (failure === "missing") servePackage({ other: ["other-type"] });
-        else vi.mocked(importPackage).mockRejectedValue(new Error("not json"));
+        else vi.mocked(importPackageWithJson).mockRejectedValue(new Error("not json"));
         const view = mountWith(
           { "@patchwork": { type: "pkg-type" } },
           {
@@ -661,6 +831,51 @@ describe("patchwork-view (legacy mode)", () => {
         expect(live()).toHaveLength(0);
       }
     );
+
+    it("package-url adds the package when there's no entry", async () => {
+      servePackage({ added: ["pkg-type"] }, { name: "served" });
+      const url = "http://example.invalid/added-pkg/";
+      mountWith(
+        { "@patchwork": { type: "pkg-type" } },
+        { "tool-id": "added", "package-url": url }
+      );
+      await vi.waitFor(() => expect(packages.get(sourceOf(url)!)).toBeTruthy());
+
+      const entry = packages.get(sourceOf(url)!)!;
+      expect(entry.addedBy).toEqual([{ by: "package-url" }]);
+      // one fetch gives both the tool and its package.json
+      expect(importPackageWithJson).toHaveBeenCalledOnce();
+      expect(entry.version).toBe("v1");
+      expect(entry.packageJson).toEqual({ name: "served" });
+      expect(entry.plugins.map((p) => [p.id, p.load])).toEqual([
+        ["added", undefined],
+      ]);
+      packages.remove(sourceOf(url)!);
+    });
+
+    it("package-url leaves an existing one alone", async () => {
+      servePackage({ listed: ["pkg-type"] }, { name: "served" });
+      const url = "http://example.invalid/listed-pkg/";
+      const listed = packages.add({
+        key: sourceOf(url)!,
+        version: "v0",
+        importUrl: url,
+        plugins: [],
+        addedBy: { by: "package-list", entry: url },
+      });
+      mountWith(
+        { "@patchwork": { type: "pkg-type" } },
+        { "tool-id": "listed", "package-url": url }
+      );
+      await vi.waitFor(() => expect(live()).toHaveLength(1));
+      await settle();
+
+      expect(packages.get(sourceOf(url)!)).toBe(listed);
+      expect(listed.addedBy).toEqual([
+        { by: "package-list", entry: url },
+      ]);
+      packages.remove(sourceOf(url)!);
+    });
 
     it("follows an automerge package without heads to its new heads", async () => {
       servePackage({ followed: ["pkg-type"] });
@@ -703,9 +918,71 @@ describe("patchwork-view (legacy mode)", () => {
     });
   });
 
+  it("adds a confirmed suggestion with a package.json by suggested", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const url = "http://example.invalid/suggested-pkg/";
+    vi.mocked(importPackageWithJson).mockResolvedValueOnce({
+      plugins: [{ type: "patchwork:tool", id: "suggested-tool", name: "s" }],
+      package: {
+        importUrl: url,
+        base: url,
+        packageJson: { name: "suggested" },
+        version: "v1",
+      },
+    });
+    const view = mount({
+      "@patchwork": { type: "no-tool-type", suggestedImportUrl: url },
+    });
+    await settle();
+
+    loadButton(view).click();
+    await vi.waitFor(() => expect(packages.get(sourceOf(url)!)).toBeTruthy());
+
+    expect(packages.get(sourceOf(url)!)!.addedBy).toEqual([
+      { by: "suggested" },
+    ]);
+    packages.remove(sourceOf(url)!);
+  });
+
+  it("confirming a suggested package opens the doc with its tool", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const url = "http://example.invalid/suggested-opens/";
+    added.push(sourceOf(url)!);
+    // the legacy name, which the database renames
+    const tool = { name: "s", supportedDataTypes: ["suggested-type"] };
+    vi.mocked(importPackageWithJson).mockResolvedValueOnce({
+      plugins: [{ type: "patchwork:tool", id: "suggested-opens", ...tool }],
+      package: {
+        importUrl: url,
+        base: url,
+        packageJson: {
+          // absolute: happy-dom's URL resolves a relative one against a
+          // file: base to http://localhost
+          main: pathToFileURL(`${__dirname}/fixtures/suggested-tool.js`).href,
+          patchwork: {
+            plugins: {
+              "patchwork:tool": { "suggested-opens": { ...tool, export: "." } },
+            },
+          },
+        },
+        version: "v1",
+      },
+    });
+    const view = mount({
+      "@patchwork": { type: "suggested-type", suggestedImportUrl: url },
+    });
+    await settle();
+
+    loadButton(view).click();
+    await vi.waitFor(() =>
+      expect(view.textContent).toContain("the suggested tool")
+    );
+    expect(card(view, "no-tool")).toBeNull();
+  });
+
   it("offers the package again after its import fails", async () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
-    vi.mocked(importPackage).mockRejectedValueOnce(new Error("offline"));
+    vi.mocked(importPackageWithJson).mockRejectedValueOnce(new Error("offline"));
     const view = mount({
       "@patchwork": {
         type: "no-tool-type",
@@ -724,12 +1001,17 @@ describe("patchwork-view (legacy mode)", () => {
 
     // A package that loads but brings no tool for it says so, rather than
     // sit on "loading…".
-    vi.mocked(importPackage).mockResolvedValueOnce({ plugins: [] });
+    const url = "http://example.invalid/pkg.js";
+    added.push(sourceOf(url)!);
+    vi.mocked(importPackageWithJson).mockResolvedValueOnce({
+      plugins: [],
+      package: { importUrl: url, base: url, packageJson: {}, version: "v1" },
+    });
     const retry = loadButton(view);
     expect(retry.textContent).toBe("try again");
     retry.click();
     await settle();
-    expect(importPackage).toHaveBeenCalledTimes(2);
+    expect(importPackageWithJson).toHaveBeenCalledTimes(2);
     expect(content.textContent).toContain(
       "it doesn't have a tool for no-tool-type"
     );
@@ -752,6 +1034,6 @@ describe("patchwork-view (legacy mode)", () => {
     const message = confirm.mock.calls[0]![0] as string;
     expect(message).toContain("evil.example");
     expect(message).not.toContain("\n\nThis package is verified");
-    expect(importPackage).not.toHaveBeenCalled();
+    expect(importPackageWithJson).not.toHaveBeenCalled();
   });
 });
