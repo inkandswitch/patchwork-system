@@ -159,8 +159,8 @@ export interface BootProgress {
   publicReader?: PublicReaderStatus;
   /**
    * How many of the account's folders have been found so far, while boot
-   * finds them all before loading the account's packages. `done` once there
-   * are no more, even if boot stopped waiting for them before that.
+   * finds them all once every package has loaded. `done` once there are no
+   * more.
    */
   folders?: { found: number; done: boolean };
   /** How many of the listed packages have loaded, and the name of the last. */

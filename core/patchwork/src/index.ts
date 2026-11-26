@@ -71,9 +71,6 @@ import {
 
 const log = debug("patchwork:setup");
 
-// How long the account's packages wait on its folders before loading anyway.
-const FOLDER_TREE_TIMEOUT_MS = 20_000;
-
 declare const __SITE_TITLE__: string;
 
 declare global {
@@ -303,16 +300,6 @@ async function doSetup(
 
   followThemePreferences(repo, accountDocHandle);
 
-  // The account's folders, every one of them but none of the files, before
-  // any of its packages.
-  const rootFolderUrl = accountDocHandle.doc()?.rootFolderUrl;
-  if (rootFolderUrl) {
-    await loadFolderTree(repo, rootFolderUrl, {
-      timeoutMs: FOLDER_TREE_TIMEOUT_MS,
-      onProgress: (folders) => report({ folders }),
-    });
-  }
-
   // Once the account's packages are listed too, the list is whole, and a
   // package that's left it since last visit is forgotten.
   const accountPackagesLoaded = wireModuleSettings(
@@ -368,6 +355,16 @@ async function doSetup(
 
   // The site's packages and the account's, each loaded or given up on.
   const allLoaded = Promise.allSettled([toolsLoaded, accountPackagesLoaded]);
+
+  // The account's folders, every one of them but none of the files, once
+  // every package is in, so they don't hold any of them up.
+  void allLoaded.then(() => {
+    const rootFolderUrl = accountDocHandle.doc()?.rootFolderUrl;
+    if (!rootFolderUrl) return;
+    return loadFolderTree(repo, rootFolderUrl, {
+      onProgress: (folders) => report({ folders }),
+    });
+  });
 
   installReveal(rootElement, router, toolsLoaded, allLoaded, finished);
   // Without routing the site puts its own view on screen, so boot is over

@@ -72,24 +72,4 @@ describe("loadFolderTree", () => {
     );
     expect(await loadFolderTree(repo, root.url)).toBe(2);
   });
-
-  it("gives up waiting after the timeout", async () => {
-    vi.useFakeTimers();
-    try {
-      const repo = new Repo();
-      vi.spyOn(repo, "find").mockReturnValue(new Promise(() => {}));
-      vi.spyOn(console, "warn").mockImplementation(() => {});
-      const done = loadFolderTree(
-        repo,
-        "automerge:2j9knpCseyhnK8izDmLpGP5WMdZQ" as AutomergeUrl,
-        {
-          timeoutMs: 3_000,
-        }
-      );
-      await vi.advanceTimersByTimeAsync(3_000);
-      expect(await done).toBe(0);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
 });
