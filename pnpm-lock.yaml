@@ -377,6 +377,8 @@ importers:
         specifier: ^3.2.6
         version: 3.2.7(@types/debug@4.1.13)(@types/node@24.13.3)(@vitest/ui@3.2.7)(happy-dom@20.11.0)
 
+  packages/open-with: {}
+
   packages/plugins:
     dependencies:
       '@automerge/automerge-repo':

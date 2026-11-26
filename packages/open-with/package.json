@@ -1,0 +1,26 @@
+{
+  "name": "@patchwork/open-with",
+  "title": "Open With++",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "description": "A context sidebar listing every tool that opens the selected doc, from the package database, with each package that brings a tool id.",
+  "exports": {
+    "./sidebar": "./open-with.js"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "patchwork": {
+    "plugins": {
+      "patchwork:component": {
+        "open-with": {
+          "name": "Open With++",
+          "icon": "ArrowRightLeft",
+          "tags": ["context-tool"],
+          "export": "./sidebar"
+        }
+      }
+    }
+  }
+}
