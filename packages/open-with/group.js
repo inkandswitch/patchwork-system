@@ -37,18 +37,7 @@ export function packageName(entry) {
   return json.title || json.name || entry.key;
 }
 
-const ADDED_BY = {
-  "package-list": "package list",
-  "package-url": "package-url",
-  suggested: "suggested",
-  js: "js",
-};
-
-/** Who added a package, for a person: "package list, suggested". */
-export function addedBy(entry) {
-  return [...new Set(entry.addedBy.map((added) => ADDED_BY[added.by] ?? added.by))]
-    .join(", ");
-}
+export const isAutomerge = (url) => url.startsWith("automerge:");
 
 const person = (who) => (typeof who === "string" ? who : who?.name);
 const link = (where) => (typeof where === "string" ? where : where?.url);
@@ -59,7 +48,6 @@ const link = (where) => (typeof where === "string" ? where : where?.url);
  */
 export function aboutPackage(entry) {
   const json = entry.packageJson ?? {};
-  const pinned = entry.importUrl.startsWith("automerge:") ? "heads" : "sha-256";
   return [
     ["name", json.title && json.name !== json.title ? json.name : undefined],
     ["version", json.version],
@@ -67,9 +55,66 @@ export function aboutPackage(entry) {
     ["author", person(json.author)],
     ["license", json.license],
     ["homepage", json.homepage ?? link(json.repository)],
-    [pinned, entry.version.slice(0, 12)],
-    ["added by", addedBy(entry)],
+    [isAutomerge(entry.importUrl) ? "heads" : "sha-256", short(entry.version)],
     ["added", entry.addedAt ? new Date(entry.addedAt).toLocaleString() : undefined],
     ["url", entry.importUrl],
   ].filter(([, value]) => value);
+}
+
+/** A version (heads "a|b", or a sha-256) cut down to something to glance at. */
+export function short(version) {
+  return version
+    .split("|")
+    .map((part) => part.slice(0, 8))
+    .join(" ");
+}
+
+const ADDED_BY = {
+  "package-list": "package list",
+  "package-url": "package-url",
+  suggested: "suggested",
+  js: "js",
+};
+
+/**
+ * Who added a package, once each: `label`, what it added (`entry`, a listed
+ * url or a script's), and for a package list, the lists that have it, as
+ * `listsWith` says.
+ */
+export function adders(entry, listsWith = () => []) {
+  const seen = new Map();
+  for (const added of entry.addedBy) {
+    const what = added.by === "package-list" ? added.entry : added.url;
+    const key = `${added.by} ${what ?? ""}`;
+    if (seen.has(key)) continue;
+    seen.set(key, {
+      label: ADDED_BY[added.by] ?? added.by,
+      entry: what,
+      lists: added.by === "package-list" ? listsWith(added.entry) : [],
+    });
+  }
+  return [...seen.values()];
+}
+
+/**
+ * The versions of a package this browser has seen, newest first, one each:
+ * the one in memory and the saved ones.
+ */
+export function seenVersions(current, saved) {
+  const byVersion = new Map();
+  for (const entry of [current, ...saved].filter(Boolean)) {
+    if (!byVersion.has(entry.version)) byVersion.set(entry.version, entry);
+  }
+  return [...byVersion.values()].sort((a, b) => (b.addedAt ?? 0) - (a.addedAt ?? 0));
+}
+
+/** The url for a package doc at `heads`. */
+export function atHeads(key, heads) {
+  return `${key}#${heads.join("|")}`;
+}
+
+/** The sha-256 of a package.json body, as the package database versions it. */
+export async function sha256(text) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
 }

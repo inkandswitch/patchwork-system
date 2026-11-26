@@ -4,7 +4,7 @@
   "private": true,
   "version": "0.0.1",
   "type": "module",
-  "description": "A context sidebar listing every tool that opens the selected doc, from the package database, with each package that brings a tool id.",
+  "description": "A context sidebar listing every tool that opens the selected doc, from the package database: each package that brings a tool id, what its package.json says, the package lists that have it, and its versions.",
   "exports": {
     "./sidebar": "./open-with.js"
   },
@@ -17,10 +17,15 @@
         "open-with": {
           "name": "Open With++",
           "icon": "ArrowRightLeft",
-          "tags": ["context-tool"],
+          "tags": [
+            "context-tool"
+          ],
           "export": "./sidebar"
         }
       }
     }
+  },
+  "devDependencies": {
+    "happy-dom": "^20.0.0"
   }
 }

@@ -123,6 +123,31 @@ describe("ModuleWatcher static manifest sources", () => {
 
     expect(ids).toEqual(new Set(["a", "b"]));
   });
+
+  it("says which package lists have an entry in them", async () => {
+    const systemUrl = "http://example.test/system.json";
+    const userUrl = "http://example.test/user.json";
+    const a = dataModule("export const plugins = [{ id: 'a' }]");
+    const b = dataModule("export const plugins = [{ id: 'b' }]");
+    stubFetchManifest({
+      [systemUrl]: { modules: [a, b] },
+      [userUrl]: { modules: [b] },
+    });
+    const watcher = new ModuleWatcher(
+      {} as unknown as Repo,
+      { system: systemUrl, user: userUrl },
+      () => {}
+    );
+    await watcher.doneLoading;
+
+    expect(watcher.listsWith(a)).toEqual([{ name: "system", url: systemUrl }]);
+    expect(watcher.listsWith(b)).toEqual([
+      { name: "system", url: systemUrl },
+      { name: "user", url: userUrl },
+    ]);
+    expect(watcher.listsWith("https://elsewhere.test/")).toEqual([]);
+    watcher.dispose();
+  });
 });
 
 describe("ModuleWatcher http package resolution", () => {

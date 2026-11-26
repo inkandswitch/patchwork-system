@@ -460,6 +460,16 @@ export class ModuleWatcher extends EventTarget {
     return docs;
   }
 
+  /**
+   * The package lists `entry` is in, by name, with the url each is read from.
+   * `entry` is a package-list adder's `entry`, as the list has it.
+   */
+  listsWith(entry: string): Array<{ name: string; url: string }> {
+    return this.settingsDocs()
+      .filter(({ doc }) => (doc?.modules as string[] | undefined)?.includes(entry))
+      .map(({ name }) => ({ name, url: this.urls[name] }));
+  }
+
   async loadModules(modules: string[]) {
     await Promise.all(
       modules.map(async (importName) => {
