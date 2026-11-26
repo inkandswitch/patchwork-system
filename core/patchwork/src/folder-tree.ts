@@ -12,18 +12,15 @@ const log = debug("patchwork:folder-tree");
  * Finds `root` and every folder under it, a level at a time, and none of the
  * files: a link is followed only when it says it's a folder. A folder that
  * can't be found is skipped, along with what's under it. Resolves with how many
- * were found, or after `timeoutMs` with the folders still loading left to carry
- * on in the background. `onProgress` hears the count as each one is found, and
- * once more when the walk is over, timeout or not.
+ * were found. `onProgress` hears the count as each one is found, and once more
+ * when the walk is over.
  */
 export async function loadFolderTree(
   repo: Repo,
   root: AutomergeUrl,
   {
-    timeoutMs,
     onProgress,
   }: {
-    timeoutMs?: number;
     onProgress?: (progress: { found: number; done: boolean }) => void;
   } = {}
 ): Promise<number> {
@@ -53,24 +50,8 @@ export async function loadFolderTree(
     );
   };
 
-  const walked = load(root).then(() => {
-    log(`found ${found} folders`);
-    onProgress?.({ found, done: true });
-  });
-  if (timeoutMs === undefined) {
-    await walked;
-    return found;
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const timedOut = new Promise<void>((resolve) => {
-    timer = setTimeout(() => {
-      console.warn(
-        `patchwork: still loading folders after ${timeoutMs}ms (${found} so far); going on without them`
-      );
-      resolve();
-    }, timeoutMs);
-  });
-  await Promise.race([walked, timedOut]);
-  clearTimeout(timer);
+  await load(root);
+  log(`found ${found} folders`);
+  onProgress?.({ found, done: true });
   return found;
 }
