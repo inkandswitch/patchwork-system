@@ -1,5 +1,24 @@
 # @inkandswitch/patchwork
 
+## 0.11.2
+
+### Patch Changes
+
+- 331c4a7: The boot status box in the corner stays up after the first view mounts, while the rest of the packages are still loading, and says how many are in and which loaded last. It goes once every listed package has loaded, or 30s after the view mounted if one never does. Since boot started opening the first view before every package was in, the box went away while packages were still loading behind it. Once the view is up the box no longer counts towards being stuck, and drops its reload button.
+- abf884f: Move the `@chee/automerge-repo` packages (repo, the broadcastchannel/messagechannel/websocket network adapters, indexeddb/nodefs storage, react-hooks and vanillajs) from `2.6.0-rabbit.1` to `2.6.0-rabbit.2`, which can load v3-shaped document urls. The `@automerge/automerge` (3.5.0) and `@automerge/automerge-subduction` (0.21.0) pins stay the same.
+- 331c4a7: Once every package has loaded, the site's and the account's, boot finds the account's root folder and every folder under it in the background, so the sidebar has them to hand. It follows only links whose type is `folder`, never the files in them, a level at a time, skipping a folder it can't find. No package waits on the folders, and nothing in boot waits on them either.
+
+  `BootProgress` gets `folders: { found, done }`, so a site drawing its own boot screen can say how many folders have been found so far. The built-in boot status box shows "Your folders: N loaded so far" while it's still up and they haven't all been found.
+
+- 593c807: When the root view has no tool for its doc (an account whose frame tool isn't in any loaded package, say), boot shows its "no tool for this" card as soon as every package, the site's and the account's, has loaded or given up. Before, the card stayed hidden until the 12-second reveal timeout, and the corner box went on to say boot was stuck after 30 seconds, offering a reload that couldn't help.
+- Updated dependencies [abf884f]
+- Updated dependencies [1a806dd]
+- Updated dependencies [6aa3aaf]
+- Updated dependencies [8d00c62]
+- Updated dependencies [30b6eb2]
+  - @inkandswitch/patchwork-bootloader@0.9.10
+  - @inkandswitch/patchwork-elements@6.2.4
+
 ## 0.11.1
 
 ### Patch Changes

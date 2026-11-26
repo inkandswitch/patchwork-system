@@ -1,5 +1,13 @@
 # @inkandswitch/patchwork-elements
 
+## 6.2.4
+
+### Patch Changes
+
+- 1a806dd: The "no tool for this" card on `<patchwork-view>` has the same "open with…" picker as the "can't load {tool}" card when the view's `tool-id` names a tool that isn't registered. Both pickers offer tools of the same kind as the one asked for when there are any: a missing or broken frame tool offers the other `frame-tool`-tagged tools rather than every tool that opens an account. A tool that isn't registered has no tags to read, so it counts as a frame when the account doc's `frameToolId` names it.
+- 6aa3aaf: `<patchwork-view>` takes a `package-url` attribute (and `packageUrl` property) alongside `doc-url` and `tool-id`: a package to take the tool from instead of the registry. The view imports the package, finds the `patchwork:tool` in its `plugins` whose id is `tool-id` (or, with no `tool-id`, its tool for the doc's type), and shows the doc with it, without registering anything. An `automerge:` url without heads is imported pinned to the package doc's heads, and the view remounts with the new version only when those heads move, loading it before taking the old one down. An `automerge:` url with heads, or an http(s) url, stays on the version it names. A package that fails to import gets the "can't load" card, worded to say it's the package containing the tool that didn't load; one that imports but lacks the tool gets a card saying the package doesn't have it.
+- 30b6eb2: The "can't load {tool}" card on `<patchwork-view>` has an "open with…" button next to "try again". It unfolds a searchable list of the other tools that open the doc (its datatype's own first, then ones that open anything), and typing an id that isn't listed offers it as a tool id, the same as the embed frame's tool picker. A tool picked there takes precedence over the view's `tool-id` until `tool-id`, the doc, or its type changes.
+
 ## 6.2.3
 
 ### Patch Changes
