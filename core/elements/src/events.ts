@@ -3,6 +3,12 @@ import type { AutomergeUrl } from "@automerge/automerge-repo/slim";
 export interface OpenDocumentEventDetail {
   url: AutomergeUrl;
   toolId?: string;
+  /**
+   * The package to take `toolId` from, as `<patchwork-view package-url>`
+   * takes it, when several packages bring that id. Without it, the tool is
+   * whichever the package database gives for the id.
+   */
+  packageUrl?: string;
   title?: string;
   type?: string;
 }
@@ -80,7 +86,8 @@ declare global {
 export const openDocument = (
   element: HTMLElement | ShadowRoot,
   url: AutomergeUrl,
-  toolId?: string
+  toolId?: string,
+  packageUrl?: string
 ) => {
-  element.dispatchEvent(new OpenDocumentEvent({ url, toolId }));
+  element.dispatchEvent(new OpenDocumentEvent({ url, toolId, packageUrl }));
 };

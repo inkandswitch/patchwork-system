@@ -35,6 +35,8 @@ export interface ServiceWorkerApi {
 
 export interface OpenOptions {
   tool?: string;
+  /** The package to take `tool` from, when several bring that id. */
+  package?: string;
   type?: string;
   title?: string;
 }

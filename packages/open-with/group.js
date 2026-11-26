@@ -49,3 +49,27 @@ export function addedBy(entry) {
   return [...new Set(entry.addedBy.map((added) => ADDED_BY[added.by] ?? added.by))]
     .join(", ");
 }
+
+const person = (who) => (typeof who === "string" ? who : who?.name);
+const link = (where) => (typeof where === "string" ? where : where?.url);
+
+/**
+ * What a person might want to know about a package, as [label, value]
+ * pairs, leaving out what it doesn't say.
+ */
+export function aboutPackage(entry) {
+  const json = entry.packageJson ?? {};
+  const pinned = entry.importUrl.startsWith("automerge:") ? "heads" : "sha-256";
+  return [
+    ["name", json.title && json.name !== json.title ? json.name : undefined],
+    ["version", json.version],
+    ["description", json.description],
+    ["author", person(json.author)],
+    ["license", json.license],
+    ["homepage", json.homepage ?? link(json.repository)],
+    [pinned, entry.version.slice(0, 12)],
+    ["added by", addedBy(entry)],
+    ["added", entry.addedAt ? new Date(entry.addedAt).toLocaleString() : undefined],
+    ["url", entry.importUrl],
+  ].filter(([, value]) => value);
+}

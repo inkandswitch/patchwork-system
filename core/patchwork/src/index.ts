@@ -395,6 +395,7 @@ async function doSetup(
           detail: {
             url,
             toolId: openOptions.tool,
+            packageUrl: openOptions.package,
             type: openOptions.type,
             title: openOptions.title,
           },

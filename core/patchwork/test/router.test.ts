@@ -230,6 +230,30 @@ describe("the root view", () => {
     expect(root.getAttribute("tool-id")).toBe("listed-frame");
   });
 
+  it("keeps the package a tool comes from in the hash, and opens with it", async () => {
+    start();
+    const apples = note("Apples");
+    const opened: unknown[] = [];
+    root.addEventListener("patchwork:open-document", (event) =>
+      opened.push((event as CustomEvent).detail)
+    );
+    const packageUrl = "https://x.test/p/?a=1&b=2";
+    root.dispatchEvent(
+      new CustomEvent("patchwork:open-document", {
+        detail: { url: apples, toolId: "md", packageUrl },
+      })
+    );
+    await ticks();
+    const params = new URLSearchParams(location.hash.slice(1));
+    expect(params.get("tool")).toBe("md");
+    expect(params.get("package")).toBe(packageUrl);
+    expect(opened.at(-1)).toMatchObject({ url: apples, toolId: "md", packageUrl });
+
+    open(apples);
+    await ticks();
+    expect(new URLSearchParams(location.hash.slice(1)).has("package")).toBe(false);
+  });
+
   it("rewrites a bare automerge url to a doc= link", async () => {
     start();
     const apples = note("Apples");

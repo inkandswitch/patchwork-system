@@ -28,7 +28,15 @@ const BIG_PATCHWORK_HASH_REGEX =
 const RAW_HASH_KEYS = new Set(["doc", "draft"]);
 // A stable order means re-serializing the same logical params is
 // byte-identical, avoiding spurious `hashchange` round-trips.
-const HASH_KEY_ORDER = ["doc", "tool", "type", "title", "frame", "draft"];
+const HASH_KEY_ORDER = [
+  "doc",
+  "tool",
+  "package",
+  "type",
+  "title",
+  "frame",
+  "draft",
+];
 
 function serializeHashParams(params: URLSearchParams): string {
   const keys = [...HASH_KEY_ORDER, ...params.keys()];
@@ -196,6 +204,7 @@ export function createRouter({
         detail: {
           url: docUrl,
           toolId: params.get("tool"),
+          packageUrl: params.get("package"),
           title: params.get("title"),
           type: params.get("type"),
         },
@@ -204,9 +213,10 @@ export function createRouter({
   };
 
   rootElement.addEventListener("patchwork:open-document", (event) => {
-    const { url, toolId, type, title } = event.detail as {
+    const { url, toolId, packageUrl, type, title } = event.detail as {
       url: AutomergeUrl;
       toolId?: string;
+      packageUrl?: string;
       type?: string;
       title?: string;
     };
@@ -229,6 +239,7 @@ export function createRouter({
     params.set("doc", url);
     for (const [key, value] of [
       ["tool", toolId],
+      ["package", packageUrl],
       ["title", title],
       ["type", type],
     ] as const) {

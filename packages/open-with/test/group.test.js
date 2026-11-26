@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { addedBy, groupTools, packageName } from "../group.js";
+import { aboutPackage, addedBy, groupTools, packageName } from "../group.js";
 
 const pkg = (key, ...by) => ({
   key,
@@ -29,6 +29,44 @@ describe("groupTools", () => {
     const [group] = groupTools([listed, viewed], "markdown", () => viewed);
     expect(group.copies).toEqual([viewed, listed]);
     expect(group.name).toBe("Markdown (dev)");
+  });
+});
+
+describe("aboutPackage", () => {
+  it("says what the package.json says, and how the entry got here", () => {
+    const about = aboutPackage({
+      key: "automerge:abc",
+      importUrl: "automerge:abc#h1",
+      version: "h1h1h1h1h1h1h1h1",
+      addedAt: 0,
+      addedBy: [{ by: "package-list", entry: "user" }],
+      packageJson: {
+        title: "Markdown",
+        name: "@x/markdown",
+        version: "1.2.3",
+        author: { name: "Someone" },
+        repository: { url: "https://x.test/repo" },
+      },
+    });
+    expect(Object.fromEntries(about)).toEqual({
+      name: "@x/markdown",
+      version: "1.2.3",
+      author: "Someone",
+      homepage: "https://x.test/repo",
+      heads: "h1h1h1h1h1h1",
+      "added by": "package list",
+      url: "automerge:abc#h1",
+    });
+  });
+
+  it("calls an http package's version its sha-256", () => {
+    const about = aboutPackage({
+      key: "https://x.test/p/",
+      importUrl: "https://x.test/p/",
+      version: "f00d",
+      addedBy: [],
+    });
+    expect(about).toContainEqual(["sha-256", "f00d"]);
   });
 });
 

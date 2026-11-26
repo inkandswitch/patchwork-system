@@ -6,22 +6,27 @@ import {
   toolsForType,
 } from "@inkandswitch/patchwork-elements";
 import { subscribe } from "@inkandswitch/patchwork-providers";
-import { addedBy, groupTools, packageName } from "./group.js";
+import { aboutPackage, groupTools, packageName } from "./group.js";
 
 const STYLE = `
 .open-with { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.5rem; font-size: 0.85em; }
 .open-with input { font: inherit; padding: 0.25rem 0.5rem; border: 1px solid var(--studio-fill-offset-20, #ccc); border-radius: 4px; background: none; color: inherit; }
 .open-with ul { list-style: none; margin: 0; padding: 0; }
+.open-with li { padding: 0.25rem 0; }
 .open-with li + li { border-top: 1px solid var(--studio-fill-offset-10, #eee); }
-.open-with button { all: unset; box-sizing: border-box; display: flex; gap: 0.5rem; align-items: baseline; width: 100%; padding: 0.25rem 0.5rem; border-radius: 2px; cursor: pointer; }
+.open-with button { all: unset; box-sizing: border-box; display: flex; gap: 0.5rem; align-items: baseline; padding: 0.25rem 0.5rem; border-radius: 2px; cursor: pointer; }
 .open-with button:hover { background: var(--studio-fill-offset-10, #f0f0f0); }
-.open-with small { opacity: 0.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.open-with .badge { margin-inline-start: auto; opacity: 0.6; }
-.open-with details { padding-inline-start: 1rem; }
-.open-with summary { cursor: pointer; opacity: 0.6; padding: 0.125rem 0.5rem; }
+.open-with .tool { width: 100%; font-weight: 500; }
+.open-with small, .open-with .from, .open-with summary, .open-with dt { opacity: 0.6; }
+.open-with .badge { margin-inline-start: auto; opacity: 0.6; font-weight: normal; }
+.open-with .from { padding: 0 0.5rem; }
+.open-with summary { cursor: pointer; padding: 0.125rem 0.5rem; }
+.open-with .copy { margin: 0.25rem 0 0.25rem 1rem; padding: 0.25rem 0.5rem; border-inline-start: 2px solid var(--studio-fill-offset-20, #ccc); }
+.open-with .copy header { display: flex; gap: 0.5rem; align-items: baseline; }
+.open-with .copy header button { margin-inline-start: auto; border: 1px solid var(--studio-fill-offset-20, #ccc); }
+.open-with dl { display: grid; grid-template-columns: auto 1fr; gap: 0.125rem 0.5rem; margin: 0.25rem 0 0; }
+.open-with dd { margin: 0; overflow-wrap: anywhere; }
 .open-with .empty { opacity: 0.6; padding: 0 0.5rem; }
-.open-with .preview { display: flex; flex-direction: column; min-height: 20rem; border: 1px solid var(--studio-fill-offset-20, #ccc); border-radius: 4px; overflow: hidden; }
-.open-with .preview > patchwork-view { flex: 1; }
 `;
 
 function h(tag, props = {}, ...children) {
@@ -32,47 +37,55 @@ function h(tag, props = {}, ...children) {
 
 /**
  * A context sidebar listing every tool that opens the selected doc, from the
- * package database. Where several packages bring one tool id, each is listed,
- * and picking one previews the doc with that package's copy here.
+ * package database, with the package each comes from. Where several packages
+ * bring one tool id, each is listed and can open the doc with its own copy.
  */
 export default function openWith(element, repo) {
   const style = h("style", { textContent: STYLE });
   const filter = h("input", { placeholder: "Filter, or type a tool id…" });
   const list = h("ul");
-  const preview = h("div");
-  const root = h("div", { className: "open-with" }, filter, list, preview);
+  const root = h("div", { className: "open-with" }, filter, list);
   element.append(style, root);
 
   let url;
   let handle;
+  // Which tools' details are open, so a re-render keeps them open.
+  const expanded = new Set();
 
-  const open = (toolId) =>
-    url && element.dispatchEvent(new OpenDocumentEvent({ url, toolId }));
+  const open = (toolId, packageUrl) =>
+    url && element.dispatchEvent(new OpenDocumentEvent({ url, toolId, packageUrl }));
 
-  function showPreview(copy) {
-    const view = h("patchwork-view");
-    view.setAttribute("doc-url", url);
-    view.setAttribute("tool-id", copy.id);
-    view.setAttribute("package-url", copy.importUrl);
-    preview.replaceChildren(
+  const copyOf = (copy, opens) => {
+    const pkg = copy.package;
+    return h(
+      "div",
+      { className: "copy" },
       h(
-        "div",
-        { className: "preview" },
+        "header",
+        {},
+        h("strong", {}, packageName(pkg)),
+        pkg.packageJson?.version ? h("small", {}, `v${pkg.packageJson.version}`) : null,
+        opens ? h("small", {}, "opens by id") : null,
         h(
           "button",
-          { onclick: () => hidePreview() },
-          `${copy.name || copy.id}`,
-          h("small", {}, packageName(copy.package)),
-          h("span", { className: "badge" }, "close")
-        ),
-        view
+          {
+            onclick: () => open(copy.id, pkg.key),
+            title: `Open with ${copy.id} from ${pkg.key}`,
+          },
+          "Open"
+        )
+      ),
+      copy.description ? h("p", {}, copy.description) : null,
+      h(
+        "dl",
+        {},
+        ...aboutPackage(pkg).flatMap(([label, value]) => [
+          h("dt", {}, label),
+          h("dd", {}, value),
+        ])
       )
     );
-  }
-
-  function hidePreview() {
-    preview.replaceChildren();
-  }
+  };
 
   function render() {
     const doc = handle?.doc();
@@ -89,31 +102,35 @@ export default function openWith(element, repo) {
 
     list.replaceChildren(
       ...groups.map((group) => {
-        const row = h(
-          "button",
-          { onclick: () => open(group.id), title: `Open with ${group.id}` },
-          group.name,
-          h("small", {}, group.id),
-          group.id === fallback ? h("span", { className: "badge" }, "default") : null
+        const [first] = group.copies;
+        const others = group.copies.length - 1;
+        const details = h(
+          "details",
+          { open: expanded.has(group.id) },
+          h("summary", {}, others ? `${group.copies.length} packages` : "package"),
+          ...group.copies.map((copy, i) => copyOf(copy, others > 0 && i === 0))
         );
-        if (group.copies.length < 2) return h("li", {}, row);
-        const copies = group.copies.map((copy, i) =>
-          h(
-            "button",
-            {
-              onclick: () => showPreview(copy),
-              title: `Preview here with ${copy.importUrl}`,
-            },
-            packageName(copy.package),
-            h("small", {}, `${copy.package.version.slice(0, 7)} · ${addedBy(copy.package)}`),
-            i === 0 ? h("span", { className: "badge" }, "opens") : null
-          )
+        details.addEventListener("toggle", () =>
+          details.open ? expanded.add(group.id) : expanded.delete(group.id)
         );
         return h(
           "li",
           {},
-          row,
-          h("details", {}, h("summary", {}, `${group.copies.length} packages`), ...copies)
+          h(
+            "button",
+            { className: "tool", onclick: () => open(group.id), title: `Open with ${group.id}` },
+            group.name,
+            h("small", {}, group.id),
+            group.id === fallback ? h("span", { className: "badge" }, "default") : null
+          ),
+          h(
+            "div",
+            { className: "from" },
+            `from ${packageName(first.package)}`,
+            first.package.packageJson?.version ? ` v${first.package.packageJson.version}` : "",
+            others ? ` and ${others} more` : ""
+          ),
+          details
         );
       })
     );
@@ -127,7 +144,7 @@ export default function openWith(element, repo) {
   filter.addEventListener("input", render);
   filter.addEventListener("keydown", (event) => {
     if (event.key !== "Enter") return;
-    const first = list.querySelector("button");
+    const first = list.querySelector("button.tool");
     if (first) first.click();
     else if (filter.value.trim()) open(filter.value.trim());
   });
@@ -139,7 +156,6 @@ export default function openWith(element, repo) {
     handle?.off("change", render);
     url = next;
     handle = undefined;
-    hidePreview();
     render();
     if (!url) return;
     const found = await repo.find(url).catch(() => undefined);
